@@ -1,0 +1,36 @@
+{
+  "productName": "每日总结",
+  "version": "0.1.0",
+  "identifier": "com.daily-summary.desktop",
+  "build": {
+    "frontendDist": "../dist",
+    "devUrl": "http://localhost:5173",
+    "beforeDevCommand": "npm run dev",
+    "beforeBuildCommand": "npm run build"
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["appimage", "deb"],
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.png"
+    ]
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "每日总结",
+        "width": 1100,
+        "height": 720,
+        "minWidth": 800,
+        "minHeight": 500,
+        "center": true
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  }
+}

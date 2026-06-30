@@ -1,0 +1,65 @@
+# Dependencies
+node_modules/
+
+# Frontend build output
+dist/
+dist-ssr/
+
+# Rust / Cargo build output
+target/
+server/target/
+src-tauri/target/
+
+# Tauri generated/runtime output
+src-tauri/gen/
+src-tauri/.tauri/
+src-tauri/bundle/
+
+# Local environment and secrets
+.env
+.env.*
+!.env.example
+server/.env
+server/.env.*
+!server/.env.example
+*.pem
+*.key
+*.crt
+
+# Local app data / private content
+.daily-summary/
+*.db
+*.db-*
+*.sqlite
+*.sqlite3
+*.backup
+*.bak
+exports/
+backups/
+
+# Logs and runtime files
+*.log
+*.pid
+*.tmp
+*.temp
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Archives produced during deployment, backup, or release packaging
+*.tar
+*.tar.gz
+*.tgz
+*.zip
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Local helper scripts generated ad hoc
+gen_icons.py
