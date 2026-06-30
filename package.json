@@ -1,0 +1,37 @@
+{
+  "name": "daily-summary",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "npx tsc -b && vite build",
+    "preview": "vite preview",
+    "server:dev": "cd server && DAILY_SUMMARY_ALLOW_NO_TOKEN=1 DAILY_SUMMARY_BIND=127.0.0.1:8080 cargo run",
+    "server:build": "cd server && cargo build --release",
+    "desktop:dev": "tauri dev",
+    "desktop:build": "tauri build"
+  },
+  "dependencies": {
+    "@tauri-apps/api": "^2",
+    "framer-motion": "^12.40.0",
+    "lucide-react": "^1.22.0",
+    "mermaid": "^11.15.0",
+    "react": "^19.2.6",
+    "react-dom": "^19.2.6",
+    "react-markdown": "^10.1.0",
+    "rehype-sanitize": "^6.0.0",
+    "remark-gfm": "^4.0.1"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2",
+    "@types/react": "^19.2.14",
+    "@types/react-dom": "^19.2.3",
+    "@vitejs/plugin-react": "^6.0.1",
+    "autoprefixer": "^10.5.0",
+    "postcss": "^8.5.15",
+    "tailwindcss": "^3.4.19",
+    "typescript": "~6.0.2",
+    "vite": "^8.0.12"
+  }
+}
