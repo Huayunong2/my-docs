@@ -306,8 +306,8 @@ export default function KnowledgePage({ onEditDate }: { onEditDate: (date: strin
 
       {error && <div className="ui-alert-bad mb-4">{error}</div>}
 
-      <div className="grid min-h-[640px] gap-4 xl:grid-cols-[220px_minmax(320px,420px)_minmax(0,1fr)]">
-        <aside className="ui-panel h-fit p-3">
+      <div className="grid min-h-[680px] items-stretch gap-4 xl:grid-cols-[240px_minmax(340px,430px)_minmax(0,1fr)]">
+        <aside className="ui-panel flex min-h-[680px] flex-col p-3">
           <div className="relative">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-300 dark:text-gray-500" size={15} />
             <input
@@ -321,6 +321,24 @@ export default function KnowledgePage({ onEditDate }: { onEditDate: (date: strin
           <button type="button" onClick={() => loadCards(false)} className="ui-button-secondary mt-2 w-full">
             搜索
           </button>
+          <div className="mt-3 grid grid-cols-3 gap-1.5">
+            {statusOptions.map(([status, label]) => (
+              <button
+                key={status}
+                type="button"
+                onClick={() => setActiveStatus(status)}
+                className={[
+                  "rounded-lg border px-2 py-2 text-left transition-colors",
+                  activeStatus === status
+                    ? "border-accent/30 bg-accent-light text-accent dark:bg-accent-light/20"
+                    : "border-gray-200/70 bg-gray-50 text-gray-500 dark:border-white/10 dark:bg-white/[0.035] dark:text-gray-400",
+                ].join(" ")}
+              >
+                <div className="text-[10px] leading-none">{label}</div>
+                <div className="mt-1 font-mono text-sm font-bold">{counts[status]}</div>
+              </button>
+            ))}
+          </div>
           <div className="mt-4">
             <div className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-gray-400 dark:text-gray-500">类型</div>
             <div className="grid grid-cols-2 gap-1.5 xl:grid-cols-1">
@@ -333,9 +351,20 @@ export default function KnowledgePage({ onEditDate }: { onEditDate: (date: strin
           <button type="button" onClick={startNew} className="ui-button-primary mt-4 w-full">
             <Plus size={14} /> 新建卡片
           </button>
+          <div className="mt-4 rounded-lg border border-gray-100 bg-gray-50 p-3 dark:border-white/10 dark:bg-white/[0.035]">
+            <div className="text-xs font-semibold text-gray-600 dark:text-gray-300">工作流</div>
+            <div className="mt-2 space-y-2 text-xs leading-5 text-gray-400 dark:text-gray-500">
+              <p>1. 从记录或复盘提取草稿</p>
+              <p>2. 对照来源片段确认</p>
+              <p>3. 沉淀后用于复习检索</p>
+            </div>
+          </div>
+          <div className="mt-auto rounded-lg border border-accent/15 bg-accent-light/40 p-3 text-xs leading-5 text-accent dark:bg-accent-light/10">
+            知识卡片必须能回到来源。没有来源片段的内容，不建议确认入库。
+          </div>
         </aside>
 
-        <section className="ui-panel min-h-[320px] p-2">
+        <section className="ui-panel min-h-[680px] p-2">
           <div className="flex h-10 items-center justify-between px-2">
             <div className="text-xs font-semibold text-gray-500 dark:text-gray-400">
               {statusLabels[activeStatus]} · {cards.length}
@@ -407,7 +436,7 @@ export default function KnowledgePage({ onEditDate }: { onEditDate: (date: strin
           )}
         </section>
 
-        <section className="ui-panel min-h-[520px] p-4">
+        <section className="ui-panel min-h-[680px] p-4">
           <div className="mb-4 flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
             <div className="min-w-0">
               <div className="flex items-center gap-2">
@@ -465,14 +494,14 @@ export default function KnowledgePage({ onEditDate }: { onEditDate: (date: strin
             </div>
           )}
 
-          <div className="mt-5 grid gap-4 2xl:grid-cols-[minmax(0,1fr)_320px]">
-            <div>
+          <div className="mt-5 grid items-stretch gap-4 2xl:grid-cols-[minmax(0,1fr)_340px]">
+            <div className="flex min-w-0 flex-col">
               <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-gray-400 dark:text-gray-500">预览</div>
-              <div className="min-h-[160px] rounded-lg bg-gray-50 p-4 dark:bg-white/[0.035]">
+              <div className="min-h-[240px] flex-1 rounded-lg bg-gray-50 p-4 dark:bg-white/[0.035]">
                 <MarkdownContent content={draft.content || "输入内容以预览..."} />
               </div>
             </div>
-            <div>
+            <div className="flex min-w-0 flex-col">
               <div className="mb-2 flex items-center justify-between gap-2">
                 <div className="text-xs font-semibold uppercase tracking-wide text-gray-400 dark:text-gray-500">来源</div>
                 {(draft.source_date || sourceArticle?.date) && (
@@ -481,7 +510,7 @@ export default function KnowledgePage({ onEditDate }: { onEditDate: (date: strin
                   </button>
                 )}
               </div>
-              <div className="rounded-lg border border-gray-100 bg-gray-50 p-3 dark:border-white/10 dark:bg-white/[0.035]">
+              <div className="flex min-h-[240px] flex-1 flex-col rounded-lg border border-gray-100 bg-gray-50 p-3 dark:border-white/10 dark:bg-white/[0.035]">
                 <div className="text-xs font-medium text-gray-500 dark:text-gray-400">
                   {sourceLoading ? "加载来源..." : sourceArticle?.title || draft.source_date || "暂无来源"}
                 </div>
@@ -489,7 +518,7 @@ export default function KnowledgePage({ onEditDate }: { onEditDate: (date: strin
                   value={draft.source_excerpt}
                   onChange={(e) => updateDraft({ source_excerpt: e.target.value })}
                   placeholder="支撑这张卡片的原文片段"
-                  className="mt-3 min-h-[120px] w-full resize-none rounded-lg border border-gray-200 bg-white px-3 py-2 text-xs leading-5 text-gray-600 outline-none focus:border-accent/40 dark:border-white/10 dark:bg-gray-950/30 dark:text-gray-300"
+                  className="mt-3 min-h-[120px] flex-1 w-full resize-none rounded-lg border border-gray-200 bg-white px-3 py-2 text-xs leading-5 text-gray-600 outline-none focus:border-accent/40 dark:border-white/10 dark:bg-gray-950/30 dark:text-gray-300"
                 />
                 <div className="mt-2 grid gap-2">
                   <input value={draft.source_date} onChange={(e) => updateDraft({ source_date: e.target.value })} placeholder="来源日期 YYYY-MM-DD" className="ui-field h-9 text-xs" />

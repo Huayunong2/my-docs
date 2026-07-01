@@ -19,6 +19,7 @@ function toUserMessage(status: number, text: string): string {
   if (status === 401) return "访问令牌无效或未填写，请在设置页重新保存令牌。";
   if (status === 403) return "当前来源未被服务器允许访问，请检查服务端 CORS 配置。";
   if (status === 404) return "请求的内容不存在。";
+  if (status === 502 && text) return text;
   if (status >= 500) return `服务器内部错误：${text || status}`;
   return text || `请求失败：HTTP ${status}`;
 }

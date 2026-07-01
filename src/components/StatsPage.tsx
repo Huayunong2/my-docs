@@ -980,6 +980,7 @@ function ReviewPanel({
   onOpenLibrary: () => void;
 }) {
   const previewContent = selectedReview ? normalizeReviewContent(selectedReview.kind, selectedReview.title, selectedReview.content) : "";
+  const [datePickerOpen, setDatePickerOpen] = useState(false);
 
   return (
     <section className={`rounded-xl border border-gray-100 bg-white p-3 transition-colors dark:border-white/10 dark:bg-white/[0.035] sm:p-4 ${className}`}>
@@ -1007,17 +1008,12 @@ function ReviewPanel({
             <div className="mt-0.5 truncate text-xs font-semibold text-gray-700 dark:text-gray-200">{periodLabel}</div>
           </div>
           {kind === "weekly" && anchorDate && onAnchorDateChange && (
-            <label className="flex min-w-0 flex-col gap-1 text-xs text-gray-400 dark:text-gray-500 sm:w-[168px]">
-              <span>周内任意一天</span>
-              <input
-                type="text"
-                inputMode="numeric"
-                value={anchorDate}
-                onChange={(e) => onAnchorDateChange(e.target.value)}
-                placeholder="YYYY-MM-DD"
-                className="h-9 w-full rounded-lg border border-gray-200 bg-white px-3 py-0 font-mono text-xs font-semibold text-gray-700 outline-none transition-colors focus:border-accent/40 focus:ring-2 focus:ring-accent/15 dark:border-white/10 dark:bg-gray-950/30 dark:text-gray-100"
-              />
-            </label>
+            <ReviewDatePicker
+              value={anchorDate}
+              open={datePickerOpen}
+              onOpenChange={setDatePickerOpen}
+              onChange={onAnchorDateChange}
+            />
           )}
         </div>
       </div>
@@ -1088,6 +1084,84 @@ function ReviewPanel({
         </button>
       </div>
     </section>
+  );
+}
+
+function ReviewDatePicker({
+  value,
+  open,
+  onOpenChange,
+  onChange,
+}: {
+  value: string;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  onChange: (date: string) => void;
+}) {
+  const [viewDate, setViewDate] = useState(() => new Date(`${value}T12:00:00`));
+  useEffect(() => {
+    if (!open) return;
+    setViewDate(new Date(`${value}T12:00:00`));
+  }, [open, value]);
+  const year = viewDate.getFullYear();
+  const month = viewDate.getMonth();
+  const first = new Date(year, month, 1);
+  const daysInMonth = new Date(year, month + 1, 0).getDate();
+  const cells = [
+    ...Array.from({ length: first.getDay() }, () => ""),
+    ...Array.from({ length: daysInMonth }, (_, index) => {
+      const day = index + 1;
+      return `${year}-${String(month + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+    }),
+  ];
+  return (
+    <div className="relative sm:w-[168px]">
+      <div className="mb-1 text-xs text-gray-400 dark:text-gray-500">周内任意一天</div>
+      <button
+        type="button"
+        onClick={() => onOpenChange(!open)}
+        className="flex h-9 w-full items-center justify-between rounded-lg border border-gray-200 bg-white px-3 font-mono text-xs font-semibold text-gray-700 outline-none transition-colors hover:border-accent/30 dark:border-white/10 dark:bg-gray-950/30 dark:text-gray-100"
+      >
+        {value.replace(/-/g, "/")}
+        <CalendarRange size={13} className="text-gray-400" />
+      </button>
+      {open && (
+        <div className="absolute right-0 top-full z-40 mt-2 w-[280px] rounded-xl border border-gray-100 bg-white p-3 shadow-modal dark:border-white/10 dark:bg-gray-900">
+          <div className="mb-3 flex items-center justify-between">
+            <button type="button" onClick={() => setViewDate(new Date(year, month - 1, 1))} className="ui-icon-button h-8 w-8">‹</button>
+            <div className="text-sm font-semibold text-gray-800 dark:text-gray-100">{year} 年 {month + 1} 月</div>
+            <button type="button" onClick={() => setViewDate(new Date(year, month + 1, 1))} className="ui-icon-button h-8 w-8">›</button>
+          </div>
+          <div className="grid grid-cols-7 gap-1 text-center text-[11px] font-medium text-gray-400 dark:text-gray-500">
+            {weekdays.map((day) => <div key={day} className="py-1">{day}</div>)}
+          </div>
+          <div className="mt-1 grid grid-cols-7 gap-1">
+            {cells.map((cell, index) => (
+              cell ? (
+                <button
+                  key={cell}
+                  type="button"
+                  onClick={() => {
+                    onChange(cell);
+                    onOpenChange(false);
+                  }}
+                  className={[
+                    "h-8 rounded-lg text-xs font-medium transition-colors",
+                    cell === value
+                      ? "bg-accent text-white"
+                      : "text-gray-600 hover:bg-gray-100 dark:text-gray-300 dark:hover:bg-white/10",
+                  ].join(" ")}
+                >
+                  {Number(cell.slice(-2))}
+                </button>
+              ) : (
+                <div key={`blank-${index}`} className="h-8" />
+              )
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
   );
 }
 
