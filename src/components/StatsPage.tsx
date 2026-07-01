@@ -5,6 +5,7 @@ import { BarChart3, BookOpenText, CalendarRange, LineChart, LoaderCircle, Sparkl
 import * as api from "../lib/api";
 import type { MonthDayStats, Review, ReviewKind, StatsOverview, WeekReview } from "../lib/api";
 import type { Page } from "../App";
+import { normalizeReviewContent } from "../lib/reviewContent";
 import { ReviewStatusPill } from "./reviews/ReviewShared";
 
 function formatDate(d: Date): string {
@@ -978,16 +979,17 @@ function ReviewPanel({
   onGenerate: () => void;
   onOpenLibrary: () => void;
 }) {
+  const previewContent = selectedReview ? normalizeReviewContent(selectedReview.kind, selectedReview.title, selectedReview.content) : "";
 
   return (
-    <section className={`rounded-xl border border-gray-100/80 bg-white p-4 transition-colors hover:border-gray-200 dark:border-white/5 dark:bg-white/[0.035] dark:hover:border-white/10 sm:p-5 ${className}`}>
+    <section className={`rounded-xl border border-gray-100 bg-white p-3 transition-colors dark:border-white/10 dark:bg-white/[0.035] sm:p-4 ${className}`}>
       {/* Header */}
-      <div className="flex items-start justify-between gap-3 mb-4">
-        <div>
+      <div className="mb-3 flex items-start justify-between gap-3">
+        <div className="min-w-0">
           <h4 className="text-sm font-bold text-gray-800 dark:text-gray-100 flex items-center gap-2">
             {kind === "weekly" ? <BarChart3 size={16} /> : <LineChart size={16} />} {title}
           </h4>
-          <p className="mt-1 text-xs leading-relaxed text-gray-500 dark:text-gray-400">{description}</p>
+          <p className="mt-1 line-clamp-2 text-xs leading-5 text-gray-500 dark:text-gray-400">{description}</p>
         </div>
         {reviews.length > 0 && (
           <span className="shrink-0 rounded-full bg-gray-100 dark:bg-white/10 px-2.5 py-1 text-[11px] font-medium text-gray-500 dark:text-gray-400">
@@ -996,22 +998,24 @@ function ReviewPanel({
         )}
       </div>
 
-      <div className="mb-4 border-t border-gray-100 pt-3 dark:border-white/10">
+      <div className="mb-3 rounded-lg border border-gray-100 bg-gray-50 px-3 py-2.5 dark:border-white/10 dark:bg-white/[0.035]">
         <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-          <div>
+          <div className="min-w-0">
             <div className="inline-flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-gray-400 dark:text-gray-500">
               <CalendarRange size={12} /> 生成周期
             </div>
-            <div className="mt-0.5 text-xs font-medium text-gray-700 dark:text-gray-200">{periodLabel}</div>
+            <div className="mt-0.5 truncate text-xs font-semibold text-gray-700 dark:text-gray-200">{periodLabel}</div>
           </div>
           {kind === "weekly" && anchorDate && onAnchorDateChange && (
-            <label className="flex items-center gap-2 text-xs text-gray-400 dark:text-gray-500">
-              周内任意一天
+            <label className="flex min-w-0 flex-col gap-1 text-xs text-gray-400 dark:text-gray-500 sm:w-[168px]">
+              <span>周内任意一天</span>
               <input
-                type="date"
+                type="text"
+                inputMode="numeric"
                 value={anchorDate}
                 onChange={(e) => onAnchorDateChange(e.target.value)}
-                className="ui-field h-9 rounded-lg px-2.5 py-0 text-xs sm:w-[150px]"
+                placeholder="YYYY-MM-DD"
+                className="h-9 w-full rounded-lg border border-gray-200 bg-white px-3 py-0 font-mono text-xs font-semibold text-gray-700 outline-none transition-colors focus:border-accent/40 focus:ring-2 focus:ring-accent/15 dark:border-white/10 dark:bg-gray-950/30 dark:text-gray-100"
               />
             </label>
           )}
@@ -1020,13 +1024,13 @@ function ReviewPanel({
 
       {/* Review preview */}
       {selectedReview ? (
-        <div className="mb-4 rounded-lg bg-gray-50 p-3.5 dark:bg-white/[0.04]">
+        <div className="mb-3 rounded-lg border border-gray-100 bg-gray-50 p-3 dark:border-white/10 dark:bg-white/[0.035]">
           <div className="flex items-center justify-between gap-2 mb-2">
             <span className="text-xs font-medium text-gray-500 dark:text-gray-400 truncate">{selectedReview.title}</span>
             <ReviewStatusPill status={selectedReview.status} />
           </div>
-          <p className="line-clamp-3 whitespace-pre-wrap text-xs leading-relaxed text-gray-600 dark:text-gray-400">
-            {selectedReview.content}
+          <p className="line-clamp-4 whitespace-pre-wrap text-xs leading-5 text-gray-600 dark:text-gray-400">
+            {previewContent}
           </p>
         </div>
       ) : reviews.length > 0 ? (
@@ -1036,7 +1040,7 @@ function ReviewPanel({
       )}
 
       {generating && (
-        <div className="mb-3 rounded-lg bg-gray-50 px-3 py-3 dark:bg-white/[0.04]">
+        <div className="mb-3 rounded-lg border border-accent/15 bg-accent-light/40 px-3 py-3 dark:bg-accent-light/10">
           <div className="flex items-center justify-between gap-2 mb-2">
             {(["collecting","requesting","saving"] as const).map((step, i) => {
               const currentIdx = generationStep === "collecting" ? 0 : generationStep === "requesting" ? 1 : generationStep === "saving" ? 2 : 0;

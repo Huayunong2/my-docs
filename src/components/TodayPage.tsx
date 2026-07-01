@@ -1020,8 +1020,9 @@ export default function TodayPage({
             value={content}
             onChange={handleContentChange}
             placeholder={`开始写 ${date} 的总结...\n\n点击上方“模板”快速填充`}
-            className="ui-editor-surface min-h-[420px] w-full resize-none px-4 pb-32 pt-4 font-mono text-[15px] leading-7 text-gray-700 placeholder-gray-300 focus:border-accent/40 focus:ring-2 focus:ring-accent/20 dark:text-gray-200 dark:placeholder-gray-600 dark:focus:bg-white/[0.075] md:min-h-0 md:flex-1 md:p-5 md:text-sm"
+            className="ui-editor-surface min-h-[420px] w-full resize-none px-4 py-4 font-mono text-[15px] leading-7 text-gray-700 placeholder-gray-300 focus:border-accent/40 focus:ring-2 focus:ring-accent/20 dark:text-gray-200 dark:placeholder-gray-600 dark:focus:bg-white/[0.075] md:min-h-0 md:flex-1 md:p-5 md:text-sm"
           />
+          <div className="h-24 md:hidden" />
         </div>
 
         <div className={`${mobilePane === "preview" ? "flex" : "hidden"} min-w-0 flex-col md:flex`}>

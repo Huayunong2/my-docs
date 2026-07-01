@@ -16,6 +16,7 @@ import {
 import type { LucideIcon } from "lucide-react";
 import * as api from "../lib/api";
 import type { Review, ReviewKind, ReviewStatus } from "../lib/api";
+import { normalizeReviewContent } from "../lib/reviewContent";
 import { ReviewViewerModal, ReviewStatusPill } from "./reviews/ReviewShared";
 import MarkdownContent from "./MarkdownContent";
 import { EmptyState, LoadingState, useConfirmDialog } from "./ui/Feedback";
@@ -50,6 +51,8 @@ export default function ReviewsPage() {
   const [editContent, setEditContent] = useState("");
   const [comparePair, setComparePair] = useState<{ current: Review; previous: Review } | null>(null);
   const [saving, setSaving] = useState(false);
+  const [extractingKnowledgeId, setExtractingKnowledgeId] = useState("");
+  const [notice, setNotice] = useState("");
   const { confirm, dialog } = useConfirmDialog();
 
   const loadReviews = useCallback(async () => {
@@ -161,6 +164,29 @@ export default function ReviewsPage() {
     }
   };
 
+  const extractKnowledgeFromReview = async (review: Review) => {
+    setExtractingKnowledgeId(review.id);
+    setNotice("");
+    setError("");
+    try {
+      const cards = await api.extractKnowledgeCards({
+        content: normalizeReviewContent(review.kind, review.title, review.content),
+        source_review_id: review.id,
+        source_date: review.period_end,
+        max_cards: review.kind === "monthly" ? 12 : 8,
+      });
+      setNotice(
+        cards.length
+          ? `已从「${review.title}」提取 ${cards.length} 张知识卡片草稿，可到知识工作台确认。`
+          : "这份复盘里没有足够稳定的知识卡片。"
+      );
+    } catch (e) {
+      setError(api.getErrorMessage(e));
+    } finally {
+      setExtractingKnowledgeId("");
+    }
+  };
+
   const togglePeriod = (key: string) => {
     setExpandedPeriods((current) => ({ ...current, [key]: !current[key] }));
   };
@@ -195,6 +221,11 @@ export default function ReviewsPage() {
       {error && (
         <div className="ui-alert-bad mb-4">
           {error}
+        </div>
+      )}
+      {notice && (
+        <div className="ui-alert-good mb-4">
+          {notice}
         </div>
       )}
 
@@ -287,6 +318,8 @@ export default function ReviewsPage() {
           onSave={() => saveReview()}
           onConfirm={() => saveReview("confirmed")}
           onDelete={() => deleteReview(editingReview)}
+          onExtractKnowledge={() => extractKnowledgeFromReview(editingReview)}
+          extractingKnowledge={extractingKnowledgeId === editingReview.id}
           onClose={() => setEditingReview(null)}
         />
       )}
@@ -351,6 +384,7 @@ function PeriodCard({
   onCompare: () => void;
 }) {
   const current = period.current;
+  const previewContent = normalizeReviewContent(current.kind, current.title, current.content);
   const kindLabel = period.kind === "weekly" ? "周复盘" : "月复盘";
   const sourceCount = period.kind === "weekly"
     ? countJsonItems(current.source_article_ids)
@@ -388,7 +422,7 @@ function PeriodCard({
           </div>
           <h4 className="truncate text-sm font-semibold text-gray-800 dark:text-gray-100">{current.title}</h4>
           <p className="mt-1 line-clamp-2 whitespace-pre-wrap text-xs leading-5 text-gray-500 dark:text-gray-400">
-            {current.content}
+            {previewContent}
           </p>
           <div className="mt-2 text-[11px] text-gray-400 dark:text-gray-500">
             生成：{current.generated_at || "未知"} · 模型：{current.model || "AI"}

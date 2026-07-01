@@ -42,7 +42,7 @@ export default function Sidebar({ page, onNavigate, dark, onToggleDark }: Sideba
       </aside>
 
       {/* Mobile bottom tab bar */}
-      <nav className="md:hidden fixed bottom-0 left-0 right-0 z-20 glass bg-white/88 dark:bg-gray-950/88 border-t border-gray-200/50 dark:border-white/10 grid grid-cols-9 gap-0.5 px-2 py-1 safe-bottom shadow-[0_-8px_24px_rgba(15,23,42,0.06)]">
+      <nav className="md:hidden fixed bottom-0 left-0 right-0 z-20 grid grid-cols-9 gap-0.5 border-t border-gray-200 bg-white px-2 py-1 safe-bottom shadow-[0_-8px_24px_rgba(15,23,42,0.10)] dark:border-white/10 dark:bg-gray-950">
         {navItems.map((item) => (
           <MobileNavButton
             key={item.id}
