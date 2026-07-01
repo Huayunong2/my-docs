@@ -30,7 +30,7 @@ export default function AIPanel() {
       const d = await api.summarizeWithAI({ content: testContent });
       setTestResult(d.summary); setTone("good");
     } catch (e) {
-      setTestResult("❌ " + api.getErrorMessage(e)); setTone("bad");
+      setTestResult(api.getErrorMessage(e)); setTone("bad");
     }
     setLoading(false);
   };
