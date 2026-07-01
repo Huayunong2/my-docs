@@ -92,20 +92,20 @@ export default function ConnectionPanel() {
   };
 
   return (
-    <div className="grid max-w-3xl gap-4">
+    <div className="grid w-full max-w-3xl gap-4">
       <Card>
         <SectionTitle desc="显示当前设备将连接到哪里。">连接状态</SectionTitle>
-        <div className="grid sm:grid-cols-[180px_minmax(0,1fr)] gap-3 text-sm">
+        <div className="grid min-w-0 gap-3 text-sm sm:grid-cols-[180px_minmax(0,1fr)]">
           <div>
             <p className="text-xs text-gray-400 dark:text-gray-500">模式</p>
             <p className="mt-1 font-medium text-gray-800 dark:text-gray-100">{connectionMode}</p>
           </div>
           <div className="min-w-0">
             <p className="text-xs text-gray-400 dark:text-gray-500">API 地址</p>
-            <p className="mt-1 font-mono text-xs text-gray-600 dark:text-gray-300 truncate">{displayUrl}</p>
+            <p className="mt-1 break-all font-mono text-xs text-gray-600 dark:text-gray-300">{displayUrl}</p>
           </div>
         </div>
-        <div className="mt-3 flex flex-col sm:flex-row gap-2">
+        <div className="mt-3 grid gap-2 sm:flex sm:flex-row">
           <SecondaryBtn onClick={copyApiUrl} disabled={isUnconfiguredDesktop}><ClipboardCopy size={15} /> 复制 API 地址</SecondaryBtn>
           <SecondaryBtn onClick={() => testConnection()} disabled={testing}><Wifi size={15} /> {testing ? "测试中..." : "仅测试连接"}</SecondaryBtn>
         </div>
