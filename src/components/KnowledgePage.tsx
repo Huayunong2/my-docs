@@ -13,6 +13,7 @@ import {
   Trash2,
 } from "lucide-react";
 import * as api from "../lib/api";
+import type { Page } from "../App";
 import type { Article, KnowledgeCard, KnowledgeCardStatus, KnowledgeCardType } from "../lib/api";
 import { parseTags, stringifyTags } from "../lib/tags";
 import MarkdownContent from "./MarkdownContent";
@@ -84,7 +85,7 @@ function compact(value: string) {
   return value.trim().replace(/\s+/g, "").toLowerCase();
 }
 
-export default function KnowledgePage({ onEditDate }: { onEditDate: (date: string) => void }) {
+export default function KnowledgePage({ onEditDate, onNavigate }: { onEditDate: (date: string) => void; onNavigate: (page: Page) => void }) {
   const [cards, setCards] = useState<KnowledgeCard[]>([]);
   const [allCards, setAllCards] = useState<KnowledgeCard[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -271,17 +272,28 @@ export default function KnowledgePage({ onEditDate }: { onEditDate: (date: strin
   const toggleSelected = (id: string) => {
     setSelectedIds((ids) => ids.includes(id) ? ids.filter((item) => item !== id) : [...ids, id]);
   };
+  const visibleDraftIds = useMemo(() => cards.filter((card) => card.status === "draft").map((card) => card.id), [cards]);
+  const selectAllVisible = () => setSelectedIds(visibleDraftIds);
+  const invertVisibleSelection = () => {
+    setSelectedIds((ids) => visibleDraftIds.filter((id) => !ids.includes(id)));
+  };
+  const clearSelection = () => setSelectedIds([]);
 
   const openSource = () => {
+    if (draft.source_review_id || selectedCard?.source_review_id) {
+      onNavigate("reviews");
+      return;
+    }
     const sourceDate = sourceArticle?.date || draft.source_date || selectedCard?.source_date;
     if (sourceDate) onEditDate(sourceDate);
   };
+  const currentSourceType = draft.source_review_id || selectedCard?.source_review_id ? "AI 复盘" : "每日记录";
 
   return (
     <motion.div
       initial={{ opacity: 0, y: 10 }}
       animate={{ opacity: 1, y: 0 }}
-      className="min-h-full overflow-y-auto px-3 pb-24 pt-4 sm:px-4 md:px-8 md:py-6"
+      className="flex h-full min-h-0 flex-col overflow-hidden px-3 pb-24 pt-4 sm:px-4 md:px-8 md:py-6"
     >
       <header className="mb-4 flex flex-col gap-3 md:mb-5 md:flex-row md:items-end md:justify-between">
         <div>
@@ -306,8 +318,8 @@ export default function KnowledgePage({ onEditDate }: { onEditDate: (date: strin
 
       {error && <div className="ui-alert-bad mb-4">{error}</div>}
 
-      <div className="grid min-h-[680px] items-stretch gap-4 xl:grid-cols-[240px_minmax(340px,430px)_minmax(0,1fr)]">
-        <aside className="ui-panel flex min-h-[680px] flex-col p-3">
+      <div className="grid min-h-0 flex-1 items-stretch gap-4 overflow-y-auto xl:grid-cols-[240px_minmax(340px,430px)_minmax(0,1fr)] xl:overflow-hidden">
+        <aside className="ui-panel flex min-h-[640px] flex-col p-3 xl:h-full xl:min-h-0">
           <div className="relative">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-300 dark:text-gray-500" size={15} />
             <input
@@ -364,13 +376,27 @@ export default function KnowledgePage({ onEditDate }: { onEditDate: (date: strin
           </div>
         </aside>
 
-        <section className="ui-panel min-h-[680px] p-2">
-          <div className="flex h-10 items-center justify-between px-2">
+        <section className="ui-panel flex min-h-[640px] flex-col overflow-hidden p-2 xl:h-full xl:min-h-0">
+          <div className="shrink-0 px-2 py-1">
+            <div className="flex min-h-9 items-center justify-between gap-2">
             <div className="text-xs font-semibold text-gray-500 dark:text-gray-400">
               {statusLabels[activeStatus]} · {cards.length}
             </div>
+            {activeStatus === "draft" && cards.length > 0 && (
+              <div className="flex flex-wrap items-center justify-end gap-1.5">
+                <button type="button" onClick={selectAllVisible} className="h-7 rounded-lg px-2 text-xs font-medium text-gray-500 hover:bg-gray-100 dark:text-gray-400 dark:hover:bg-white/10">
+                  全选
+                </button>
+                <button type="button" onClick={invertVisibleSelection} className="h-7 rounded-lg px-2 text-xs font-medium text-gray-500 hover:bg-gray-100 dark:text-gray-400 dark:hover:bg-white/10">
+                  反选
+                </button>
+              </div>
+            )}
+            </div>
             {selectedIds.length > 0 && (
-              <div className="flex items-center gap-1.5">
+              <div className="mt-1 flex flex-wrap items-center justify-between gap-1.5 rounded-lg border border-accent/15 bg-accent-light/40 px-2 py-1.5 dark:bg-accent-light/10">
+                <span className="text-xs font-medium text-accent">已选 {selectedIds.length}</span>
+                <div className="flex flex-wrap items-center gap-1.5">
                 {activeStatus === "draft" && (
                   <button type="button" onClick={() => updateStatus("confirmed", selectedIds)} className="h-8 rounded-lg px-2 text-xs font-semibold text-emerald-600 hover:bg-emerald-50 dark:text-emerald-300 dark:hover:bg-emerald-500/10">
                     批量确认
@@ -379,6 +405,10 @@ export default function KnowledgePage({ onEditDate }: { onEditDate: (date: strin
                 <button type="button" onClick={() => deleteCards(selectedIds)} className="h-8 rounded-lg px-2 text-xs font-semibold text-red-600 hover:bg-red-50 dark:text-red-300 dark:hover:bg-red-500/10">
                   批量删除
                 </button>
+                <button type="button" onClick={clearSelection} className="h-8 rounded-lg px-2 text-xs font-medium text-gray-500 hover:bg-white dark:text-gray-400 dark:hover:bg-white/10">
+                  清空
+                </button>
+                </div>
               </div>
             )}
           </div>
@@ -393,7 +423,7 @@ export default function KnowledgePage({ onEditDate }: { onEditDate: (date: strin
               </p>
             </div>
           ) : (
-            <div className="space-y-1">
+            <div className="min-h-0 flex-1 space-y-1 overflow-y-auto pr-1">
               {cards.map((card) => (
                 <button
                   key={card.id}
@@ -425,7 +455,7 @@ export default function KnowledgePage({ onEditDate }: { onEditDate: (date: strin
                       </div>
                       <div className="mt-1 flex flex-wrap items-center gap-1.5 text-[11px] text-gray-400 dark:text-gray-500">
                         <span>{typeLabels[card.card_type]}</span>
-                        {card.source_date && <span>· {card.source_date} · 每日记录</span>}
+                        {card.source_date && <span>· {card.source_date} · {card.source_review_id ? "AI 复盘" : "每日记录"}</span>}
                         {parseTags(card.tags).slice(0, 2).map((tag) => <span key={tag}>#{tag}</span>)}
                       </div>
                     </div>
@@ -436,7 +466,7 @@ export default function KnowledgePage({ onEditDate }: { onEditDate: (date: strin
           )}
         </section>
 
-        <section className="ui-panel min-h-[680px] p-4">
+        <section className="ui-panel min-h-[640px] overflow-y-auto p-4 xl:h-full xl:min-h-0">
           <div className="mb-4 flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
             <div className="min-w-0">
               <div className="flex items-center gap-2">
@@ -446,7 +476,7 @@ export default function KnowledgePage({ onEditDate }: { onEditDate: (date: strin
                 {saveState === "error" && <span className="text-xs text-red-500">保存失败</span>}
               </div>
               <p className="mt-1 text-xs text-gray-400 dark:text-gray-500">
-                {selectedCard?.source_date || draft.source_date ? `${selectedCard?.source_date || draft.source_date} · 每日记录` : "来源用于回溯依据"}
+                {selectedCard?.source_date || draft.source_date ? `${selectedCard?.source_date || draft.source_date} · ${currentSourceType}` : "来源用于回溯依据"}
               </p>
             </div>
             <div className="flex flex-wrap gap-2">
@@ -512,7 +542,7 @@ export default function KnowledgePage({ onEditDate }: { onEditDate: (date: strin
               </div>
               <div className="flex min-h-[240px] flex-1 flex-col rounded-lg border border-gray-100 bg-gray-50 p-3 dark:border-white/10 dark:bg-white/[0.035]">
                 <div className="text-xs font-medium text-gray-500 dark:text-gray-400">
-                  {sourceLoading ? "加载来源..." : sourceArticle?.title || draft.source_date || "暂无来源"}
+                  {sourceLoading ? "加载来源..." : sourceArticle?.title || (draft.source_date ? `${draft.source_date} · ${currentSourceType}` : "暂无来源")}
                 </div>
                 <textarea
                   value={draft.source_excerpt}

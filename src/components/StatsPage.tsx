@@ -706,6 +706,7 @@ export default function StatsPage({
               selectedReview={selectedWeeklyReview}
               generating={generatingKind === "weekly"}
               generationStep={generationStep}
+              estimateLabel={`${weekReview?.total_words || 0} 字材料 · 服务端模型 · ${weeklyReviews.length ? "本地已有版本" : "本地未命中"}`}
               onGenerate={() => generateAiReview("weekly")}
               onOpenLibrary={() => onNavigate("reviews")}
             />
@@ -719,6 +720,7 @@ export default function StatsPage({
               selectedReview={selectedMonthlyReview}
               generating={generatingKind === "monthly"}
               generationStep={generationStep}
+              estimateLabel={`${overview?.total_words || 0} 字记录规模 · 服务端模型 · ${monthlyReviews.length ? "本地已有版本" : "本地未命中"}`}
               onGenerate={() => generateAiReview("monthly")}
               onOpenLibrary={() => onNavigate("reviews")}
             />
@@ -962,6 +964,7 @@ function ReviewPanel({
   selectedReview,
   generating,
   generationStep = "collecting",
+  estimateLabel,
   onGenerate,
   onOpenLibrary,
 }: {
@@ -976,6 +979,7 @@ function ReviewPanel({
   selectedReview: Review | null;
   generating: boolean;
   generationStep?: string;
+  estimateLabel?: string;
   onGenerate: () => void;
   onOpenLibrary: () => void;
 }) {
@@ -1035,6 +1039,12 @@ function ReviewPanel({
         <p className="mb-4 text-xs text-gray-400 dark:text-gray-500">还没有 AI 复盘版本</p>
       )}
 
+      {estimateLabel && (
+        <div className="mb-3 rounded-lg border border-gray-100 bg-gray-50 px-3 py-2 text-xs leading-5 text-gray-500 dark:border-white/10 dark:bg-white/[0.035] dark:text-gray-400">
+          {estimateLabel}
+        </div>
+      )}
+
       {generating && (
         <div className="mb-3 rounded-lg border border-accent/15 bg-accent-light/40 px-3 py-3 dark:bg-accent-light/10">
           <div className="flex items-center justify-between gap-2 mb-2">
@@ -1081,6 +1091,7 @@ function ReviewPanel({
           title="打开复盘库"
         >
           <BookOpenText size={15} />
+          复盘库
         </button>
       </div>
     </section>
