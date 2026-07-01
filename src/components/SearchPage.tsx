@@ -1,5 +1,6 @@
 import { useEffect, useState, useCallback, useRef } from "react";
 import { motion, AnimatePresence } from "framer-motion";
+import { AlertTriangle, Search, SearchX } from "lucide-react";
 import * as api from "../lib/api";
 import type { Article, ArticleSummary } from "../lib/api";
 import ArticleDetail from "./ArticleDetail";
@@ -186,7 +187,9 @@ export default function SearchPage({
               className="h-full flex items-center justify-center text-gray-300 dark:text-gray-500"
             >
               <div className="text-center">
-                <p className="text-4xl mb-3">🔍</p>
+                <span className="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-2xl bg-gray-100 text-gray-400 dark:bg-white/[0.06] dark:text-gray-500">
+                  <Search size={24} />
+                </span>
                 <p>输入关键词搜索你的记录</p>
               </div>
             </motion.div>
@@ -194,7 +197,7 @@ export default function SearchPage({
 
           {error && (
             <div className="text-center py-12">
-              <p className="text-3xl mb-2">⚠️</p>
+              <AlertTriangle size={28} className="mx-auto mb-2 text-red-400" />
               <p className="text-red-400 text-sm">{error}</p>
             </div>
           )}
@@ -206,7 +209,7 @@ export default function SearchPage({
               animate={{ opacity: 1, y: 0 }}
               className="text-center py-16 text-gray-400 dark:text-gray-400"
             >
-              <p className="text-3xl mb-2">🔎</p>
+              <SearchX size={30} className="mx-auto mb-2 text-gray-300 dark:text-gray-600" />
               <p className="text-sm">没有找到匹配的记录</p>
               <p className="text-xs mt-1">试试其他关键词</p>
             </motion.div>

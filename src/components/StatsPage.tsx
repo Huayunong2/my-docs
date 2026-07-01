@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { MouseEvent } from "react";
 import { motion } from "framer-motion";
-import { BarChart3, BookOpenText, CalendarRange, LineChart, LoaderCircle, Sparkles } from "lucide-react";
+import { Activity, BarChart3, BookOpenText, CalendarCheck, CalendarDays, CalendarRange, CheckCircle2, Clock, FileText, Heart, LineChart, LoaderCircle, PencilLine, ShieldCheck, Sparkles, Target, TrendingUp, Trophy } from "lucide-react";
+import type { LucideIcon } from "lucide-react";
 import * as api from "../lib/api";
 import type { MonthDayStats, Review, ReviewKind, StatsOverview, WeekReview } from "../lib/api";
 import type { Page } from "../App";
@@ -131,32 +132,9 @@ export default function StatsPage({
   const missingDays = weekReview?.missing_days || [];
   const visibleMissingDays = expandedMissingDays ? missingDays : missingDays.slice(0, 5);
   const monthHighlights = [
-    { label: "最长记录", value: longestDay ? `${longestDay.word_count} 字` : "暂无", meta: longestDay?.date || "写下第一篇后出现" },
-    { label: "最近记录", value: latestDay ? latestDay.date.slice(5) : "暂无", meta: latestDay?.title || "本月还没有记录" },
-    { label: "当前空缺", value: `${overview?.missing_days || 0} 天`, meta: remainingDays ? `本月还剩 ${remainingDays} 天` : "当前月份已无剩余天" },
-  ];
-  const monthActionItems = [
-    {
-      label: "今日记录",
-      value: latestDay?.date === today ? "已完成" : "待处理",
-      meta: latestDay?.date === today ? "今天已有记录" : "补上今天，连续覆盖更稳定",
-      action: "编辑今天",
-      onClick: () => onEditDate(today),
-    },
-    {
-      label: "空缺处理",
-      value: missingDays.length ? `${missingDays.length} 天` : "无空缺",
-      meta: missingDays.length ? `优先处理 ${missingDays[0]}` : "本周覆盖完整",
-      action: missingDays.length ? "处理首个" : "查看月历",
-      onClick: () => (missingDays.length ? onEditDate(missingDays[0]) : undefined),
-    },
-    {
-      label: "复盘归档",
-      value: selectedWeeklyReview ? (selectedWeeklyReview.status === "confirmed" ? "已确认" : "草稿") : "未生成",
-      meta: selectedWeeklyReview ? `周复盘 v${selectedWeeklyReview.version}` : "生成草稿后再确认归档",
-      action: "进复盘库",
-      onClick: () => onNavigate("reviews"),
-    },
+    { icon: Trophy, label: "最长记录", value: longestDay ? `${longestDay.word_count} 字` : "暂无", meta: longestDay?.date || "写下第一篇后出现" },
+    { icon: Clock, label: "最近记录", value: latestDay ? latestDay.date.slice(5) : "暂无", meta: latestDay?.title || "本月还没有记录" },
+    { icon: Target, label: "当前空缺", value: `${overview?.missing_days || 0} 天`, meta: remainingDays ? `本月还剩 ${remainingDays} 天` : "当前月份已无剩余天" },
   ];
 
   const calendarCells = useMemo(() => {
@@ -352,15 +330,17 @@ export default function StatsPage({
       )}
 
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 md:gap-3 mb-4 md:mb-6">
-        <StatCard label="记录天数" value={loading ? "..." : `${writtenDays} 天`} tone="accent" />
+        <StatCard icon={CalendarDays} label="记录天数" value={loading ? "..." : `${writtenDays} 天`} tone="accent" />
         <StatCard
+          icon={TrendingUp}
           label="连续覆盖"
           value={loading ? "..." : `${overview?.current_streak || 0} 天`}
           meta={overview?.streak_exempted_days ? `含 ${overview.streak_exempted_days} 天豁免` : "不含豁免"}
           tone="green"
         />
-        <StatCard label="总字数" value={loading ? "..." : `${overview?.total_words || 0}`} tone="amber" />
+        <StatCard icon={FileText} label="总字数" value={loading ? "..." : `${overview?.total_words || 0}`} tone="amber" />
         <StatCard
+          icon={ShieldCheck}
           label="豁免天数"
           value={loading ? "..." : `${exemptedDays} 天`}
           meta={dominantExemptionReason ? `主要：${dominantExemptionReason}` : undefined}
@@ -374,16 +354,10 @@ export default function StatsPage({
           <div className="ui-panel flex h-full flex-col overflow-hidden">
             <div className="flex items-center justify-between gap-3 px-3 sm:px-4 py-3 border-b border-gray-100 dark:border-gray-700">
               <div>
-                <h3 className="text-sm font-semibold text-gray-700 dark:text-gray-200">月历</h3>
-                <p className="text-xs text-gray-400 dark:text-gray-400 mt-0.5">点击任意日期直接编辑当天记录</p>
-              </div>
-              <div className="hidden flex-wrap items-center justify-end gap-2 lg:flex">
-                <LegendDot className="bg-accent" label="记录" />
-                <LegendDot className="bg-emerald-400" label="休息" />
-                <LegendDot className="bg-rose-400" label="生病" />
-                <LegendDot className="bg-sky-400" label="出差" />
-                <LegendDot className="bg-amber-400" label="请假" />
-                <LegendDot className="bg-gray-300 dark:bg-white/20" label="空缺" />
+                <h3 className="flex items-center gap-2 text-sm font-semibold text-gray-700 dark:text-gray-200">
+                  <CalendarRange size={16} className="text-accent" /> 月历
+                </h3>
+                <p className="text-xs text-gray-400 dark:text-gray-400 mt-0.5">点击任意日期编辑当天记录</p>
               </div>
               <div className="w-24 shrink-0 sm:w-36">
                 <div className="flex justify-between text-[11px] text-gray-400 dark:text-gray-400 mb-1">
@@ -391,59 +365,64 @@ export default function StatsPage({
                   <span>{completion}%</span>
                 </div>
                 <div className="h-2 rounded-full bg-gray-100 dark:bg-gray-700 overflow-hidden">
-                  <div
-                    className="h-full rounded-full bg-accent"
-                    style={{ width: `${completion}%` }}
-                  />
+                  <div className="h-full rounded-full bg-accent" style={{ width: `${completion}%` }} />
                 </div>
               </div>
             </div>
 
-            <div className="-mx-1 sm:mx-0">
-              <div className="p-2 sm:p-3">
-                <div className="grid grid-cols-7 gap-1 sm:gap-2 mb-1.5">
-                  {weekdays.map((d) => (
-                    <div key={d} className="text-center text-xs font-medium text-gray-400 dark:text-gray-500 py-1">
-                      {d}
-                    </div>
-                  ))}
-                </div>
-                <div className="grid grid-cols-7 gap-1 sm:gap-2">
-                  {calendarCells.map((day, i) => (
-                    day ? (
-                      <CalendarDay
-                        key={day.date}
-                        day={day}
-                        isToday={day.date === today}
-                        onEditDate={onEditDate}
-                        onManageExemption={openExemptionMenu}
-                      />
-                    ) : (
-                      <div
-                        key={`blank-${i}`}
-                        className="min-h-[68px] rounded-lg bg-gray-50/60 dark:bg-gray-900/20 sm:min-h-[86px]"
-                      />
-                    )
-                  ))}
+            <div className="flex-1 flex flex-col p-2 sm:p-3 min-h-0">
+              <div className="grid grid-cols-7 gap-1 sm:gap-2 mb-1.5 shrink-0">
+                {weekdays.map((d) => (
+                  <div key={d} className="text-center text-xs font-semibold text-gray-400 dark:text-gray-500 py-1.5 uppercase tracking-wider">
+                    {d}
+                  </div>
+                ))}
+              </div>
+              <div className="grid grid-cols-7 gap-1 sm:gap-2 flex-1 min-h-0 overflow-hidden" style={{ gridAutoRows: "1fr" }}>
+                {calendarCells.map((day, i) => (
+                  day ? (
+                    <CalendarDay
+                      key={day.date}
+                      day={day}
+                      isToday={day.date === today}
+                      onEditDate={onEditDate}
+                      onManageExemption={openExemptionMenu}
+                    />
+                  ) : (
+                    <div key={`blank-${i}`} className="rounded-lg bg-gray-50/40 dark:bg-white/[0.02] min-h-0" />
+                  )
+                ))}
               </div>
             </div>
+
+            <div className="flex flex-wrap items-center gap-x-3 gap-y-1 px-3 sm:px-4 py-2 border-t border-gray-100 dark:border-gray-700 text-[11px] text-gray-400">
+              <LegendDot className="bg-accent" label="记录" />
+              <LegendDot className="bg-emerald-400" label="休息" />
+              <LegendDot className="bg-amber-400" label="请假" />
+              <LegendDot className="bg-rose-400" label="生病" />
+              <LegendDot className="bg-sky-400" label="出差" />
+              <LegendDot className="bg-gray-300 dark:bg-white/20" label="空缺" />
+              <span className="ml-auto">{writtenDays} 天记录 · {exemptedDays} 天豁免</span>
             </div>
           </div>
         </section>
 
-          <section className="ui-panel flex h-full flex-col p-4 sm:p-5">
+          <section className="ui-panel flex h-full min-h-[720px] flex-col p-4 sm:p-5 xl:min-h-0">
             <div className="mb-4 flex items-start justify-between gap-3">
               <div>
-                <h3 className="text-sm font-semibold text-gray-700 dark:text-gray-200">本月概况</h3>
+                <h3 className="flex items-center gap-2 text-sm font-semibold text-gray-700 dark:text-gray-200">
+                  <BarChart3 size={16} className="text-accent" /> 本月概况
+                </h3>
                 <p className="mt-1 text-xs text-gray-400 dark:text-gray-500">覆盖节奏、记录强度和本月亮点</p>
               </div>
-              <span className="rounded-full bg-accent-light px-2.5 py-1 text-[11px] font-medium text-accent dark:bg-accent-light/20">
+              <span className="inline-flex items-center gap-1 rounded-full bg-accent-light px-2.5 py-1 text-[11px] font-medium text-accent dark:bg-accent-light/20">
+                <CalendarRange size={12} />
                 {coveredDays}/{bounds.daysInMonth} 天
               </span>
             </div>
 
-            <div className="grid gap-4 sm:grid-cols-[150px_1fr]">
-              <div className="flex items-center justify-center sm:justify-start">
+            <div className="grid gap-4 rounded-xl border border-gray-100 bg-gray-50/70 p-3 dark:border-white/5 dark:bg-white/[0.03] sm:grid-cols-[150px_1fr]">
+              <div className="flex items-center justify-center">
                 <div className="relative h-32 w-32">
                   <svg className="h-full w-full -rotate-90" viewBox="0 0 120 120">
                     <circle cx="60" cy="60" r="52" fill="none" strokeWidth="10" className="stroke-gray-100 dark:stroke-white/10" />
@@ -465,19 +444,21 @@ export default function StatsPage({
                 </div>
               </div>
 
-              <div className="grid grid-cols-3 gap-2">
-                <CompactMetric label="覆盖" value={`${coveredDays}`} unit="天" tone="accent" />
-                <CompactMetric label="剩余" value={`${remainingDays}`} unit="天" tone="gray" />
-                <CompactMetric label="连续" value={`${overview?.current_streak || 0}`} unit="天" tone="green" />
-                <CompactMetric label="记录" value={`${writtenDays}`} unit="天" tone="green" />
-                <CompactMetric label="豁免" value={`${exemptedDays}`} unit="天" tone={exemptionMetricTone} />
-                <CompactMetric label="日均" value={`${Math.round(overview?.avg_words || 0)}`} unit="字" tone="gray" />
+              <div className="grid grid-cols-2 gap-2 2xl:grid-cols-3">
+                <CompactMetric icon={CalendarCheck} label="覆盖" value={`${coveredDays}`} unit="天" tone="accent" />
+                <CompactMetric icon={Clock} label="剩余" value={`${remainingDays}`} unit="天" tone="gray" />
+                <CompactMetric icon={TrendingUp} label="连续" value={`${overview?.current_streak || 0}`} unit="天" tone="green" />
+                <CompactMetric icon={FileText} label="记录" value={`${writtenDays}`} unit="天" tone="green" />
+                <CompactMetric icon={ShieldCheck} label="豁免" value={`${exemptedDays}`} unit="天" tone={exemptionMetricTone} />
+                <CompactMetric icon={Activity} label="日均" value={`${Math.round(overview?.avg_words || 0)}`} unit="字" tone="gray" />
               </div>
             </div>
 
-            <div className="mt-5 rounded-xl bg-gray-50 p-3 dark:bg-white/[0.04]">
+            <div className="mt-4 rounded-xl border border-gray-100 bg-gray-50 p-3 dark:border-white/5 dark:bg-white/[0.04]">
               <div className="mb-3 flex items-center justify-between gap-2">
-                <h4 className="text-xs font-semibold text-gray-500 dark:text-gray-400">本月节奏</h4>
+                <h4 className="flex items-center gap-1.5 text-xs font-semibold text-gray-500 dark:text-gray-400">
+                  <Activity size={14} /> 本月节奏
+                </h4>
                 <span className="text-[11px] text-gray-400 dark:text-gray-500">记录 / 豁免 / 空缺</span>
               </div>
               <div className="flex h-20 items-end gap-[3px]">
@@ -516,17 +497,15 @@ export default function StatsPage({
 
             <div className="mt-4 grid gap-2 sm:grid-cols-3">
               {monthHighlights.map((item) => (
-                <div key={item.label} className="rounded-xl border border-gray-100 bg-white px-3 py-2 dark:border-white/5 dark:bg-white/[0.03]">
-                  <div className="text-[11px] text-gray-400 dark:text-gray-500">{item.label}</div>
-                  <div className="mt-1 truncate text-sm font-semibold text-gray-800 dark:text-gray-100">{item.value}</div>
-                  <div className="mt-0.5 truncate text-[11px] text-gray-400 dark:text-gray-500">{item.meta}</div>
-                </div>
+                <MonthHighlightCard key={item.label} {...item} />
               ))}
             </div>
 
             <div className="mt-4 rounded-xl border border-gray-100 p-3 dark:border-white/5">
               <div className="mb-3 flex items-center justify-between gap-2">
-                <h4 className="text-xs font-semibold text-gray-500 dark:text-gray-400">心情分布</h4>
+                <h4 className="flex items-center gap-1.5 text-xs font-semibold text-gray-500 dark:text-gray-400">
+                  <Heart size={14} /> 心情分布
+                </h4>
                 <span className="text-[11px] text-gray-400 dark:text-gray-500">{moodEntries.length} 类</span>
               </div>
               {moodEntries.length === 0 ? (
@@ -553,36 +532,14 @@ export default function StatsPage({
                 </div>
               )}
             </div>
-            <div className="mt-4 flex-1 rounded-xl border border-gray-100 bg-gray-50/70 p-3 dark:border-white/5 dark:bg-white/[0.03]">
-              <div className="mb-3 flex items-center justify-between gap-2">
-                <h4 className="text-xs font-semibold text-gray-500 dark:text-gray-400">本月行动</h4>
-                <span className="text-[11px] text-gray-400 dark:text-gray-500">下一步</span>
-              </div>
-              <div className="grid gap-2 xl:grid-cols-3">
-                {monthActionItems.map((item) => (
-                  <button
-                    key={item.label}
-                    type="button"
-                    onClick={item.onClick}
-                    className="group rounded-xl border border-gray-100 bg-white px-3 py-2 text-left transition-colors hover:border-accent/40 hover:bg-accent-light/40 dark:border-white/5 dark:bg-gray-900/30 dark:hover:bg-accent-light/10"
-                  >
-                    <div className="flex items-center justify-between gap-2">
-                      <span className="text-[11px] text-gray-400 dark:text-gray-500">{item.label}</span>
-                      <span className="text-[11px] font-medium text-accent opacity-0 transition-opacity group-hover:opacity-100">
-                        {item.action}
-                      </span>
-                    </div>
-                    <div className="mt-1 text-sm font-semibold text-gray-800 dark:text-gray-100">{item.value}</div>
-                    <div className="mt-0.5 line-clamp-2 text-[11px] leading-4 text-gray-400 dark:text-gray-500">{item.meta}</div>
-                  </button>
-                ))}
-              </div>
-            </div>
+            
             <button
               onClick={() => onEditDate(today)}
               className="mt-4 w-full h-10 rounded-lg bg-accent text-white text-sm font-medium hover:bg-accent-hover transition-colors"
             >
-              编辑今天
+              <span className="inline-flex items-center justify-center gap-1.5">
+                <PencilLine size={15} /> 编辑今天
+              </span>
             </button>
           </section>
         </div>
@@ -706,7 +663,7 @@ export default function StatsPage({
               selectedReview={selectedWeeklyReview}
               generating={generatingKind === "weekly"}
               generationStep={generationStep}
-              estimateLabel={`${weekReview?.total_words || 0} 字材料 · 服务端模型 · ${weeklyReviews.length ? "本地已有版本" : "本地未命中"}`}
+              estimateLabel={`${weekReview?.total_words || 0} 字材料 · 服务端模型`}
               onGenerate={() => generateAiReview("weekly")}
               onOpenLibrary={() => onNavigate("reviews")}
             />
@@ -720,7 +677,7 @@ export default function StatsPage({
               selectedReview={selectedMonthlyReview}
               generating={generatingKind === "monthly"}
               generationStep={generationStep}
-              estimateLabel={`${overview?.total_words || 0} 字记录规模 · 服务端模型 · ${monthlyReviews.length ? "本地已有版本" : "本地未命中"}`}
+              estimateLabel={`${overview?.total_words || 0} 字记录规模 · 服务端模型`}
               onGenerate={() => generateAiReview("monthly")}
               onOpenLibrary={() => onNavigate("reviews")}
             />
@@ -831,7 +788,7 @@ function CalendarDay({
       onContextMenu={openExemption}
       title={day.title || day.exemption?.reason || day.date}
       className={[
-        "group relative min-h-[68px] overflow-hidden rounded-lg border p-1.5 text-left transition-all sm:min-h-[86px] sm:p-2",
+        "group relative min-h-0 overflow-hidden rounded-lg border p-1.5 text-left transition-all sm:p-2",
         "focus:outline-none focus:ring-2 focus:ring-accent/30",
         day.has_article
           ? "border-accent/30 bg-accent-light/80 dark:bg-accent-light/20 hover:border-accent hover:shadow-sm"
@@ -841,60 +798,43 @@ function CalendarDay({
         isToday ? "ring-2 ring-amber-300 dark:ring-amber-500/60" : "",
       ].join(" ")}
     >
-      <div className="flex items-start justify-between gap-1">
-        <span
-          className={[
-            "inline-flex h-5 min-w-5 items-center justify-center rounded-md px-1 font-semibold text-xs",
-            day.has_article
-              ? "bg-white/80 text-accent dark:bg-gray-900/30"
-              : "text-gray-400 dark:text-gray-500",
-          ].join(" ")}
-        >
+      <div className="flex items-center justify-between gap-1">
+        <span className={[
+          "inline-flex h-5 min-w-5 items-center justify-center rounded-md px-1 font-semibold text-xs",
+          day.has_article ? "bg-white/80 text-accent dark:bg-gray-900/30" : "text-gray-400 dark:text-gray-500"
+        ].join(" ")}>
           {dateNum}
         </span>
-        <span className="flex items-center gap-1 min-w-0">
-          {day.mood && <span className="text-xs leading-none truncate max-w-[20px]">{day.mood}</span>}
+        <span className="flex items-center gap-0.5">
+          {day.mood && <span className="text-xs leading-none">{day.mood}</span>}
           {canManageExemption && (
-            <button
-              type="button"
-              onClick={openExemption}
+            <button type="button" onClick={openExemption}
               className="inline-flex h-5 w-5 items-center justify-center rounded-md text-gray-300 hover:bg-gray-100 hover:text-gray-500 dark:text-gray-600 dark:hover:bg-gray-700 dark:hover:text-gray-300"
-              title="设置未写原因"
-            >
-              …
-            </button>
+              title="豁免原因"><ShieldCheck size={11} /></button>
           )}
         </span>
       </div>
 
-      {day.has_article ? (
-        <div className="mt-1 sm:mt-2 space-y-1">
-          <div className="truncate text-[11px] sm:text-xs font-medium text-gray-700 dark:text-gray-200">
-            {day.title || "(无标题)"}
-          </div>
-          <div className="h-1 sm:h-1.5 rounded-full bg-white/80 dark:bg-gray-700 overflow-hidden">
-            <div className="h-full rounded-full bg-emerald-500" style={{ width: `${words}%` }} />
-          </div>
-          <div className="text-[10px] sm:text-[11px] text-gray-500 dark:text-gray-400">
-            {day.word_count} 字
-          </div>
-        </div>
-      ) : day.exemption ? (
-        <div className="mt-1 sm:mt-3">
-          <div className={`inline-flex max-w-full items-center truncate rounded-full px-1.5 py-0.5 text-[10px] font-medium ${exemptionTone.pill}`}>
-            {day.exemption.reason}
-          </div>
-          {day.exemption.note && (
-            <div className={`mt-0.5 truncate text-[10px] ${exemptionTone.note}`}>
-              {day.exemption.note}
+      <div className="mt-1 sm:mt-2 flex-1 flex flex-col justify-end min-h-0 overflow-hidden">
+        {day.has_article ? (
+          <>
+            <div className="h-1 sm:h-1.5 rounded-full bg-white/80 dark:bg-gray-700 overflow-hidden mb-1 shrink-0">
+              <div className="h-full rounded-full bg-emerald-500" style={{ width: `${words}%` }} />
             </div>
-          )}
-        </div>
-      ) : (
-        <div className="mt-1 sm:mt-3 text-[10px] sm:text-[11px] text-gray-300 group-hover:text-gray-400 dark:text-gray-600">
-          可补写
-        </div>
-      )}
+            <div className="text-[10px] text-gray-500 dark:text-gray-400 leading-none truncate">{day.word_count} 字</div>
+          </>
+        ) : day.exemption ? (
+          <div className="flex justify-center">
+            <span className={`inline-flex items-center truncate rounded-full px-1.5 py-0.5 text-[10px] font-medium ${exemptionTone.pill}`}>
+              {day.exemption.reason}
+            </span>
+          </div>
+        ) : (
+          <div className="flex items-center justify-center text-gray-300 dark:text-gray-600 group-hover:text-gray-400">
+            <PencilLine size={12} />
+          </div>
+        )}
+      </div>
     </div>
   );
 }
@@ -1054,7 +994,7 @@ function ReviewPanel({
               return (
                 <div key={step} className="flex items-center gap-1.5 flex-1">
                   <span className={`flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-[10px] font-bold transition-colors ${done ? "bg-accent text-white" : "bg-gray-200 text-gray-400 dark:bg-gray-700 dark:text-gray-500"}`}>
-                    {done ? "✓" : i + 1}
+                    {done ? <CheckCircle2 size={12} /> : i + 1}
                   </span>
                   <span className={`truncate text-[11px] transition-colors ${done ? "text-gray-700 dark:text-gray-200 font-medium" : "text-gray-400 dark:text-gray-500"}`}>
                     {STEP_LABELS[step]}
@@ -1177,41 +1117,72 @@ function ReviewDatePicker({
 }
 
 function StatCard({
+  icon: Icon,
   label,
   value,
   meta,
   tone,
 }: {
+  icon: LucideIcon;
   label: string;
   value: string;
   meta?: string;
   tone: StatTone;
 }) {
   const toneClass = {
-    accent: "bg-accent-light text-accent dark:bg-accent-light/20",
-    green: "bg-emerald-50 text-emerald-600 dark:bg-emerald-900/20 dark:text-emerald-300",
-    amber: "bg-amber-50 text-amber-600 dark:bg-amber-900/20 dark:text-amber-300",
-    rose: "bg-rose-50 text-rose-600 dark:bg-rose-900/20 dark:text-rose-300",
-    sky: "bg-sky-50 text-sky-600 dark:bg-sky-900/20 dark:text-sky-300",
-    gray: "bg-gray-100 text-gray-600 dark:bg-gray-700 dark:text-gray-200",
+    accent: {
+      icon: "bg-accent-light text-accent dark:bg-accent-light/20",
+      glow: "from-accent/12",
+    },
+    green: {
+      icon: "bg-emerald-50 text-emerald-600 dark:bg-emerald-500/10 dark:text-emerald-300",
+      glow: "from-emerald-500/12",
+    },
+    amber: {
+      icon: "bg-amber-50 text-amber-600 dark:bg-amber-500/10 dark:text-amber-300",
+      glow: "from-amber-500/12",
+    },
+    rose: {
+      icon: "bg-rose-50 text-rose-600 dark:bg-rose-500/10 dark:text-rose-300",
+      glow: "from-rose-500/12",
+    },
+    sky: {
+      icon: "bg-sky-50 text-sky-600 dark:bg-sky-500/10 dark:text-sky-300",
+      glow: "from-sky-500/12",
+    },
+    gray: {
+      icon: "bg-gray-100 text-gray-600 dark:bg-white/[0.06] dark:text-gray-300",
+      glow: "from-gray-500/10",
+    },
   }[tone];
 
   return (
-      <div className="ui-panel p-3 md:p-4">
-      <div className={`mb-3 h-1.5 w-10 rounded-full ${toneClass}`} />
-      <p className="text-xs text-gray-400 dark:text-gray-400 mb-1">{label}</p>
-      <p className="text-xl md:text-2xl font-bold text-gray-800 dark:text-gray-100">{value}</p>
-      {meta && <p className="mt-1 text-[11px] text-gray-400 dark:text-gray-400">{meta}</p>}
+    <div className="ui-panel relative overflow-hidden p-3 md:p-4">
+      <div className={`pointer-events-none absolute inset-x-0 top-0 h-16 bg-gradient-to-b ${toneClass.glow} to-transparent`} />
+      <div className="relative flex min-h-[84px] flex-col justify-between gap-3">
+        <div className="flex items-center justify-between gap-2">
+          <div className="min-w-0">
+            <p className="text-xs font-medium text-gray-400 dark:text-gray-400">{label}</p>
+            {meta && <p className="mt-1 truncate text-[11px] text-gray-400/90 dark:text-gray-500">{meta}</p>}
+          </div>
+          <span className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-xl ${toneClass.icon}`}>
+            <Icon size={17} />
+          </span>
+        </div>
+        <p className="text-2xl font-bold leading-none text-gray-800 dark:text-gray-100 md:text-[26px]">{value}</p>
+      </div>
     </div>
   );
 }
 
 function CompactMetric({
+  icon: Icon,
   label,
   value,
   unit,
   tone,
 }: {
+  icon: LucideIcon;
   label: string;
   value: string;
   unit: string;
@@ -1227,12 +1198,40 @@ function CompactMetric({
   }[tone];
 
   return (
-    <div className={`rounded-xl px-3 py-2 ${toneClass}`}>
-      <div className="text-[11px] opacity-70">{label}</div>
-      <div className="mt-1 text-lg font-bold leading-none">
+    <div className={`rounded-xl px-3 py-2.5 ${toneClass}`}>
+      <div className="flex items-center justify-between gap-2">
+        <div className="text-[11px] opacity-70">{label}</div>
+        <Icon size={13} className="opacity-70" />
+      </div>
+      <div className="mt-1.5 text-lg font-bold leading-none">
         {value}
         <span className="ml-0.5 text-[11px] font-medium opacity-70">{unit}</span>
       </div>
+    </div>
+  );
+}
+
+function MonthHighlightCard({
+  icon: Icon,
+  label,
+  value,
+  meta,
+}: {
+  icon: LucideIcon;
+  label: string;
+  value: string;
+  meta: string;
+}) {
+  return (
+    <div className="rounded-xl border border-gray-100 bg-white px-3 py-2.5 dark:border-white/5 dark:bg-white/[0.03]">
+      <div className="flex items-center justify-between gap-2">
+        <div className="text-[11px] text-gray-400 dark:text-gray-500">{label}</div>
+        <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-lg bg-gray-50 text-gray-400 dark:bg-white/[0.06] dark:text-gray-500">
+          <Icon size={13} />
+        </span>
+      </div>
+      <div className="mt-1 truncate text-sm font-semibold text-gray-800 dark:text-gray-100">{value}</div>
+      <div className="mt-0.5 truncate text-[11px] text-gray-400 dark:text-gray-500">{meta}</div>
     </div>
   );
 }

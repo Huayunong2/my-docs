@@ -1,5 +1,6 @@
 import { useEffect, useState, useCallback } from "react";
 import { motion, AnimatePresence } from "framer-motion";
+import { ChevronDown, ChevronRight, FileText, FolderArchive } from "lucide-react";
 import * as api from "../lib/api";
 import type { Article, ArticleSummary } from "../lib/api";
 import ArticleDetail from "./ArticleDetail";
@@ -109,10 +110,12 @@ export default function ArchivePage({ onEditDate }: { onEditDate: (date: string)
           className="w-full flex items-center justify-between px-4 py-2.5 rounded-xl bg-gray-50 dark:bg-gray-800/60 border border-gray-200 dark:border-gray-600/50 text-sm font-medium text-gray-700 dark:text-gray-200"
         >
           <span className="flex items-center gap-2">
-            <span>📁</span>
+            <FolderArchive size={16} className="text-gray-400" />
             {expandedMonth ? <MonthTitle yearMonth={expandedMonth} /> : "选择月份"}
           </span>
-          <motion.span animate={{ rotate: mobilePanelOpen ? 180 : 0 }} className="text-xs text-gray-400">▼</motion.span>
+          <motion.span animate={{ rotate: mobilePanelOpen ? 180 : 0 }} className="text-gray-400">
+            <ChevronDown size={16} />
+          </motion.span>
         </button>
         <AnimatePresence>
           {mobilePanelOpen && (
@@ -143,7 +146,7 @@ export default function ArchivePage({ onEditDate }: { onEditDate: (date: string)
             <div className="hidden md:block"><MonthTitle yearMonth={expandedMonth} /></div>
             {articles.length === 0 ? (
               <div className="text-center py-16 text-gray-300 dark:text-gray-500">
-                <p className="text-3xl mb-2">📄</p>
+                <FileText size={30} className="mx-auto mb-2 text-gray-300 dark:text-gray-600" />
                 <p className="text-sm">该月没有记录</p>
               </div>
             ) : (
@@ -179,7 +182,9 @@ export default function ArchivePage({ onEditDate }: { onEditDate: (date: string)
         ) : (
           <div className="h-full flex items-center justify-center text-gray-300 dark:text-gray-500">
             <div className="text-center">
-              <p className="text-4xl mb-3">📁</p>
+              <span className="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-2xl bg-gray-100 text-gray-400 dark:bg-white/[0.06] dark:text-gray-500">
+                <FolderArchive size={24} />
+              </span>
               <p className="text-sm">选择一个月份查看记录</p>
             </div>
           </div>
@@ -222,7 +227,9 @@ function ArchiveTree({
             onClick={() => setExpandedYear(expandedYear === g.year ? null : g.year)}
             className="w-full flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-medium text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-700/50 transition-colors duration-150"
           >
-            <motion.span animate={{ rotate: expandedYear === g.year ? 90 : 0 }} transition={{ duration: 0.15 }} className="text-xs text-gray-400 dark:text-gray-400">▶</motion.span>
+            <motion.span animate={{ rotate: expandedYear === g.year ? 90 : 0 }} transition={{ duration: 0.15 }} className="text-gray-400 dark:text-gray-400">
+              <ChevronRight size={14} />
+            </motion.span>
             {g.year} 年
           </button>
           <AnimatePresence>

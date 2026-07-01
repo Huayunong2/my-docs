@@ -6,10 +6,14 @@ import {
   ChevronRight,
   ExternalLink,
   FileText,
+  Lightbulb,
   LoaderCircle,
   MoreHorizontal,
   Plus,
   Search,
+  ShieldCheck,
+  Sparkles,
+  Tags,
   Trash2,
 } from "lucide-react";
 import * as api from "../lib/api";
@@ -293,7 +297,7 @@ export default function KnowledgePage({ onEditDate, onNavigate }: { onEditDate: 
     <motion.div
       initial={{ opacity: 0, y: 10 }}
       animate={{ opacity: 1, y: 0 }}
-      className="flex h-full min-h-0 flex-col overflow-hidden px-3 pb-24 pt-4 sm:px-4 md:px-8 md:py-6"
+      className="min-h-full px-3 pb-24 pt-4 sm:px-4 md:px-8 md:py-6 xl:flex xl:h-full xl:min-h-0 xl:flex-col xl:overflow-hidden"
     >
       <header className="mb-4 flex flex-col gap-3 md:mb-5 md:flex-row md:items-end md:justify-between">
         <div>
@@ -318,8 +322,8 @@ export default function KnowledgePage({ onEditDate, onNavigate }: { onEditDate: 
 
       {error && <div className="ui-alert-bad mb-4">{error}</div>}
 
-      <div className="grid min-h-0 flex-1 items-stretch gap-4 overflow-y-auto xl:grid-cols-[240px_minmax(340px,430px)_minmax(0,1fr)] xl:overflow-hidden">
-        <aside className="ui-panel flex min-h-[640px] flex-col p-3 xl:h-full xl:min-h-0">
+      <div className="grid gap-4 xl:min-h-0 xl:flex-1 xl:grid-cols-[240px_minmax(340px,430px)_minmax(0,1fr)] xl:items-stretch xl:overflow-hidden">
+        <aside className="ui-panel flex flex-col p-3 xl:h-full xl:min-h-0">
           <div className="relative">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-300 dark:text-gray-500" size={15} />
             <input
@@ -371,12 +375,12 @@ export default function KnowledgePage({ onEditDate, onNavigate }: { onEditDate: 
               <p>3. 沉淀后用于复习检索</p>
             </div>
           </div>
-          <div className="mt-auto rounded-lg border border-accent/15 bg-accent-light/40 p-3 text-xs leading-5 text-accent dark:bg-accent-light/10">
+          <div className="mt-4 rounded-lg border border-accent/15 bg-accent-light/40 p-3 text-xs leading-5 text-accent dark:bg-accent-light/10 xl:mt-auto">
             知识卡片必须能回到来源。没有来源片段的内容，不建议确认入库。
           </div>
         </aside>
 
-        <section className="ui-panel flex min-h-[640px] flex-col overflow-hidden p-2 xl:h-full xl:min-h-0">
+        <section className="ui-panel flex flex-col overflow-visible p-2 xl:h-full xl:min-h-0 xl:overflow-hidden">
           <div className="shrink-0 px-2 py-1">
             <div className="flex min-h-9 items-center justify-between gap-2">
             <div className="text-xs font-semibold text-gray-500 dark:text-gray-400">
@@ -415,15 +419,24 @@ export default function KnowledgePage({ onEditDate, onNavigate }: { onEditDate: 
           {loading ? (
             <p className="p-3 text-sm text-gray-400">加载中...</p>
           ) : cards.length === 0 ? (
-            <div className="flex min-h-[260px] flex-col items-center justify-center px-6 text-center">
-              <FileText size={28} className="text-gray-300 dark:text-gray-600" />
-              <p className="mt-2 text-sm font-medium text-gray-500 dark:text-gray-400">没有{statusLabels[activeStatus]}卡片</p>
-              <p className="mt-1 text-xs leading-5 text-gray-400 dark:text-gray-500">
-                {activeStatus === "draft" ? "从每日记录的 AI 总结面板提取知识卡片草稿。" : "切换到待确认，先把草稿确认成沉淀内容。"}
-              </p>
+            <div className="p-3 xl:min-h-0 xl:flex-1 xl:overflow-y-auto">
+              <div className="rounded-xl border border-dashed border-gray-200 bg-gray-50 p-4 text-center dark:border-white/10 dark:bg-white/[0.035]">
+                <span className="mx-auto flex h-10 w-10 items-center justify-center rounded-xl bg-white text-gray-300 dark:bg-white/[0.06] dark:text-gray-600">
+                  <FileText size={22} />
+                </span>
+                <p className="mt-3 text-sm font-medium text-gray-600 dark:text-gray-300">没有{statusLabels[activeStatus]}卡片</p>
+                <p className="mt-1 text-xs leading-5 text-gray-400 dark:text-gray-500">
+                  {activeStatus === "draft" ? "从每日记录或周/月复盘提取草稿后，在这里逐条确认。" : "切换到待确认，先把草稿确认成沉淀内容。"}
+                </p>
+              </div>
+              <div className="mt-3 grid gap-2">
+                <KnowledgeHint icon={ShieldCheck} title="先看来源" desc="确认前先核对原文片段，避免把 AI 推断当成事实。" />
+                <KnowledgeHint icon={Tags} title="类型要克制" desc="事实、方法、原则优先；不确定的内容先留在草稿。" />
+                <KnowledgeHint icon={Lightbulb} title="写成复习卡" desc="标题回答“这是什么”，正文沉淀可复用判断或方法。" />
+              </div>
             </div>
           ) : (
-            <div className="min-h-0 flex-1 space-y-1 overflow-y-auto pr-1">
+            <div className="space-y-1 pr-1 xl:min-h-0 xl:flex-1 xl:overflow-y-auto">
               {cards.map((card) => (
                 <button
                   key={card.id}
@@ -466,7 +479,7 @@ export default function KnowledgePage({ onEditDate, onNavigate }: { onEditDate: 
           )}
         </section>
 
-        <section className="ui-panel min-h-[640px] overflow-y-auto p-4 xl:h-full xl:min-h-0">
+        <section className="ui-panel flex flex-col overflow-visible p-4 xl:h-full xl:min-h-0 xl:overflow-y-auto">
           <div className="mb-4 flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
             <div className="min-w-0">
               <div className="flex items-center gap-2">
@@ -524,11 +537,15 @@ export default function KnowledgePage({ onEditDate, onNavigate }: { onEditDate: 
             </div>
           )}
 
-          <div className="mt-5 grid items-stretch gap-4 2xl:grid-cols-[minmax(0,1fr)_340px]">
+          <div className="mt-5 grid items-stretch gap-4 xl:flex-1 2xl:grid-cols-[minmax(0,1fr)_340px]">
             <div className="flex min-w-0 flex-col">
               <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-gray-400 dark:text-gray-500">预览</div>
-              <div className="min-h-[240px] flex-1 rounded-lg bg-gray-50 p-4 dark:bg-white/[0.035]">
-                <MarkdownContent content={draft.content || "输入内容以预览..."} />
+              <div className="min-h-[280px] flex-1 rounded-lg bg-gray-50 p-4 dark:bg-white/[0.035]">
+                {draft.content ? (
+                  <MarkdownContent content={draft.content} />
+                ) : (
+                  <KnowledgeEmptyPreview />
+                )}
               </div>
             </div>
             <div className="flex min-w-0 flex-col">
@@ -540,7 +557,7 @@ export default function KnowledgePage({ onEditDate, onNavigate }: { onEditDate: 
                   </button>
                 )}
               </div>
-              <div className="flex min-h-[240px] flex-1 flex-col rounded-lg border border-gray-100 bg-gray-50 p-3 dark:border-white/10 dark:bg-white/[0.035]">
+              <div className="flex min-h-[280px] flex-1 flex-col rounded-lg border border-gray-100 bg-gray-50 p-3 dark:border-white/10 dark:bg-white/[0.035]">
                 <div className="text-xs font-medium text-gray-500 dark:text-gray-400">
                   {sourceLoading ? "加载来源..." : sourceArticle?.title || (draft.source_date ? `${draft.source_date} · ${currentSourceType}` : "暂无来源")}
                 </div>
@@ -557,6 +574,13 @@ export default function KnowledgePage({ onEditDate, onNavigate }: { onEditDate: 
               </div>
             </div>
           </div>
+          {!draft.content && !draft.source_excerpt && (
+            <div className="mt-4 grid gap-3 lg:grid-cols-3">
+              <KnowledgeHint icon={ShieldCheck} title="可信边界" desc="只确认来源里明确出现的事实、方法和原则。" />
+              <KnowledgeHint icon={Sparkles} title="AI 只起草" desc="AI 生成内容默认是草稿，确认后才算沉淀。" />
+              <KnowledgeHint icon={ExternalLink} title="保留回跳" desc="来源日期和片段越完整，后续复习越可靠。" />
+            </div>
+          )}
         </section>
       </div>
       {dialog}
@@ -578,6 +602,59 @@ function FilterButton({ active, onClick, children }: { active: boolean; onClick:
     >
       {children}
     </button>
+  );
+}
+
+function KnowledgeHint({
+  icon: Icon,
+  title,
+  desc,
+}: {
+  icon: typeof FileText;
+  title: string;
+  desc: string;
+}) {
+  return (
+    <div className="rounded-lg border border-gray-100 bg-gray-50 p-3 dark:border-white/10 dark:bg-white/[0.035]">
+      <div className="flex items-start gap-2">
+        <span className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-white text-accent dark:bg-white/[0.06]">
+          <Icon size={14} />
+        </span>
+        <div className="min-w-0">
+          <div className="text-xs font-semibold text-gray-600 dark:text-gray-300">{title}</div>
+          <p className="mt-1 text-xs leading-5 text-gray-400 dark:text-gray-500">{desc}</p>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function KnowledgeEmptyPreview() {
+  return (
+    <div className="grid gap-3 text-sm text-gray-500 dark:text-gray-400">
+      <div className="rounded-lg border border-gray-100 bg-white p-3 dark:border-white/10 dark:bg-white/[0.035]">
+        <div className="mb-1 flex items-center gap-2 text-xs font-semibold text-gray-600 dark:text-gray-300">
+          <FileText size={14} /> 卡片正文建议
+        </div>
+        <p className="text-xs leading-5 text-gray-400 dark:text-gray-500">
+          用一两段写清楚可复习的结论，避免只写“以后注意”。
+        </p>
+      </div>
+      <div className="grid gap-2 text-xs leading-5">
+        <div className="rounded-lg bg-white p-3 dark:bg-white/[0.035]">
+          <span className="font-semibold text-gray-600 dark:text-gray-300">事实：</span>
+          记录已经发生、可被来源片段支撑的内容。
+        </div>
+        <div className="rounded-lg bg-white p-3 dark:bg-white/[0.035]">
+          <span className="font-semibold text-gray-600 dark:text-gray-300">方法：</span>
+          沉淀具体步骤、判断顺序或排查清单。
+        </div>
+        <div className="rounded-lg bg-white p-3 dark:bg-white/[0.035]">
+          <span className="font-semibold text-gray-600 dark:text-gray-300">原则：</span>
+          从多次记录里确认过的稳定做法。
+        </div>
+      </div>
+    </div>
   );
 }
 
