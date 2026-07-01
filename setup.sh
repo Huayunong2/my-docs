@@ -281,10 +281,15 @@ write_env_file() {
     token="$(random_token)"
   fi
 
-  local ai_key ai_base ai_model
+  local ai_key ai_base ai_model ai_temperature ai_max_tokens ai_timeout_secs ai_retries ai_min_interval_ms
   ai_key="$(read_env_value DAILY_SUMMARY_AI_API_KEY)"
   ai_base="$(read_env_value DAILY_SUMMARY_AI_BASE_URL)"
   ai_model="$(read_env_value DAILY_SUMMARY_AI_MODEL)"
+  ai_temperature="$(read_env_value DAILY_SUMMARY_AI_TEMPERATURE)"
+  ai_max_tokens="$(read_env_value DAILY_SUMMARY_AI_MAX_TOKENS)"
+  ai_timeout_secs="$(read_env_value DAILY_SUMMARY_AI_TIMEOUT_SECS)"
+  ai_retries="$(read_env_value DAILY_SUMMARY_AI_RETRIES)"
+  ai_min_interval_ms="$(read_env_value DAILY_SUMMARY_AI_MIN_INTERVAL_MS)"
 
   local next_env
   next_env="$(mktemp)"
@@ -295,6 +300,11 @@ DAILY_SUMMARY_ALLOWED_ORIGINS=$PUBLIC_URL
 DAILY_SUMMARY_AI_API_KEY=$ai_key
 DAILY_SUMMARY_AI_BASE_URL=${ai_base:-https://api.openai.com/v1}
 DAILY_SUMMARY_AI_MODEL=${ai_model:-gpt-4o-mini}
+DAILY_SUMMARY_AI_TEMPERATURE=${ai_temperature:-0.2}
+DAILY_SUMMARY_AI_MAX_TOKENS=${ai_max_tokens:-1800}
+DAILY_SUMMARY_AI_TIMEOUT_SECS=${ai_timeout_secs:-45}
+DAILY_SUMMARY_AI_RETRIES=${ai_retries:-2}
+DAILY_SUMMARY_AI_MIN_INTERVAL_MS=${ai_min_interval_ms:-1200}
 EOF
 
   if [ -f "$ENV_FILE" ] && cmp -s "$next_env" "$ENV_FILE"; then

@@ -5,6 +5,7 @@ mod backups;
 mod db;
 mod day_exemptions;
 mod exports;
+mod knowledge;
 pub(crate) mod helpers;
 pub(crate) mod middleware;
 pub(crate) mod models;

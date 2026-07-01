@@ -188,14 +188,14 @@ export default function MarkdownContent({ content }: { content: string }) {
   }
 
   return (
-    <div className="text-sm leading-relaxed text-gray-700 dark:text-gray-300">
+    <div className="text-[15px] leading-7 text-gray-700 dark:text-gray-300">
       <ReactMarkdown
         remarkPlugins={[remarkGfm]}
         rehypePlugins={[rehypeSanitize]}
         components={{
-        h1: ({ children }) => <h1 className="text-2xl font-bold mb-4 text-gray-900 dark:text-gray-100">{children}</h1>,
-        h2: ({ children }) => <h2 className="text-xl font-bold mt-8 mb-4 pb-2 border-b border-gray-100 dark:border-white/10 text-gray-900 dark:text-gray-100">{children}</h2>,
-        h3: ({ children }) => <h3 className="text-lg font-semibold mt-6 mb-3 text-gray-800 dark:text-gray-200">{children}</h3>,
+        h1: ({ children }) => <h1 className="mb-5 text-3xl font-bold leading-tight text-gray-950 dark:text-gray-50">{children}</h1>,
+        h2: ({ children }) => <h2 className="mt-10 mb-4 border-b border-gray-200 pb-2 text-2xl font-bold leading-tight text-gray-950 dark:border-white/10 dark:text-gray-50">{children}</h2>,
+        h3: ({ children }) => <h3 className="mt-8 mb-3 text-xl font-semibold leading-snug text-gray-800 dark:text-gray-100">{children}</h3>,
         p: ({ children }) => <p className="mb-4 leading-relaxed">{children}</p>,
         ul: ({ children }) => <ul className="mb-4 pl-6 space-y-1.5 list-disc">{children}</ul>,
         ol: ({ children }) => <ol className="mb-4 pl-6 space-y-1.5 list-decimal">{children}</ol>,

@@ -173,11 +173,11 @@ export function importArticles(articles: Array<{ date: string; title: string; co
 }
 
 export function exportFullBackup() {
-  return httpRequest<{ version: number; articles: any[]; reviews: any[] }>("/export/full", { method: "POST", body: "{}" });
+  return httpRequest<{ version: number; articles: any[]; reviews: any[]; knowledge_cards?: any[] }>("/export/full", { method: "POST", body: "{}" });
 }
 
 export function importFullBackup(data: any) {
-  return httpRequest<{ imported_articles: number; imported_reviews: number }>("/articles/import-full", { method: "POST", body: JSON.stringify(data) });
+  return httpRequest<{ imported_articles: number; imported_reviews: number; imported_knowledge_cards?: number }>("/articles/import-full", { method: "POST", body: JSON.stringify(data) });
 }
 
 export function deleteArticle(id: string) {
@@ -198,6 +198,77 @@ export function listArticles(page: number, pageSize: number) {
 
 export function searchArticles(query: string) {
   return httpRequest<ArticleSummary[]>(`/articles/search?q=${encodeURIComponent(query)}`);
+}
+
+// ── Knowledge cards ─────────────────────────────────
+
+export type KnowledgeCardType = "fact" | "method" | "concept" | "decision" | "case" | "quote" | "principle";
+export type KnowledgeCardStatus = "draft" | "confirmed" | "outdated";
+
+export interface KnowledgeCard {
+  id: string;
+  card_type: KnowledgeCardType;
+  status: KnowledgeCardStatus;
+  title: string;
+  content: string;
+  tags: string;
+  source_article_id: string;
+  source_review_id: string;
+  source_date: string;
+  source_excerpt: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export function listKnowledgeCards(filters: { card_type?: string; status?: string; q?: string } = {}) {
+  const params = new URLSearchParams();
+  if (filters.card_type) params.set("card_type", filters.card_type);
+  if (filters.status) params.set("status", filters.status);
+  if (filters.q) params.set("q", filters.q);
+  const query = params.toString();
+  return httpRequest<KnowledgeCard[]>(`/knowledge-cards${query ? `?${query}` : ""}`);
+}
+
+export function createKnowledgeCard(payload: {
+  card_type: KnowledgeCardType;
+  status?: KnowledgeCardStatus;
+  title: string;
+  content: string;
+  tags?: string;
+  source_article_id?: string;
+  source_review_id?: string;
+  source_date?: string;
+  source_excerpt?: string;
+}) {
+  return httpRequest<KnowledgeCard>("/knowledge-cards", { method: "POST", body: JSON.stringify(payload) });
+}
+
+export function extractKnowledgeCards(payload: {
+  content: string;
+  source_article_id?: string;
+  source_review_id?: string;
+  source_date?: string;
+  max_cards?: number;
+}) {
+  return httpRequest<KnowledgeCard[]>("/knowledge-cards/extract", { method: "POST", body: JSON.stringify(payload) });
+}
+
+export function updateKnowledgeCard(id: string, payload: Partial<{
+  card_type: KnowledgeCardType;
+  status: KnowledgeCardStatus;
+  title: string;
+  content: string;
+  tags: string;
+  source_article_id: string;
+  source_review_id: string;
+  source_date: string;
+  source_excerpt: string;
+}>) {
+  return httpRequest<KnowledgeCard>(`/knowledge-cards/${encodeURIComponent(id)}`, { method: "PUT", body: JSON.stringify(payload) });
+}
+
+export function deleteKnowledgeCard(id: string) {
+  return httpRequest<void>(`/knowledge-cards/${encodeURIComponent(id)}`, { method: "DELETE" });
 }
 
 // ── Archive ─────────────────────────────────────────
@@ -324,7 +395,24 @@ export function deleteReview(id: string) {
 export function healthCheck() {
   const base = localStorage.getItem("server_url") || (isTauri() ? "http://115.191.3.251:8080/api" : "/api");
   const root = base.replace(/\/api\/?$/, "");
-  return fetch(`${root}/health`).then(r => r.json()) as Promise<{ version: string; build: string; features: Record<string, boolean> }>;
+  return fetch(`${root}/health`).then(r => r.json()) as Promise<{
+    version: string;
+    build: string;
+    features: Record<string, boolean>;
+    ai_config?: {
+      configured: boolean;
+      model: string;
+      base_url: string;
+      temperature: string;
+      max_tokens: string;
+      timeout_secs: string;
+      retries: string;
+      min_interval_ms: string;
+    };
+    db_path?: string;
+    db_size?: number;
+    last_backup?: string;
+  }>;
 }
 
 // ── Day exemptions ─────────────────────────────────

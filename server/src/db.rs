@@ -153,11 +153,44 @@ impl Database {
             self.conn.execute("INSERT INTO schema_version (version) VALUES (1)", [])?;
         }
 
-        // ── v2: future migrations go here ──
-        // if current < 2 {
-        //     self.conn.execute_batch("ALTER TABLE articles ADD COLUMN ...")?;
-        //     self.conn.execute("INSERT INTO schema_version (version) VALUES (2)", [])?;
-        // }
+        if current < 2 {
+            self.conn.execute_batch(
+                "
+            CREATE TABLE IF NOT EXISTS knowledge_cards (
+                id                TEXT PRIMARY KEY,
+                card_type         TEXT NOT NULL CHECK(card_type IN ('fact', 'method', 'concept', 'decision', 'case', 'quote', 'principle')),
+                status            TEXT NOT NULL CHECK(status IN ('draft', 'confirmed', 'outdated')),
+                title             TEXT NOT NULL,
+                content           TEXT NOT NULL,
+                tags              TEXT DEFAULT '[]',
+                source_article_id TEXT DEFAULT '',
+                source_review_id  TEXT DEFAULT '',
+                source_date       TEXT DEFAULT '',
+                created_at        TEXT NOT NULL,
+                updated_at        TEXT NOT NULL
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_knowledge_cards_type_status
+                ON knowledge_cards(card_type, status, updated_at DESC);
+
+            CREATE INDEX IF NOT EXISTS idx_knowledge_cards_source
+                ON knowledge_cards(source_date, source_article_id, source_review_id);
+            ",
+            )?;
+            self.conn.execute("INSERT INTO schema_version (version) VALUES (2)", [])?;
+        }
+
+        if current < 3 {
+            self.conn.execute_batch(
+                "
+            ALTER TABLE knowledge_cards ADD COLUMN source_excerpt TEXT DEFAULT '';
+
+            CREATE INDEX IF NOT EXISTS idx_knowledge_cards_status_updated
+                ON knowledge_cards(status, updated_at DESC);
+            ",
+            )?;
+            self.conn.execute("INSERT INTO schema_version (version) VALUES (3)", [])?;
+        }
 
         Ok(())
     }

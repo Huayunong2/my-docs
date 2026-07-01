@@ -5,17 +5,68 @@ use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::Json;
 use rusqlite::params;
+use serde_json::Value;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::{Duration as StdDuration, SystemTime, UNIX_EPOCH};
 
 type AppState = Arc<Mutex<Database>>;
+use serde_json;
 use std::collections::BTreeSet;
 use uuid::Uuid;
-use serde_json;
 
+static LAST_AI_REQUEST_MS: AtomicU64 = AtomicU64::new(0);
 
 // ── Helpers ─────────────────────────────────────────
 
-pub(crate) async fn call_ai(prompt: String, system: &str) -> Result<(String, String), (StatusCode, String)> {
+fn env_u64(key: &str, default: u64) -> u64 {
+    std::env::var(key)
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .unwrap_or(default)
+}
+
+fn env_f32(key: &str, default: f32) -> f32 {
+    std::env::var(key)
+        .ok()
+        .and_then(|v| v.parse::<f32>().ok())
+        .unwrap_or(default)
+}
+
+fn now_millis() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64
+}
+
+async fn throttle_ai_requests() {
+    let min_interval_ms = env_u64("DAILY_SUMMARY_AI_MIN_INTERVAL_MS", 1200);
+    if min_interval_ms == 0 {
+        return;
+    }
+
+    loop {
+        let now = now_millis();
+        let previous = LAST_AI_REQUEST_MS.load(Ordering::SeqCst);
+        let next_allowed = previous.saturating_add(min_interval_ms);
+        if now >= next_allowed {
+            if LAST_AI_REQUEST_MS
+                .compare_exchange(previous, now, Ordering::SeqCst, Ordering::SeqCst)
+                .is_ok()
+            {
+                return;
+            }
+        } else {
+            tokio::time::sleep(StdDuration::from_millis(next_allowed - now)).await;
+        }
+    }
+}
+
+pub(crate) async fn call_ai(
+    prompt: String,
+    system: &str,
+) -> Result<(String, String), (StatusCode, String)> {
     let api_key = std::env::var("DAILY_SUMMARY_AI_API_KEY").map_err(|_| {
         (
             StatusCode::SERVICE_UNAVAILABLE,
@@ -28,45 +79,97 @@ pub(crate) async fn call_ai(prompt: String, system: &str) -> Result<(String, Str
         .to_string();
     let model =
         std::env::var("DAILY_SUMMARY_AI_MODEL").unwrap_or_else(|_| "gpt-4o-mini".to_string());
+    let temperature = env_f32("DAILY_SUMMARY_AI_TEMPERATURE", 0.2);
+    let max_tokens = env_u64("DAILY_SUMMARY_AI_MAX_TOKENS", 1800);
+    let timeout_secs = env_u64("DAILY_SUMMARY_AI_TIMEOUT_SECS", 45);
+    let retries = env_u64("DAILY_SUMMARY_AI_RETRIES", 2);
 
-    let client = reqwest::Client::new();
-    let response = client
-        .post(format!("{}/chat/completions", base_url))
-        .bearer_auth(api_key)
-        .json(&serde_json::json!({
-            "model": model,
-            "messages": [
-                { "role": "system", "content": system },
-                { "role": "user", "content": prompt }
-            ],
-            "stream": false
-        }))
-        .send()
-        .await
-        .map_err(|e| (StatusCode::BAD_GATEWAY, e.to_string()))?;
+    let client = reqwest::Client::builder()
+        .timeout(StdDuration::from_secs(timeout_secs))
+        .build()
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let endpoint = format!("{}/chat/completions", base_url);
+    let body = serde_json::json!({
+        "model": model,
+        "messages": [
+            { "role": "system", "content": system },
+            { "role": "user", "content": prompt }
+        ],
+        "temperature": temperature,
+        "max_tokens": max_tokens,
+        "stream": false
+    });
 
-    if !response.status().is_success() {
-        let status = response.status();
-        let text = response.text().await.unwrap_or_default();
-        return Err((
-            StatusCode::BAD_GATEWAY,
-            format!("AI upstream {}: {}", status, text),
-        ));
+    let mut last_error = "AI request failed".to_string();
+    for attempt in 0..=retries {
+        throttle_ai_requests().await;
+        let response = client
+            .post(&endpoint)
+            .bearer_auth(&api_key)
+            .json(&body)
+            .send()
+            .await;
+
+        let response = match response {
+            Ok(response) => response,
+            Err(e) => {
+                eprintln!(
+                    "AI request transport error on attempt {}: {}",
+                    attempt + 1,
+                    e
+                );
+                last_error = "AI 服务暂时不可用，请稍后重试。".to_string();
+                if attempt < retries {
+                    tokio::time::sleep(StdDuration::from_millis(600 * (attempt + 1))).await;
+                    continue;
+                }
+                return Err((StatusCode::BAD_GATEWAY, last_error));
+            }
+        };
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let status_code = status.as_u16();
+            let text = response.text().await.unwrap_or_default();
+            eprintln!(
+                "AI upstream error on attempt {}: {} {}",
+                attempt + 1,
+                status,
+                text
+            );
+            last_error = if status_code == 401 || status_code == 403 {
+                "AI 配置无效或没有权限，请检查服务端 API Key。".to_string()
+            } else if status_code == 429 {
+                "AI 请求过于频繁或额度受限，请稍后重试。".to_string()
+            } else {
+                "AI 服务暂时不可用，请稍后重试。".to_string()
+            };
+            if attempt < retries && (status_code == 429 || status_code >= 500) {
+                tokio::time::sleep(StdDuration::from_millis(800 * (attempt + 1))).await;
+                continue;
+            }
+            return Err((StatusCode::BAD_GATEWAY, last_error));
+        }
+
+        let data = response
+            .json::<ChatCompletionResponse>()
+            .await
+            .map_err(|e| {
+                eprintln!("AI response parse error: {}", e);
+                (StatusCode::BAD_GATEWAY, "AI 返回格式无法解析。".to_string())
+            })?;
+        let summary = data
+            .choices
+            .into_iter()
+            .next()
+            .map(|choice| choice.message.content)
+            .filter(|content| !content.trim().is_empty())
+            .ok_or_else(|| (StatusCode::BAD_GATEWAY, "AI response is empty".to_string()))?;
+
+        return Ok((summary, model));
     }
 
-    let data = response
-        .json::<ChatCompletionResponse>()
-        .await
-        .map_err(|e| (StatusCode::BAD_GATEWAY, e.to_string()))?;
-    let summary = data
-        .choices
-        .into_iter()
-        .next()
-        .map(|choice| choice.message.content)
-        .filter(|content| !content.trim().is_empty())
-        .ok_or_else(|| (StatusCode::BAD_GATEWAY, "AI response is empty".to_string()))?;
-
-    Ok((summary, model))
+    Err((StatusCode::BAD_GATEWAY, last_error))
 }
 pub(crate) async fn list_reviews(
     State(db): State<AppState>,
@@ -228,7 +331,7 @@ pub(crate) fn load_monthly_review_source(
     db: &Database,
     from: &str,
     to: &str,
-) -> Result<(String, Vec<String>), (StatusCode, String)> {
+) -> Result<(String, Vec<String>, Vec<String>), (StatusCode, String)> {
     let mut stmt = db
         .conn()
         .prepare(
@@ -248,11 +351,21 @@ pub(crate) fn load_monthly_review_source(
     let mut ids = Vec::new();
     let mut parts = Vec::new();
     let mut seen_periods = BTreeSet::new();
+    let mut covered_dates = BTreeSet::new();
     for row in rows {
         let review = row.map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
         let period_key = format!("{}:{}", review.period_start, review.period_end);
         if !seen_periods.insert(period_key) {
             continue;
+        }
+        let start = parse_date(&review.period_start)?;
+        let end = parse_date(&review.period_end)?;
+        let month_start = parse_date(from)?;
+        let month_end = parse_date(to)?;
+        let mut date = start.max(month_start);
+        while date <= end.min(month_end) {
+            covered_dates.insert(format_date(date));
+            date = date + chrono::Duration::days(1);
         }
         ids.push(review.id.clone());
         parts.push(format!(
@@ -265,14 +378,189 @@ pub(crate) fn load_monthly_review_source(
         ));
     }
 
-    if ids.is_empty() {
-        return Err((
-            StatusCode::BAD_REQUEST,
-            "This month has no confirmed weekly reviews".into(),
+    let mut article_ids = Vec::new();
+    let mut stmt = db
+        .conn()
+        .prepare(
+            "SELECT id, date, title, mood, tags, word_count, content, created_at, updated_at
+             FROM articles
+             WHERE date BETWEEN ?1 AND ?2
+             ORDER BY date ASC",
+        )
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let article_rows = stmt
+        .query_map(params![from, to], |row| {
+            Ok(Article {
+                id: row.get(0)?,
+                date: row.get(1)?,
+                title: row.get(2)?,
+                mood: row.get(3)?,
+                tags: row.get(4)?,
+                word_count: row.get(5)?,
+                content: row.get(6)?,
+                created_at: row.get(7)?,
+                updated_at: row.get(8)?,
+            })
+        })
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    let mut uncovered_articles = Vec::new();
+    for row in article_rows {
+        let article = row.map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        if covered_dates.contains(&article.date) {
+            continue;
+        }
+        article_ids.push(article.id.clone());
+        uncovered_articles.push(format!(
+            "## {}\n标题：{}\n心情：{}\n标签：{}\n字数：{}\n摘要原文：\n{}",
+            article.date,
+            if article.title.trim().is_empty() {
+                "(无标题)"
+            } else {
+                &article.title
+            },
+            if article.mood.trim().is_empty() {
+                "(未填写)"
+            } else {
+                &article.mood
+            },
+            if article.tags.trim().is_empty() {
+                "[]"
+            } else {
+                &article.tags
+            },
+            article.word_count,
+            truncate_chars(&article.content, 900),
         ));
     }
 
-    Ok((truncate_chars(&parts.join("\n\n---\n\n"), 26000), ids))
+    if !uncovered_articles.is_empty() {
+        parts.push(format!(
+            "# 未被已确认周复盘覆盖的每日记录\n{}",
+            uncovered_articles.join("\n\n---\n\n")
+        ));
+    }
+
+    if ids.is_empty() && article_ids.is_empty() {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "This month has no confirmed weekly reviews or articles".into(),
+        ));
+    }
+
+    Ok((
+        truncate_chars(&parts.join("\n\n---\n\n"), 28000),
+        article_ids,
+        ids,
+    ))
+}
+
+fn json_text(value: &Value, key: &str) -> String {
+    value
+        .get(key)
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .trim()
+        .to_string()
+}
+
+fn json_string_vec(value: &Value, key: &str) -> Vec<String> {
+    value
+        .get(key)
+        .and_then(|v| v.as_array())
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|item| {
+                    if let Some(s) = item.as_str() {
+                        Some(s.trim().to_string())
+                    } else if item.is_object() {
+                        item.get("text")
+                            .and_then(|v| v.as_str())
+                            .or_else(|| item.get("content").and_then(|v| v.as_str()))
+                            .map(|text| {
+                                let dates = item
+                                    .get("source_dates")
+                                    .and_then(|v| v.as_array())
+                                    .map(|arr| {
+                                        arr.iter()
+                                            .filter_map(|d| d.as_str())
+                                            .collect::<Vec<_>>()
+                                            .join("、")
+                                    })
+                                    .unwrap_or_default();
+                                if dates.is_empty() {
+                                    text.trim().to_string()
+                                } else {
+                                    format!("{}（{}）", text.trim(), dates)
+                                }
+                            })
+                    } else {
+                        None
+                    }
+                })
+                .filter(|s| !s.is_empty())
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn markdown_list(items: Vec<String>, empty: &str) -> String {
+    if items.is_empty() {
+        empty.to_string()
+    } else {
+        items
+            .into_iter()
+            .map(|item| format!("- {}", item))
+            .collect::<Vec<_>>()
+            .join("\n\n")
+    }
+}
+
+fn render_review_response(kind: &str, title: &str, raw: &str) -> String {
+    let cleaned = raw
+        .trim()
+        .trim_start_matches("```json")
+        .trim_start_matches("```")
+        .trim_end_matches("```")
+        .trim();
+    let Ok(value) = serde_json::from_str::<Value>(cleaned) else {
+        return raw.trim().to_string();
+    };
+
+    if kind == "weekly" {
+        format!(
+            "## {}\n\n### 本周材料概览\n\n{}\n\n### 关键事实索引\n\n{}\n\n### 主题与模式\n\n{}\n\n### 可复用沉淀\n\n{}",
+            title,
+            json_text(&value, "overview").if_empty("本周材料不足，无法形成稳定概览。"),
+            markdown_list(json_string_vec(&value, "facts"), "本周没有足够明确的事实材料。"),
+            markdown_list(json_string_vec(&value, "themes"), "本周没有形成明确主题或模式。"),
+            markdown_list(json_string_vec(&value, "distillations"), "本周没有可沉淀为文档的稳定结论。"),
+        )
+    } else {
+        format!(
+            "## {}\n\n### 本月材料概览\n\n{}\n\n### 关键事实索引\n\n{}\n\n### 反复出现的主题\n\n{}\n\n### 可复用沉淀\n\n{}",
+            title,
+            json_text(&value, "overview").if_empty("本月材料不足，无法形成稳定概览。"),
+            markdown_list(json_string_vec(&value, "facts"), "本月没有足够明确的事实材料。"),
+            markdown_list(json_string_vec(&value, "themes"), "本月没有形成明确的反复主题。"),
+            markdown_list(json_string_vec(&value, "distillations"), "本月没有可沉淀为文档的稳定结论。"),
+        )
+    }
+}
+
+trait EmptyDefault {
+    fn if_empty(self, default: &str) -> String;
+}
+
+impl EmptyDefault for String {
+    fn if_empty(self, default: &str) -> String {
+        if self.trim().is_empty() {
+            default.to_string()
+        } else {
+            self
+        }
+    }
 }
 pub(crate) async fn generate_review(
     State(db): State<AppState>,
@@ -304,8 +592,8 @@ pub(crate) async fn generate_review(
             let (source, ids) = load_weekly_review_source(&db, &from, &to)?;
             (source, ids, Vec::new(), version)
         } else {
-            let (source, ids) = load_monthly_review_source(&db, &from, &to)?;
-            (source, Vec::new(), ids, version)
+            let (source, article_ids, review_ids) = load_monthly_review_source(&db, &from, &to)?;
+            (source, article_ids, review_ids, version)
         }
     };
 
@@ -316,25 +604,17 @@ pub(crate) async fn generate_review(
     };
     let prompt = if kind == "weekly" {
         format!(
-            r#"下面是这一周的每日记录。请像一位了解我的搭档一样，帮我做一个深度周复盘。不要编造，只说原文里真实存在的东西。专注回顾和沉淀，不要提未来计划。
+            r#"下面是这一周的每日记录。请把它整理成一份偏文档化的周度沉淀。不要编造，只说原文里真实存在的东西。目标是长期可复用、可回看，而不是提出未来计划或心理推断。
 
-排版要求：每个段落不超过3行，段落之间空一行。列表项之间也空行。标题前后各空一行。整体清爽透气。
+只输出 JSON，不要输出 Markdown，不要包裹代码块。字段包括：
+- overview: 字符串，用 2-4 句话概括本周材料的稳定主题，只能基于原文。
+- facts: 数组，每项包含 text 和 source_dates；只列原文明确发生过、做过、完成过、观察到的事实。
+- themes: 数组，每项包含 text 和 source_dates；只写多处材料支持的主题或模式，单次出现不要强行归纳。
+- distillations: 数组，每项包含 text 和 source_dates；只写能沉淀成文档的稳定结论、方法、原则或判断依据。没有明确内容就留空数组。
+
+禁止输出“今后问题”“还没解决的问题”“建议”“下一步计划”，除非原文明确把这些内容写成文档材料。
 
 ## {}
-### 这周实际发生了什么
-不用概括每件事。挑出 3-5 件真正重要的事，每件用一两句话说清楚。如果是连续多天推进的事，标注跨了几天。
-
-### 出现了什么模式
-回顾这周的内容，有没有某个问题反复出现、某种情绪在固定场景下出现、某个习惯在坚持或中断。只写原文里有的，没有就写"本周没有发现明显模式"。
-
-### 有什么变化
-和之前相比有没有不一样的地方。没有明显变化就写"本周较为平稳"。
-
-### 沉淀下来的经验
-从这周的具体经历里能学到什么。不要写大道理，要写成自己以后能用上的话。每条后面括号标注来自哪天。
-
-### 还没搞清楚的事
-有什么事情这周没完全明白的。记下来，以后遇到类似情况时可以对照。
 
 本周原文：
 {}"#,
@@ -342,36 +622,29 @@ pub(crate) async fn generate_review(
         )
     } else {
         format!(
-            r#"下面是过去一个月的周复盘。请像一位了解我的搭档一样，帮我做一个月度回顾。不要编造，只说原文里真实存在的东西。专注回顾和沉淀。
+            r#"下面是过去一个月的周复盘，以及可能未被周复盘覆盖的每日记录摘要。请把它整理成一份偏文档化的月度沉淀。不要编造，只说材料里真实存在的东西。目标是长期可复用、可回看，而不是提出未来计划或心理推断。
 
-排版要求：每个段落不超过3行，段落之间空一行。标题前后各空一行。
+只输出 JSON，不要输出 Markdown，不要包裹代码块。字段包括：
+- overview: 字符串，用 2-4 句话概括本月材料的稳定主题，只能基于材料。
+- facts: 数组，每项包含 text 和 source_dates；只列材料明确支持的重要事实。
+- themes: 数组，每项包含 text 和 source_dates；只写跨周或多天反复出现的主题，证据不足就留空数组。
+- distillations: 数组，每项包含 text 和 source_dates；只写能沉淀成文档的稳定结论、方法、原则或判断依据。没有明确内容就留空数组。
+
+禁止输出“今后问题”“还没解决的问题”“建议”“下一步计划”，除非材料明确把这些内容写成文档材料。
 
 ## {}
-### 这个月的主线
-一句话说清楚这个月到底在忙什么。不要列事项，要抓住核心。
 
-### 真正重要的进展
-挑 3-5 件确实值得记下来的事。每件注明来自哪周，方便回头查。
-
-### 反复出现的麻烦
-哪些问题在多周复盘里都提到了。如果同一个问题出现了 3 次以上，重点标注。
-
-### 试过有用的方法
-这个月有什么做法确实管用了。哪天开始的，效果如何。
-
-### 还没看清的事
-有些事可能重要但还看不清。记下来，以后回过头看。
-
-已确认周复盘：
+材料：
 {}"#,
             title, source
         )
     };
-    let (content, model) = call_ai(
+    let (raw_content, model) = call_ai(
         prompt,
-        "你是一个善于发现规律、说人话的中文复盘搭档。只基于给定材料，区分事实和猜测，不编造。语气像朋友聊天，不要学术腔。",
+        "你是一个严谨的中文复盘信息抽取助手。只基于给定材料，区分事实和猜测，不编造。必须输出合法 JSON。",
     )
     .await?;
+    let content = render_review_response(kind, &title, &raw_content);
 
     let id = Uuid::new_v4().to_string();
     let now_str = now();
@@ -473,18 +746,19 @@ pub(crate) async fn ai_summary(
         return Err((StatusCode::BAD_REQUEST, "Content is required".into()));
     }
 
-    let prompt = r#"基于以下记录生成简洁日总结，只提炼原文已有信息，不做推断。
+    let prompt = r#"基于以下记录整理一份简洁的当日沉淀，只提炼原文已有信息，不做推断。
 
 要求：
-1. 纯文本输出，不用 Markdown。
-2. 3-5 句话，简洁克制。
-3. 只提炼原文明确提到的事实，不补充不推测。
-4. 如果某方面原文未涉及，直接跳过不写。
+1. 使用 Markdown。
+2. 简洁克制，避免空泛总结。
+3. 只提炼原文明确提到的事实、方法、判断依据或可复用表述，不补充不推测。
+4. 如果某方面原文未涉及，直接跳过不写，不要编造“问题”“计划”“建议”。
 
 结构：
-· 今天实际做了什么
-· 有什么进展或结果
-· 遇到的问题或阻碍
+## 当日沉淀
+### 事实记录
+### 可复用沉淀
+### 可引用表述
 
 原文：
 {content}"#
@@ -492,7 +766,7 @@ pub(crate) async fn ai_summary(
 
     let (summary, _) = call_ai(
         prompt,
-        "你是一个严谨、克制的中文日总结助手。只输出简洁纯文本，不使用 Markdown。",
+        "你是一个严谨、克制的中文文档整理助手。只基于原文整理，不编造，不输出未来计划或建议，除非原文明确写出。",
     )
     .await?;
 

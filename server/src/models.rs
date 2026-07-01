@@ -116,6 +116,22 @@ pub(crate) struct Review {
     pub(crate) updated_at: String,
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub(crate) struct KnowledgeCard {
+    pub(crate) id: String,
+    pub(crate) card_type: String,
+    pub(crate) status: String,
+    pub(crate) title: String,
+    pub(crate) content: String,
+    pub(crate) tags: String,
+    pub(crate) source_article_id: String,
+    pub(crate) source_review_id: String,
+    pub(crate) source_date: String,
+    pub(crate) source_excerpt: String,
+    pub(crate) created_at: String,
+    pub(crate) updated_at: String,
+}
+
 #[derive(Debug, Serialize)]
 pub(crate) struct BackupMeta {
     pub(crate) name: String,
@@ -178,6 +194,48 @@ pub(crate) struct ReviewListQuery {
     pub(crate) kind: Option<String>,
     pub(crate) period_start: Option<String>,
     pub(crate) period_end: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub(crate) struct KnowledgeListQuery {
+    pub(crate) card_type: Option<String>,
+    pub(crate) status: Option<String>,
+    pub(crate) q: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub(crate) struct CreateKnowledgeCardPayload {
+    pub(crate) card_type: String,
+    pub(crate) status: Option<String>,
+    pub(crate) title: String,
+    pub(crate) content: String,
+    pub(crate) tags: Option<String>,
+    pub(crate) source_article_id: Option<String>,
+    pub(crate) source_review_id: Option<String>,
+    pub(crate) source_date: Option<String>,
+    pub(crate) source_excerpt: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub(crate) struct UpdateKnowledgeCardPayload {
+    pub(crate) card_type: Option<String>,
+    pub(crate) status: Option<String>,
+    pub(crate) title: Option<String>,
+    pub(crate) content: Option<String>,
+    pub(crate) tags: Option<String>,
+    pub(crate) source_article_id: Option<String>,
+    pub(crate) source_review_id: Option<String>,
+    pub(crate) source_date: Option<String>,
+    pub(crate) source_excerpt: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub(crate) struct ExtractKnowledgeCardsPayload {
+    pub(crate) content: String,
+    pub(crate) source_article_id: Option<String>,
+    pub(crate) source_review_id: Option<String>,
+    pub(crate) source_date: Option<String>,
+    pub(crate) max_cards: Option<usize>,
 }
 
 #[derive(Debug, Deserialize)]
