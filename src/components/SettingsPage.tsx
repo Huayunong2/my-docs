@@ -21,7 +21,7 @@ export default function SettingsPage() {
       className="h-full flex flex-col px-3 sm:px-4 md:px-8 py-4 md:py-6 overflow-y-auto"
     >
       <h2 className="text-xl font-bold text-gray-800 dark:text-gray-100 mb-4 md:mb-6">设置</h2>
-      <div className="grid grid-cols-4 gap-1 mb-5 md:mb-6 bg-gray-100 dark:bg-white/5 rounded-xl p-1 w-full sm:w-fit sm:inline-grid">
+      <div className="mb-5 flex w-full gap-1 overflow-x-auto rounded-xl bg-gray-100 p-1 dark:bg-white/5 md:mb-6 sm:w-fit">
         {(Object.keys(labels) as Tab[]).map((id) => (
           (() => {
             const Icon = icons[id];
@@ -29,7 +29,7 @@ export default function SettingsPage() {
               <button
                 key={id}
                 onClick={() => setTab(id)}
-                className={`inline-flex h-10 items-center justify-center gap-1.5 rounded-lg px-3 text-sm font-medium transition-all duration-200 ${tab === id ? "bg-white dark:bg-white/10 text-gray-800 dark:text-gray-100 shadow-sm" : "text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300"}`}
+                className={`inline-flex h-10 min-w-[74px] shrink-0 items-center justify-center gap-1.5 whitespace-nowrap rounded-lg px-3 text-sm font-medium transition-all duration-200 ${tab === id ? "bg-white dark:bg-white/10 text-gray-800 dark:text-gray-100 shadow-sm" : "text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300"}`}
               >
                 <Icon size={15} />
                 {labels[id]}

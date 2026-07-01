@@ -156,19 +156,21 @@ pub(crate) async fn extract_cards(
     if source.is_empty() {
         return Err((StatusCode::BAD_REQUEST, "Content is required".into()));
     }
-    let max_cards = payload.max_cards.unwrap_or(6).clamp(1, 12);
+    let max_cards = payload.max_cards.unwrap_or(8).clamp(1, 16);
     let prompt = format!(
-        r#"请只从下面的真实文档中抽取可长期复用的知识卡片草稿。
+        r#"请只从下面的真实文档中抽取适合复习的个人知识卡片草稿。
 
 硬性规则：
 - 只允许使用原文明确出现或可直接归纳的内容，不要补充背景、建议、计划、未来问题或心理推测。
 - 如果原文只是流水账、情绪表达或证据不足，返回空数组。
-- 每张卡片必须能回到原文找到依据。
-- 内容要像个人知识库条目：稳定、可复用、少废话。
-- title 不超过 30 个中文字符，content 使用 1-3 句中文。
-- source_excerpt 必须是原文中能支撑该卡片的短片段；如果没有明确片段，不要生成该卡片。
+- 每张卡片必须能回到原文找到依据，并且读者只看卡片也能复习。
+- 内容要像个人知识库条目：稳定、具体、可复用、可回看，不要空泛。
+- title 不超过 30 个中文字符，content 使用 2-5 句中文，说明“是什么 / 为什么重要 / 怎么用 / 适用边界”中的至少两项。
+- source_excerpt 必须是原文中能支撑该卡片的原文短片段；如果没有明确片段，不要生成该卡片。
 - card_type 只能是：fact, method, concept, decision, case, quote, principle。
-- tags 只给 0-4 个短标签。
+- 优先抽取：关键概念、方法步骤、设计原则、调试经验、项目事实、决策依据、可引用表述。
+- 不要抽取：普通情绪、泛泛计划、无依据评价、只对当天有意义的流水账。
+- tags 只给 1-4 个短标签。
 - 只输出 JSON，不要输出 Markdown 或解释。
 
 JSON 格式：
@@ -179,7 +181,7 @@ JSON 格式：
 真实文档：
 {}"#,
         max_cards,
-        truncate_chars(source, 18000)
+        truncate_chars(source, 40000)
     );
     let (raw, _) = call_ai(
         prompt,

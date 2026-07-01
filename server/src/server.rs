@@ -26,7 +26,7 @@ async fn health_check() -> Json<serde_json::Value> {
     let ai_model = std::env::var("DAILY_SUMMARY_AI_MODEL").unwrap_or_else(|_| "gpt-4o-mini".to_string());
     let ai_base_url = std::env::var("DAILY_SUMMARY_AI_BASE_URL").unwrap_or_else(|_| "https://api.openai.com/v1".to_string());
     let ai_temperature = std::env::var("DAILY_SUMMARY_AI_TEMPERATURE").unwrap_or_else(|_| "0.2".to_string());
-    let ai_max_tokens = std::env::var("DAILY_SUMMARY_AI_MAX_TOKENS").unwrap_or_else(|_| "1800".to_string());
+    let ai_max_tokens = std::env::var("DAILY_SUMMARY_AI_MAX_TOKENS").unwrap_or_else(|_| "unlimited".to_string());
     let ai_timeout_secs = std::env::var("DAILY_SUMMARY_AI_TIMEOUT_SECS").unwrap_or_else(|_| "45".to_string());
     let ai_retries = std::env::var("DAILY_SUMMARY_AI_RETRIES").unwrap_or_else(|_| "2".to_string());
     let ai_min_interval_ms = std::env::var("DAILY_SUMMARY_AI_MIN_INTERVAL_MS").unwrap_or_else(|_| "1200".to_string());

@@ -80,7 +80,7 @@ pub(crate) async fn call_ai(
     let model =
         std::env::var("DAILY_SUMMARY_AI_MODEL").unwrap_or_else(|_| "gpt-4o-mini".to_string());
     let temperature = env_f32("DAILY_SUMMARY_AI_TEMPERATURE", 0.2);
-    let max_tokens = env_u64("DAILY_SUMMARY_AI_MAX_TOKENS", 1800);
+    let max_tokens = env_u64("DAILY_SUMMARY_AI_MAX_TOKENS", 0);
     let timeout_secs = env_u64("DAILY_SUMMARY_AI_TIMEOUT_SECS", 45);
     let retries = env_u64("DAILY_SUMMARY_AI_RETRIES", 2);
 
@@ -89,16 +89,18 @@ pub(crate) async fn call_ai(
         .build()
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     let endpoint = format!("{}/chat/completions", base_url);
-    let body = serde_json::json!({
+    let mut body = serde_json::json!({
         "model": model,
         "messages": [
             { "role": "system", "content": system },
             { "role": "user", "content": prompt }
         ],
         "temperature": temperature,
-        "max_tokens": max_tokens,
         "stream": false
     });
+    if max_tokens > 0 {
+        body["max_tokens"] = serde_json::json!(max_tokens);
+    }
 
     let mut last_error = "AI request failed".to_string();
     for attempt in 0..=retries {
@@ -163,8 +165,16 @@ pub(crate) async fn call_ai(
             .into_iter()
             .next()
             .map(|choice| choice.message.content)
-            .filter(|content| !content.trim().is_empty())
-            .ok_or_else(|| (StatusCode::BAD_GATEWAY, "AI response is empty".to_string()))?;
+            .unwrap_or_default();
+        if summary.trim().is_empty() {
+            eprintln!("AI response empty on attempt {}", attempt + 1);
+            last_error = "AI 返回了空内容，请重试；如果反复出现，请检查模型是否支持当前接口。".to_string();
+            if attempt < retries {
+                tokio::time::sleep(StdDuration::from_millis(800 * (attempt + 1))).await;
+                continue;
+            }
+            return Err((StatusCode::BAD_GATEWAY, last_error));
+        }
 
         return Ok((summary, model));
     }
@@ -314,7 +324,7 @@ pub(crate) fn load_weekly_review_source(
                 &article.mood
             },
             article.word_count,
-            truncate_chars(&article.content, 3500),
+            truncate_chars(&article.content, 8000),
         ));
     }
 
@@ -325,7 +335,7 @@ pub(crate) fn load_weekly_review_source(
         ));
     }
 
-    Ok((truncate_chars(&parts.join("\n\n---\n\n"), 26000), ids))
+    Ok((truncate_chars(&parts.join("\n\n---\n\n"), 80000), ids))
 }
 pub(crate) fn load_monthly_review_source(
     db: &Database,
@@ -374,7 +384,7 @@ pub(crate) fn load_monthly_review_source(
             review.period_end,
             review.version,
             review.title,
-            truncate_chars(&review.content, 6000),
+            truncate_chars(&review.content, 12000),
         ));
     }
 
@@ -430,7 +440,7 @@ pub(crate) fn load_monthly_review_source(
                 &article.tags
             },
             article.word_count,
-            truncate_chars(&article.content, 900),
+            truncate_chars(&article.content, 2500),
         ));
     }
 
@@ -449,7 +459,7 @@ pub(crate) fn load_monthly_review_source(
     }
 
     Ok((
-        truncate_chars(&parts.join("\n\n---\n\n"), 28000),
+        truncate_chars(&parts.join("\n\n---\n\n"), 90000),
         article_ids,
         ids,
     ))
@@ -530,21 +540,25 @@ fn render_review_response(kind: &str, title: &str, raw: &str) -> String {
 
     if kind == "weekly" {
         format!(
-            "## {}\n\n### 本周材料概览\n\n{}\n\n### 关键事实索引\n\n{}\n\n### 主题与模式\n\n{}\n\n### 可复用沉淀\n\n{}",
+            "## {}\n\n### 本周材料概览\n\n{}\n\n### 时间线与关键事实\n\n{}\n\n### 概念、方法与工具\n\n{}\n\n### 主题与模式\n\n{}\n\n### 可复用沉淀\n\n{}\n\n### 复习要点\n\n{}",
             title,
             json_text(&value, "overview").if_empty("本周材料不足，无法形成稳定概览。"),
             markdown_list(json_string_vec(&value, "facts"), "本周没有足够明确的事实材料。"),
+            markdown_list(json_string_vec(&value, "study_notes"), "本周没有明确的概念、方法或工具沉淀。"),
             markdown_list(json_string_vec(&value, "themes"), "本周没有形成明确主题或模式。"),
             markdown_list(json_string_vec(&value, "distillations"), "本周没有可沉淀为文档的稳定结论。"),
+            markdown_list(json_string_vec(&value, "review_points"), "本周没有形成可复习的稳定要点。"),
         )
     } else {
         format!(
-            "## {}\n\n### 本月材料概览\n\n{}\n\n### 关键事实索引\n\n{}\n\n### 反复出现的主题\n\n{}\n\n### 可复用沉淀\n\n{}",
+            "## {}\n\n### 本月材料概览\n\n{}\n\n### 时间线与关键事实\n\n{}\n\n### 概念、方法与工具\n\n{}\n\n### 反复出现的主题\n\n{}\n\n### 可复用沉淀\n\n{}\n\n### 复习要点\n\n{}",
             title,
             json_text(&value, "overview").if_empty("本月材料不足，无法形成稳定概览。"),
             markdown_list(json_string_vec(&value, "facts"), "本月没有足够明确的事实材料。"),
+            markdown_list(json_string_vec(&value, "study_notes"), "本月没有明确的概念、方法或工具沉淀。"),
             markdown_list(json_string_vec(&value, "themes"), "本月没有形成明确的反复主题。"),
             markdown_list(json_string_vec(&value, "distillations"), "本月没有可沉淀为文档的稳定结论。"),
+            markdown_list(json_string_vec(&value, "review_points"), "本月没有形成可复习的稳定要点。"),
         )
     }
 }
@@ -604,15 +618,18 @@ pub(crate) async fn generate_review(
     };
     let prompt = if kind == "weekly" {
         format!(
-            r#"下面是这一周的每日记录。请把它整理成一份偏文档化的周度沉淀。不要编造，只说原文里真实存在的东西。目标是长期可复用、可回看，而不是提出未来计划或心理推断。
+            r#"下面是这一周的每日记录。请把它整理成一份适合复习的周度沉淀文档。不要编造，只说原文里真实存在的东西。目标是以后回看时能迅速恢复上下文、复习技术点/方法/判断依据，而不是生成空泛总结。
 
 只输出 JSON，不要输出 Markdown，不要包裹代码块。字段包括：
-- overview: 字符串，用 2-4 句话概括本周材料的稳定主题，只能基于原文。
-- facts: 数组，每项包含 text 和 source_dates；只列原文明确发生过、做过、完成过、观察到的事实。
+- overview: 字符串，用 4-8 句话概括本周真实材料，保留具体项目、模块、问题和学习对象。
+- facts: 数组，每项包含 text 和 source_dates；按时间线列出原文明确发生过、做过、完成过、观察到的事实，保留关键名词。
+- study_notes: 数组，每项包含 text 和 source_dates；整理本周值得复习的概念、工具、代码结构、设计方法、调试方法或业务规则。必须让人看得懂，不要只写标题。
 - themes: 数组，每项包含 text 和 source_dates；只写多处材料支持的主题或模式，单次出现不要强行归纳。
-- distillations: 数组，每项包含 text 和 source_dates；只写能沉淀成文档的稳定结论、方法、原则或判断依据。没有明确内容就留空数组。
+- distillations: 数组，每项包含 text 和 source_dates；写能沉淀成文档的稳定结论、方法、原则或判断依据。每项要具体说明“是什么/为什么有用/适用边界”中的至少两点。
+- review_points: 数组，每项包含 text 和 source_dates；写成复习时可直接看的要点，不要写成提问，不要写未来计划。
 
-禁止输出“今后问题”“还没解决的问题”“建议”“下一步计划”，除非原文明确把这些内容写成文档材料。
+禁止输出“今后问题”“还没解决的问题”“建议”“下一步计划”、心理推断或鸡汤，除非原文明确把这些内容写成文档材料。
+内容不要过短。材料足够时，每个数组尽量输出 4-10 项；材料不足时才留空数组。
 
 ## {}
 
@@ -622,15 +639,18 @@ pub(crate) async fn generate_review(
         )
     } else {
         format!(
-            r#"下面是过去一个月的周复盘，以及可能未被周复盘覆盖的每日记录摘要。请把它整理成一份偏文档化的月度沉淀。不要编造，只说材料里真实存在的东西。目标是长期可复用、可回看，而不是提出未来计划或心理推断。
+            r#"下面是过去一个月的周复盘，以及可能未被周复盘覆盖的每日记录摘要。请把它整理成一份适合复习的月度沉淀文档。不要编造，只说材料里真实存在的东西。目标是以后回看时能恢复本月学习/项目/决策脉络，而不是生成空泛总结。
 
 只输出 JSON，不要输出 Markdown，不要包裹代码块。字段包括：
-- overview: 字符串，用 2-4 句话概括本月材料的稳定主题，只能基于材料。
-- facts: 数组，每项包含 text 和 source_dates；只列材料明确支持的重要事实。
+- overview: 字符串，用 5-10 句话概括本月真实材料，保留具体项目、模块、学习对象、阶段变化和反复出现的问题。
+- facts: 数组，每项包含 text 和 source_dates；列出材料明确支持的重要事实，尽量按时间或主题组织。
+- study_notes: 数组，每项包含 text 和 source_dates；整理本月值得复习的概念、工具、代码结构、设计方法、调试方法或业务规则。必须让人看得懂，不要只写标题。
 - themes: 数组，每项包含 text 和 source_dates；只写跨周或多天反复出现的主题，证据不足就留空数组。
-- distillations: 数组，每项包含 text 和 source_dates；只写能沉淀成文档的稳定结论、方法、原则或判断依据。没有明确内容就留空数组。
+- distillations: 数组，每项包含 text 和 source_dates；写能沉淀成文档的稳定结论、方法、原则或判断依据。每项要具体说明“是什么/为什么有用/适用边界”中的至少两点。
+- review_points: 数组，每项包含 text 和 source_dates；写成复习时可直接看的要点，不要写成提问，不要写未来计划。
 
-禁止输出“今后问题”“还没解决的问题”“建议”“下一步计划”，除非材料明确把这些内容写成文档材料。
+禁止输出“今后问题”“还没解决的问题”“建议”“下一步计划”、心理推断或鸡汤，除非材料明确把这些内容写成文档材料。
+内容不要过短。材料足够时，每个数组尽量输出 5-12 项；材料不足时才留空数组。
 
 ## {}
 

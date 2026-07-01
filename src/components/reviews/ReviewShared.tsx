@@ -1,6 +1,7 @@
 import { useState } from "react";
-import { X } from "lucide-react";
+import { BookMarked, X } from "lucide-react";
 import type { Review } from "../../lib/api";
+import { normalizeReviewContent } from "../../lib/reviewContent";
 import MarkdownContent from "../MarkdownContent";
 
 export function ReviewStatusPill({ status }: { status: Review["status"] }) {
@@ -28,6 +29,8 @@ export function ReviewViewerModal({
   onSave,
   onConfirm,
   onDelete,
+  onExtractKnowledge,
+  extractingKnowledge = false,
   onClose,
 }: {
   review: Review;
@@ -39,12 +42,15 @@ export function ReviewViewerModal({
   onSave: () => void;
   onConfirm: () => void;
   onDelete: () => void;
+  onExtractKnowledge?: () => void;
+  extractingKnowledge?: boolean;
   onClose: () => void;
 }) {
   const [editing, setEditing] = useState(false);
   const sourceCount = review.kind === "weekly"
     ? countJsonItems(review.source_article_ids)
     : countJsonItems(review.source_review_ids);
+  const displayContent = normalizeReviewContent(review.kind, title, content);
   const metaItems = [
     { label: "类型", value: review.kind === "weekly" ? "周复盘" : "月复盘" },
     { label: "周期", value: `${review.period_start} 至 ${review.period_end}` },
@@ -113,7 +119,7 @@ export function ReviewViewerModal({
           </div>
         ) : (
           <div className="flex-1 overflow-y-auto px-5 py-5">
-            <MarkdownContent content={content} />
+            <MarkdownContent content={displayContent} />
           </div>
         )}
 
@@ -139,6 +145,13 @@ export function ReviewViewerModal({
               </>
             ) : (
               <>
+                {onExtractKnowledge && (
+                  <button onClick={onExtractKnowledge} disabled={saving || extractingKnowledge}
+                    className="ui-button-secondary">
+                    <BookMarked size={14} />
+                    {extractingKnowledge ? "提取中" : "提取知识"}
+                  </button>
+                )}
                 <button onClick={() => setEditing(true)}
                   className="ui-button-secondary">编辑</button>
                 {review.status !== "confirmed" && (
