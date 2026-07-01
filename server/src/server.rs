@@ -6,6 +6,7 @@ use crate::day_exemptions;
 use crate::db::Database;
 use crate::exports;
 use crate::helpers::{backups_dir, now};
+use crate::knowledge;
 use crate::middleware::{add_security_headers, configured_cors, require_api_token};
 use crate::models::*;
 use crate::stats;
@@ -22,6 +23,13 @@ const BUILD_TIME: &str = env!("BUILD_TIMESTAMP");
 
 async fn health_check() -> Json<serde_json::Value> {
     let ai = std::env::var("DAILY_SUMMARY_AI_API_KEY").map(|k| !k.is_empty()).unwrap_or(false);
+    let ai_model = std::env::var("DAILY_SUMMARY_AI_MODEL").unwrap_or_else(|_| "gpt-4o-mini".to_string());
+    let ai_base_url = std::env::var("DAILY_SUMMARY_AI_BASE_URL").unwrap_or_else(|_| "https://api.openai.com/v1".to_string());
+    let ai_temperature = std::env::var("DAILY_SUMMARY_AI_TEMPERATURE").unwrap_or_else(|_| "0.2".to_string());
+    let ai_max_tokens = std::env::var("DAILY_SUMMARY_AI_MAX_TOKENS").unwrap_or_else(|_| "1800".to_string());
+    let ai_timeout_secs = std::env::var("DAILY_SUMMARY_AI_TIMEOUT_SECS").unwrap_or_else(|_| "45".to_string());
+    let ai_retries = std::env::var("DAILY_SUMMARY_AI_RETRIES").unwrap_or_else(|_| "2".to_string());
+    let ai_min_interval_ms = std::env::var("DAILY_SUMMARY_AI_MIN_INTERVAL_MS").unwrap_or_else(|_| "1200".to_string());
     let db_path = Database::db_path();
     let db_exists = db_path.exists();
     let db_size = db_exists.then(|| std::fs::metadata(&db_path).ok().map(|m| m.len())).flatten().unwrap_or(0);
@@ -36,7 +44,17 @@ async fn health_check() -> Json<serde_json::Value> {
     Json(serde_json::json!({
         "version": env!("CARGO_PKG_VERSION"),
         "build": BUILD_TIME,
-        "features": { "ai": ai, "reviews": true, "exports": true, "backups": true },
+        "features": { "ai": ai, "reviews": true, "knowledge": true, "exports": true, "backups": true },
+        "ai_config": {
+            "configured": ai,
+            "model": ai_model,
+            "base_url": ai_base_url,
+            "temperature": ai_temperature,
+            "max_tokens": ai_max_tokens,
+            "timeout_secs": ai_timeout_secs,
+            "retries": ai_retries,
+            "min_interval_ms": ai_min_interval_ms
+        },
         "db_path": db_path.to_string_lossy(),
         "db_size": db_size,
         "last_backup": last_backup_time
@@ -75,7 +93,22 @@ async fn export_full(
         }).map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
         for row in rows { reviews_json.push(row.map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?); }
     }
-    Ok(Json(serde_json::json!({ "version": 1, "articles": articles_json, "reviews": reviews_json })))
+    let mut knowledge_cards_json = Vec::new();
+    {
+        let mut stmt = db.conn().prepare("SELECT id, card_type, status, title, content, tags, source_article_id, source_review_id, source_date, source_excerpt, created_at, updated_at FROM knowledge_cards ORDER BY updated_at ASC")
+            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        let rows = stmt.query_map([], |row| {
+            Ok(serde_json::json!({
+                "id": row.get::<_, String>(0)?, "card_type": row.get::<_, String>(1)?, "status": row.get::<_, String>(2)?,
+                "title": row.get::<_, String>(3)?, "content": row.get::<_, String>(4)?, "tags": row.get::<_, String>(5)?,
+                "source_article_id": row.get::<_, String>(6)?, "source_review_id": row.get::<_, String>(7)?,
+                "source_date": row.get::<_, String>(8)?, "source_excerpt": row.get::<_, String>(9)?,
+                "created_at": row.get::<_, String>(10)?, "updated_at": row.get::<_, String>(11)?,
+            }))
+        }).map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        for row in rows { knowledge_cards_json.push(row.map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?); }
+    }
+    Ok(Json(serde_json::json!({ "version": 2, "articles": articles_json, "reviews": reviews_json, "knowledge_cards": knowledge_cards_json })))
 }
 
 async fn import_full(
@@ -130,7 +163,31 @@ async fn import_full(
         }
     }
 
-    Ok(Json(serde_json::json!({ "imported_articles": imported_articles, "imported_reviews": imported_reviews })))
+    let mut imported_knowledge_cards = 0u32;
+    if let Some(cards) = payload.get("knowledge_cards").and_then(|r| r.as_array()) {
+        for item in cards {
+            let id = item.get("id").and_then(|v| v.as_str()).unwrap_or("");
+            if id.is_empty() { continue; }
+            let card_type = item.get("card_type").and_then(|v| v.as_str()).unwrap_or("fact");
+            let status = item.get("status").and_then(|v| v.as_str()).unwrap_or("draft");
+            let title = item.get("title").and_then(|v| v.as_str()).unwrap_or("");
+            let content = item.get("content").and_then(|v| v.as_str()).unwrap_or("");
+            let tags = item.get("tags").and_then(|v| v.as_str()).unwrap_or("[]");
+            let source_article_id = item.get("source_article_id").and_then(|v| v.as_str()).unwrap_or("");
+            let source_review_id = item.get("source_review_id").and_then(|v| v.as_str()).unwrap_or("");
+            let source_date = item.get("source_date").and_then(|v| v.as_str()).unwrap_or("");
+            let source_excerpt = item.get("source_excerpt").and_then(|v| v.as_str()).unwrap_or("");
+            let created_at = item.get("created_at").and_then(|v| v.as_str()).unwrap_or("");
+            let updated_at = item.get("updated_at").and_then(|v| v.as_str()).unwrap_or("");
+            db.conn().execute(
+                "INSERT OR REPLACE INTO knowledge_cards (id, card_type, status, title, content, tags, source_article_id, source_review_id, source_date, source_excerpt, created_at, updated_at) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12)",
+                params![id, card_type, status, title, content, tags, source_article_id, source_review_id, source_date, source_excerpt, created_at, updated_at],
+            ).map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+            imported_knowledge_cards += 1;
+        }
+    }
+
+    Ok(Json(serde_json::json!({ "imported_articles": imported_articles, "imported_reviews": imported_reviews, "imported_knowledge_cards": imported_knowledge_cards })))
 }
 
 async fn import_articles(
@@ -180,6 +237,9 @@ fn build_router(db: Database) -> Router {
         .route("/reviews", axum::routing::get(ai::list_reviews))
         .route("/reviews/generate", axum::routing::post(ai::generate_review))
         .route("/reviews/:id", axum::routing::get(ai::get_review).put(ai::update_review).delete(ai::delete_review))
+        .route("/knowledge-cards", axum::routing::get(knowledge::list_cards).post(knowledge::create_card))
+        .route("/knowledge-cards/extract", axum::routing::post(knowledge::extract_cards))
+        .route("/knowledge-cards/:id", axum::routing::get(knowledge::get_card).put(knowledge::update_card).delete(knowledge::delete_card))
         .route("/ai/summary", axum::routing::post(ai::ai_summary))
         .route("/articles/import", axum::routing::post(import_articles))
         .route("/articles/import-full", axum::routing::post(import_full))

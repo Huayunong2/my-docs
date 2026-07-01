@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { MouseEvent } from "react";
 import { motion } from "framer-motion";
+import { BarChart3, BookOpenText, CalendarRange, LineChart, LoaderCircle, Sparkles } from "lucide-react";
 import * as api from "../lib/api";
 import type { MonthDayStats, Review, ReviewKind, StatsOverview, WeekReview } from "../lib/api";
 import type { Page } from "../App";
@@ -21,6 +22,17 @@ function monthBounds(year: number, month: number) {
     offset: first.getDay(),
     daysInMonth: last.getDate(),
   };
+}
+
+function weekBounds(date: string) {
+  const anchor = new Date(`${date}T12:00:00`);
+  const day = anchor.getDay();
+  const mondayOffset = day === 0 ? -6 : 1 - day;
+  const first = new Date(anchor);
+  first.setDate(anchor.getDate() + mondayOffset);
+  const last = new Date(first);
+  last.setDate(first.getDate() + 6);
+  return { first: formatDate(first), last: formatDate(last) };
 }
 
 function todayDate(): string {
@@ -61,6 +73,7 @@ export default function StatsPage({
   const [weekReview, setWeekReview] = useState<WeekReview | null>(null);
   const [weeklyReviews, setWeeklyReviews] = useState<Review[]>([]);
   const [monthlyReviews, setMonthlyReviews] = useState<Review[]>([]);
+  const [reviewWeekDate, setReviewWeekDate] = useState(() => todayDate());
   const [reviewError, setReviewError] = useState("");
   const [generatingKind, setGeneratingKind] = useState<ReviewKind | null>(null);
   const [generationStep, setGenerationStep] = useState<GenerationStep>("idle");
@@ -74,6 +87,7 @@ export default function StatsPage({
   const [error, setError] = useState("");
 
   const bounds = useMemo(() => monthBounds(year, month), [year, month]);
+  const selectedWeekBounds = useMemo(() => weekBounds(reviewWeekDate), [reviewWeekDate]);
   const maxMoodCount = Math.max(1, ...Object.values(overview?.mood_counts || {}));
   const writtenDays = overview?.days_written || 0;
   const exemptedDays = overview?.exempted_days || 0;
@@ -172,7 +186,7 @@ export default function StatsPage({
       let monthlyReviewVersions: Review[] = [];
       try {
         [weeklyReviewVersions, monthlyReviewVersions] = await Promise.all([
-          api.listReviews("weekly", weekRes.from, weekRes.to),
+          api.listReviews("weekly", selectedWeekBounds.first, selectedWeekBounds.last),
           api.listReviews("monthly", bounds.first, bounds.last),
         ]);
       } catch (reviewLoadError) {
@@ -190,7 +204,7 @@ export default function StatsPage({
     } finally {
       if (showLoading) setLoading(false);
     }
-  }, [bounds.first, bounds.last, year, month, today]);
+  }, [bounds.first, bounds.last, selectedWeekBounds.first, selectedWeekBounds.last, year, month, today]);
 
   useEffect(() => {
     loadStats();
@@ -277,7 +291,7 @@ export default function StatsPage({
       await new Promise(r => setTimeout(r, 600));
       if (!mountedRef.current) return;
       setGenerationStep("requesting");
-      await api.generateReview({ kind, date: kind === "weekly" ? today : bounds.first });
+      await api.generateReview({ kind, date: kind === "weekly" ? reviewWeekDate : bounds.first });
       if (!mountedRef.current) return;
       setGenerationStep("saving");
       await loadStats(false);
@@ -682,8 +696,11 @@ export default function StatsPage({
             <ReviewPanel
               className="mt-4"
               title="AI 周复盘"
-              description="基于本周每日记录生成。草稿确认后，才会进入月复盘输入。"
+              description="基于所选周的每日记录生成。草稿确认后，会作为月复盘的主要输入。"
               kind="weekly"
+              periodLabel={`${selectedWeekBounds.first} 至 ${selectedWeekBounds.last}`}
+              anchorDate={reviewWeekDate}
+              onAnchorDateChange={setReviewWeekDate}
               reviews={weeklyReviews}
               selectedReview={selectedWeeklyReview}
               generating={generatingKind === "weekly"}
@@ -694,8 +711,9 @@ export default function StatsPage({
             <ReviewPanel
               className="mt-4"
               title="AI 月复盘"
-              description="只读取本月已确认周复盘。没有确认周复盘时不会生成。"
+              description="优先读取本月已确认周复盘，并补充未被周复盘覆盖的每日记录摘要。"
               kind="monthly"
+              periodLabel={`${bounds.first.slice(0, 7)} 月`}
               reviews={monthlyReviews}
               selectedReview={selectedMonthlyReview}
               generating={generatingKind === "monthly"}
@@ -936,6 +954,9 @@ function ReviewPanel({
   title,
   description,
   kind,
+  periodLabel,
+  anchorDate,
+  onAnchorDateChange,
   reviews,
   selectedReview,
   generating,
@@ -947,6 +968,9 @@ function ReviewPanel({
   title: string;
   description: string;
   kind: ReviewKind;
+  periodLabel: string;
+  anchorDate?: string;
+  onAnchorDateChange?: (date: string) => void;
   reviews: Review[];
   selectedReview: Review | null;
   generating: boolean;
@@ -956,12 +980,12 @@ function ReviewPanel({
 }) {
 
   return (
-    <section className={`rounded-2xl border border-gray-100/80 dark:border-white/5 bg-white dark:bg-white/[0.04] p-4 sm:p-5 hover:border-gray-200 dark:hover:border-white/10 transition-colors ${className}`}>
+    <section className={`rounded-xl border border-gray-100/80 bg-white p-4 transition-colors hover:border-gray-200 dark:border-white/5 dark:bg-white/[0.035] dark:hover:border-white/10 sm:p-5 ${className}`}>
       {/* Header */}
       <div className="flex items-start justify-between gap-3 mb-4">
         <div>
           <h4 className="text-sm font-bold text-gray-800 dark:text-gray-100 flex items-center gap-2">
-            {kind === "weekly" ? "📊" : "📈"} {title}
+            {kind === "weekly" ? <BarChart3 size={16} /> : <LineChart size={16} />} {title}
           </h4>
           <p className="mt-1 text-xs leading-relaxed text-gray-500 dark:text-gray-400">{description}</p>
         </div>
@@ -972,9 +996,31 @@ function ReviewPanel({
         )}
       </div>
 
+      <div className="mb-4 border-t border-gray-100 pt-3 dark:border-white/10">
+        <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+          <div>
+            <div className="inline-flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-gray-400 dark:text-gray-500">
+              <CalendarRange size={12} /> 生成周期
+            </div>
+            <div className="mt-0.5 text-xs font-medium text-gray-700 dark:text-gray-200">{periodLabel}</div>
+          </div>
+          {kind === "weekly" && anchorDate && onAnchorDateChange && (
+            <label className="flex items-center gap-2 text-xs text-gray-400 dark:text-gray-500">
+              周内任意一天
+              <input
+                type="date"
+                value={anchorDate}
+                onChange={(e) => onAnchorDateChange(e.target.value)}
+                className="ui-field h-9 rounded-lg px-2.5 py-0 text-xs sm:w-[150px]"
+              />
+            </label>
+          )}
+        </div>
+      </div>
+
       {/* Review preview */}
       {selectedReview ? (
-        <div className="mb-4 rounded-xl bg-gray-50 dark:bg-white/[0.04] border border-gray-100/80 dark:border-white/5 p-3.5">
+        <div className="mb-4 rounded-lg bg-gray-50 p-3.5 dark:bg-white/[0.04]">
           <div className="flex items-center justify-between gap-2 mb-2">
             <span className="text-xs font-medium text-gray-500 dark:text-gray-400 truncate">{selectedReview.title}</span>
             <ReviewStatusPill status={selectedReview.status} />
@@ -990,7 +1036,7 @@ function ReviewPanel({
       )}
 
       {generating && (
-        <div className="mb-3 rounded-xl bg-gray-50 dark:bg-white/[0.04] px-3 py-3">
+        <div className="mb-3 rounded-lg bg-gray-50 px-3 py-3 dark:bg-white/[0.04]">
           <div className="flex items-center justify-between gap-2 mb-2">
             {(["collecting","requesting","saving"] as const).map((step, i) => {
               const currentIdx = generationStep === "collecting" ? 0 : generationStep === "requesting" ? 1 : generationStep === "saving" ? 2 : 0;
@@ -1014,26 +1060,27 @@ function ReviewPanel({
       )}
 
       {/* Action buttons */}
-      <div className="flex gap-3">
+      <div className="flex flex-col gap-2 sm:flex-row sm:justify-end">
         <button
           type="button"
           onClick={onGenerate}
           disabled={generating}
-          className="flex-1 h-12 sm:h-10 rounded-2xl bg-accent text-sm font-semibold text-white hover:bg-accent-hover disabled:opacity-50 transition-all duration-200 shadow-sm hover:shadow-md active:scale-[0.98] flex items-center justify-center gap-1.5"
+          className="ui-button-primary w-full sm:w-auto"
         >
           {generating ? (
-            <span className="inline-block w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+            <LoaderCircle size={14} className="animate-spin" />
           ) : (
-            <span>✨</span>
+            <Sparkles size={14} />
           )}
           {generating ? "生成中..." : kind === "weekly" ? "AI 周复盘" : "AI 月复盘"}
         </button>
         <button
           type="button"
           onClick={onOpenLibrary}
-          className="h-12 sm:h-10 px-4 rounded-2xl bg-gray-100 dark:bg-white/10 text-sm font-medium text-gray-600 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-white/15 transition-all duration-200 active:scale-[0.98]"
+          className="ui-button-secondary w-full px-3 sm:w-auto"
+          title="打开复盘库"
         >
-          📚
+          <BookOpenText size={15} />
         </button>
       </div>
     </section>

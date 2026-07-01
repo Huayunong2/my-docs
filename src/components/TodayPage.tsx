@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   AlertTriangle,
+  BookMarked,
   Bot,
   Calendar,
   CheckCircle2,
@@ -12,6 +13,7 @@ import {
   ClipboardList,
   Eye,
   LoaderCircle,
+  MoreVertical,
   PenLine,
   Save,
   Smile,
@@ -46,19 +48,27 @@ const DAILY_TEMPLATE = `## {date}
 ### 1. 今天最重要的一个点
 
 
+---
+
 ### 2. 我实际做了什么
 
 - 
 - 
 - 
 
+---
+
 ### 3. 为什么会这样
 
 
 
+---
+
 ### 4. 我学到的通用规律
 
 
+
+---
 
 ### 5. 下次先查哪里
 `;
@@ -99,9 +109,11 @@ type MobilePane = "edit" | "preview";
 export default function TodayPage({
   targetDate,
   targetNonce,
+  onNavigate,
 }: {
   targetDate?: string;
   targetNonce?: number;
+  onNavigate?: (page: "knowledge") => void;
 }) {
   const [selectedDate, setSelectedDate] = useState(() => targetDate || todayDate());
   const [article, setArticle] = useState<Article | null>(null);
@@ -115,6 +127,7 @@ export default function TodayPage({
   const [saveError, setSaveError] = useState("");
   const [showTemplatePicker, setShowTemplatePicker] = useState(false);
   const [showDatePicker, setShowDatePicker] = useState(false);
+  const [showMobileMore, setShowMobileMore] = useState(false);
   const [metaExpanded, setMetaExpanded] = useState(false);
   const [mobilePane, setMobilePane] = useState<MobilePane>("edit");
   const [templateNotice, setTemplateNotice] = useState("");
@@ -122,6 +135,9 @@ export default function TodayPage({
   const [aiLoading, setAiLoading] = useState(false);
   const [aiResult, setAiResult] = useState("");
   const [aiError, setAiError] = useState("");
+  const [extractingCards, setExtractingCards] = useState(false);
+  const [cardExtractNotice, setCardExtractNotice] = useState("");
+  const [cardExtractCount, setCardExtractCount] = useState(0);
   const saveTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
   const articleRef = useRef<Article | null>(null);
   const externalNonceRef = useRef(targetNonce);
@@ -415,6 +431,8 @@ export default function TodayPage({
     setAiLoading(true);
     setAiError("");
     setAiResult("");
+    setCardExtractNotice("");
+    setCardExtractCount(0);
     try {
       const data = await api.summarizeWithAI({ content });
       setAiResult(data.summary || "无返回内容");
@@ -422,6 +440,34 @@ export default function TodayPage({
       setAiError(api.getErrorMessage(e));
     }
     setAiLoading(false);
+  };
+
+  const handleExtractKnowledgeCards = async () => {
+    if (!content.trim()) {
+      setCardExtractNotice("先写点内容再提取知识卡片");
+      return;
+    }
+    setExtractingCards(true);
+    setCardExtractNotice("");
+    setCardExtractCount(0);
+    try {
+      const cards = await api.extractKnowledgeCards({
+        content,
+        source_article_id: article?.id,
+        source_date: date,
+        max_cards: 6,
+      });
+      setCardExtractNotice(
+        cards.length
+          ? `已生成 ${cards.length} 张知识卡片草稿，可到知识库确认。`
+          : "这篇内容里没有足够稳定的知识卡片。"
+      );
+      setCardExtractCount(cards.length);
+    } catch (e: any) {
+      setCardExtractNotice(api.getErrorMessage(e));
+    } finally {
+      setExtractingCards(false);
+    }
   };
 
   // Ctrl+S keyboard shortcut
@@ -471,6 +517,9 @@ export default function TodayPage({
       if (!target.closest("[data-date-picker]")) {
         setShowDatePicker(false);
       }
+      if (!target.closest("[data-mobile-more]")) {
+        setShowMobileMore(false);
+      }
     };
     document.addEventListener("mousedown", handler);
     return () => document.removeEventListener("mousedown", handler);
@@ -491,7 +540,8 @@ export default function TodayPage({
       <div className="px-3 pb-2 pt-3 md:px-8 md:pt-4">
         <div className="ui-panel px-2 py-2 sm:px-3">
           <div className="flex flex-col gap-2 xl:flex-row xl:items-center xl:justify-between">
-            <div className="flex min-w-0 items-center gap-2">
+            <div className="flex min-w-0 items-center justify-between gap-2">
+              <div className="flex min-w-0 items-center gap-2">
               <span className="hidden h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-accent-light text-accent dark:bg-accent-light/20 sm:flex">
                 <Calendar size={16} strokeWidth={2.2} />
               </span>
@@ -500,6 +550,25 @@ export default function TodayPage({
                 <p className="mt-0.5 truncate text-xs text-gray-400 dark:text-gray-400">
                   {relativeDateLabel(date)} · {date}
                 </p>
+              </div>
+              </div>
+
+              <div className="flex items-center gap-1.5 md:hidden">
+                <span className="text-[11px] text-gray-400 dark:text-gray-500">{wordCount} 字</span>
+                <span
+                  className={[
+                    "text-[11px] font-medium",
+                    saveStatus === "error"
+                      ? "text-red-500"
+                      : saveStatus === "saving"
+                        ? "text-accent"
+                        : dirty
+                          ? "text-amber-500"
+                          : "text-emerald-500",
+                  ].join(" ")}
+                >
+                  {saveStatus === "error" ? "保存失败" : saveStatus === "saving" ? "保存中" : dirty ? "未保存" : "已同步"}
+                </span>
               </div>
             </div>
 
@@ -589,12 +658,12 @@ export default function TodayPage({
             </div>
           </div>
 
-          <div className="mt-2 flex flex-wrap items-center gap-2 border-t border-gray-100 pt-2 dark:border-white/10 xl:border-t-0 xl:pt-0">
+          <div className="mt-2 grid grid-cols-[1fr_1fr_1fr_auto] gap-2 border-t border-gray-100 pt-2 dark:border-white/10 md:flex md:flex-wrap md:items-center xl:border-t-0 xl:pt-0">
             <motion.button
               whileTap={{ scale: 0.95 }}
               onClick={handleManualSave}
               disabled={saveStatus === "saving"}
-              className="ui-button-primary"
+              className="ui-button-primary w-full md:w-auto"
               title="手动保存"
             >
               <Save size={14} /> 保存
@@ -608,7 +677,7 @@ export default function TodayPage({
                   setShowDatePicker(false);
                   setShowTemplatePicker(!showTemplatePicker);
                 }}
-                className="ui-button-secondary"
+                className="ui-button-secondary w-full md:w-auto"
               >
                 <ClipboardList size={14} /> 模板
               </motion.button>
@@ -690,7 +759,7 @@ export default function TodayPage({
               whileTap={{ scale: 0.95 }}
               onClick={handleAISummary}
               disabled={aiLoading}
-              className="inline-flex h-9 items-center justify-center gap-1.5 rounded-lg border border-violet-200/70 bg-violet-50 px-3 text-xs font-medium text-violet-600 transition-colors hover:bg-violet-100 disabled:opacity-50 dark:border-violet-400/20 dark:bg-violet-500/10 dark:text-violet-300 dark:hover:bg-violet-500/15"
+              className="ui-button-secondary w-full text-accent dark:text-accent md:w-auto"
               title="AI 总结当前内容"
             >
               {aiLoading ? <LoaderCircle size={14} className="animate-spin" /> : <Sparkles size={14} />}
@@ -700,19 +769,53 @@ export default function TodayPage({
             <button
               type="button"
               onClick={() => setMetaExpanded((value) => !value)}
-              className="ui-button-secondary md:hidden"
+              className="ui-button-secondary col-span-3 w-full md:hidden"
             >
               <Smile size={14} />
               心情/标签
               {metaExpanded ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
             </button>
 
-            {/* Delete */}
+            {article && (
+            <div className="relative md:hidden" data-mobile-more>
+              <button
+                type="button"
+                onClick={() => setShowMobileMore((value) => !value)}
+                className="ui-icon-button"
+                title="更多操作"
+              >
+                <MoreVertical size={16} />
+              </button>
+              <AnimatePresence>
+                {showMobileMore && (
+                  <motion.div
+                    initial={{ opacity: 0, y: -4 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    exit={{ opacity: 0, y: -4 }}
+                    transition={{ duration: 0.12 }}
+                    className="absolute right-0 top-full z-30 mt-2 w-36 rounded-xl border border-gray-100 bg-white p-1.5 shadow-modal dark:border-white/10 dark:bg-gray-900"
+                  >
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setShowMobileMore(false);
+                          handleDelete();
+                        }}
+                        className="flex h-9 w-full items-center gap-2 rounded-lg px-2.5 text-xs font-medium text-red-600 hover:bg-red-50 dark:text-red-300 dark:hover:bg-red-500/10"
+                      >
+                        <Trash2 size={14} /> 删除记录
+                      </button>
+                  </motion.div>
+                )}
+              </AnimatePresence>
+            </div>
+            )}
+
             {article && (
               <motion.button
                 whileTap={{ scale: 0.95 }}
                 onClick={handleDelete}
-                className="ui-button-danger ml-auto"
+                className="ui-button-danger hidden md:ml-auto md:inline-flex"
                 title="删除"
               >
                 <Trash2 size={14} /> 删除
@@ -725,21 +828,6 @@ export default function TodayPage({
           <span>{wordCount} 字</span>
           <span>·</span>
           <span>{tags.length ? `${tags.length} 标签` : "无标签"}</span>
-          <span>·</span>
-          <span
-            className={[
-              "font-medium",
-              saveStatus === "error"
-                ? "text-red-500"
-                : saveStatus === "saving"
-                  ? "text-accent"
-                  : dirty
-                    ? "text-amber-500"
-                    : "text-emerald-500",
-            ].join(" ")}
-          >
-            {saveStatus === "error" ? "保存失败" : saveStatus === "saving" ? "保存中" : dirty ? "未保存" : "已同步"}
-          </span>
         </div>
 
         {/* AI result panel */}
@@ -747,23 +835,53 @@ export default function TodayPage({
           {(aiResult || aiError) && (
             <>
               <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-                className="fixed inset-0 bg-black/20 z-30 md:hidden" onClick={() => { setAiResult(""); setAiError(""); }} />
+                className="fixed inset-0 bg-black/20 z-30 md:hidden" onClick={() => { setAiResult(""); setAiError(""); setCardExtractNotice(""); setCardExtractCount(0); }} />
               <motion.div
                 initial={{ x: "100%", opacity: 0 }}
                 animate={{ x: 0, opacity: 1 }}
                 exit={{ x: "100%", opacity: 0 }}
                 transition={{ type: "spring", damping: 25, stiffness: 200 }}
-                className="fixed md:absolute right-0 top-0 bottom-0 w-[400px] max-w-[92vw] bg-white dark:bg-gray-900 md:border-l border-gray-200/60 dark:border-white/10 shadow-2xl md:shadow-modal z-40 flex flex-col overflow-hidden md:rounded-l-2xl"
+                className="fixed bottom-0 right-0 top-auto z-40 flex h-[82dvh] w-full max-w-[100vw] flex-col overflow-hidden rounded-t-2xl border border-gray-200/60 bg-white shadow-2xl dark:border-white/10 dark:bg-gray-900 md:bottom-auto md:top-[10dvh] md:h-[82dvh] md:w-[480px] md:max-w-[42vw] md:rounded-l-2xl md:rounded-tr-none md:border-r-0"
               >
-                <div className="flex items-center justify-between px-5 py-3.5 border-b border-gray-100 dark:border-white/5">
+                <div className="flex items-center justify-between border-b border-gray-100 px-5 py-3.5 dark:border-white/5">
                   <h3 className="flex items-center gap-2 text-sm font-bold text-gray-800 dark:text-gray-100">
                     <Bot size={16} /> AI 总结
                   </h3>
-                  <button onClick={() => { setAiResult(""); setAiError(""); }}
-                    className="ui-icon-button"><X size={15} /></button>
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={handleExtractKnowledgeCards}
+                      disabled={extractingCards}
+                      className="inline-flex h-8 items-center justify-center gap-1.5 rounded-lg border border-gray-200 bg-white px-2.5 text-xs font-semibold text-gray-600 transition-colors hover:border-accent/30 hover:text-accent disabled:opacity-60 dark:border-white/10 dark:bg-white/[0.04] dark:text-gray-300"
+                      title="从当前真实正文抽取知识卡片草稿"
+                    >
+                      {extractingCards ? <LoaderCircle size={13} className="animate-spin" /> : <BookMarked size={13} />}
+                      提取卡片
+                    </button>
+                    <button onClick={() => { setAiResult(""); setAiError(""); setCardExtractNotice(""); setCardExtractCount(0); }}
+                      className="ui-icon-button"><X size={15} /></button>
+                  </div>
                 </div>
                 <div className={`flex-1 overflow-y-auto p-5 ${aiError ? "text-red-500" : ""}`}>
-                  {aiError ? aiError : <MarkdownPreview content={aiResult} />}
+                  {cardExtractNotice && (
+                    <div className="mb-3 flex flex-col gap-2 rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-xs font-medium text-gray-600 dark:border-white/10 dark:bg-white/[0.04] dark:text-gray-300 sm:flex-row sm:items-center sm:justify-between">
+                      <span>{cardExtractNotice}</span>
+                      {cardExtractCount > 0 && onNavigate && (
+                        <button
+                          type="button"
+                          onClick={() => onNavigate("knowledge")}
+                          className="inline-flex h-7 shrink-0 items-center justify-center rounded-md border border-accent/20 bg-accent-light px-2 text-xs font-semibold text-accent dark:bg-accent-light/20"
+                        >
+                          查看待确认
+                        </button>
+                      )}
+                    </div>
+                  )}
+                  {aiError ? aiError : (
+                    <div className="mx-auto max-w-[760px]">
+                      <MarkdownPreview content={aiResult} />
+                    </div>
+                  )}
                 </div>
               </motion.div>
             </>
@@ -868,7 +986,7 @@ export default function TodayPage({
           value={title}
           onChange={handleTitleChange}
           placeholder="标题..."
-          className="w-full text-xl md:text-2xl font-semibold bg-transparent text-gray-800 dark:text-gray-100 placeholder-gray-300 dark:placeholder-gray-600 outline-none border-none"
+          className="w-full bg-transparent text-2xl font-semibold text-gray-800 outline-none border-none placeholder-gray-300 dark:text-gray-100 dark:placeholder-gray-600 md:text-2xl"
         />
       </div>
 
@@ -892,7 +1010,7 @@ export default function TodayPage({
       </div>
 
       {/* Split editor */}
-      <div className="grid flex-1 grid-cols-1 gap-4 px-3 pb-20 md:grid-cols-[minmax(0,1.08fr)_minmax(360px,0.92fr)] md:px-8 md:pb-6 min-h-0">
+      <div className="grid flex-1 grid-cols-1 gap-4 px-3 pb-28 md:grid-cols-[minmax(0,1.08fr)_minmax(360px,0.92fr)] md:px-8 md:pb-6 min-h-0">
         <div className={`${mobilePane === "edit" ? "flex" : "hidden"} min-w-0 flex-col md:flex`}>
           <div className="mb-2 flex items-center justify-between gap-3 text-2xs font-semibold uppercase tracking-widest text-gray-400 dark:text-gray-500">
             <span>编辑</span>
@@ -902,7 +1020,7 @@ export default function TodayPage({
             value={content}
             onChange={handleContentChange}
             placeholder={`开始写 ${date} 的总结...\n\n点击上方“模板”快速填充`}
-            className="ui-editor-surface min-h-[420px] w-full resize-none p-4 font-mono text-sm leading-7 text-gray-700 placeholder-gray-300 focus:border-accent/40 focus:ring-2 focus:ring-accent/20 dark:text-gray-200 dark:placeholder-gray-600 dark:focus:bg-white/[0.075] md:min-h-0 md:flex-1 md:p-5"
+            className="ui-editor-surface min-h-[420px] w-full resize-none px-4 pb-32 pt-4 font-mono text-[15px] leading-7 text-gray-700 placeholder-gray-300 focus:border-accent/40 focus:ring-2 focus:ring-accent/20 dark:text-gray-200 dark:placeholder-gray-600 dark:focus:bg-white/[0.075] md:min-h-0 md:flex-1 md:p-5 md:text-sm"
           />
         </div>
 
@@ -912,7 +1030,9 @@ export default function TodayPage({
             <span className="font-mono normal-case tracking-normal">{charCount} 字符</span>
           </div>
           <div className="ui-editor-surface min-h-[420px] overflow-y-auto p-4 md:min-h-0 md:flex-1 md:p-5">
-            <MarkdownPreview content={content} />
+            <div className="mx-auto max-w-[760px]">
+              <MarkdownPreview content={content} />
+            </div>
           </div>
           <div className="h-12 md:hidden" />
         </div>

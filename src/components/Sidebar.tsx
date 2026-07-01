@@ -3,6 +3,7 @@ import {
   Archive,
   BarChart3,
   BookOpenText,
+  BookMarked,
   CalendarDays,
   FileText,
   Moon,
@@ -21,6 +22,7 @@ const navItems: { id: Page; label: string; icon: LucideIcon }[] = [
   { id: "search", label: "搜索", icon: Search },
   { id: "stats", label: "统计", icon: BarChart3 },
   { id: "reviews", label: "复盘", icon: BookOpenText },
+  { id: "knowledge", label: "知识", icon: BookMarked },
   { id: "settings", label: "设置", icon: Settings },
 ];
 
@@ -40,7 +42,7 @@ export default function Sidebar({ page, onNavigate, dark, onToggleDark }: Sideba
       </aside>
 
       {/* Mobile bottom tab bar */}
-      <nav className="md:hidden fixed bottom-0 left-0 right-0 z-20 glass bg-sidebar dark:bg-sidebar-dark border-t border-gray-200/60 dark:border-white/10 grid grid-cols-8 gap-0.5 px-2 py-1 safe-bottom">
+      <nav className="md:hidden fixed bottom-0 left-0 right-0 z-20 glass bg-white/88 dark:bg-gray-950/88 border-t border-gray-200/50 dark:border-white/10 grid grid-cols-9 gap-0.5 px-2 py-1 safe-bottom shadow-[0_-8px_24px_rgba(15,23,42,0.06)]">
         {navItems.map((item) => (
           <MobileNavButton
             key={item.id}
@@ -51,11 +53,11 @@ export default function Sidebar({ page, onNavigate, dark, onToggleDark }: Sideba
         ))}
         <button
           onClick={onToggleDark}
-          className="relative flex min-w-0 flex-col items-center gap-0.5 rounded-xl px-1 py-1.5 text-gray-400 transition-colors active:scale-95 dark:text-gray-400"
+          className="relative flex min-w-0 flex-col items-center gap-0.5 rounded-lg px-1 py-1 text-gray-300 transition-colors active:scale-95 dark:text-gray-500"
           title={dark ? "浅色模式" : "深色模式"}
         >
           {dark ? <Sun size={19} strokeWidth={2.1} /> : <Moon size={19} strokeWidth={2.1} />}
-          <span className="text-[10px] font-semibold leading-none">{dark ? "浅色" : "深色"}</span>
+          <span className="text-[10px] font-medium leading-none">{dark ? "浅色" : "深色"}</span>
         </button>
       </nav>
     </>
@@ -163,17 +165,17 @@ function MobileNavButton({
     <button
       onClick={onClick}
       className={[
-        "relative flex min-w-0 flex-col items-center gap-0.5 rounded-xl px-1 py-1.5 transition-all duration-200 active:scale-95",
+        "relative flex min-w-0 flex-col items-center gap-0.5 rounded-lg px-1 py-1 transition-all duration-200 active:scale-95",
         active
-          ? "bg-accent-light text-accent dark:bg-accent-light/20"
-          : "text-gray-400 dark:text-gray-400",
+          ? "bg-accent-light/70 text-accent dark:bg-accent-light/15"
+          : "text-gray-300 dark:text-gray-500",
       ].join(" ")}
       title={item.label}
     >
-      <Icon size={19} strokeWidth={active ? 2.4 : 2.1} />
-      <span className="max-w-full truncate text-[10px] font-semibold leading-none">{item.label}</span>
+      <Icon size={18} strokeWidth={active ? 2.35 : 2} />
+      <span className="max-w-full truncate text-[10px] font-medium leading-none">{item.label}</span>
       {active && (
-        <span className="absolute -top-0.5 h-1 w-4 rounded-full bg-accent" />
+        <span className="absolute -top-0.5 h-0.5 w-4 rounded-full bg-accent/80" />
       )}
     </button>
   );

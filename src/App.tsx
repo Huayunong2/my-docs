@@ -7,8 +7,9 @@ import SearchPage from "./components/SearchPage";
 import SettingsPage from "./components/SettingsPage";
 import StatsPage from "./components/StatsPage";
 import ReviewsPage from "./components/ReviewsPage";
+import KnowledgePage from "./components/KnowledgePage";
 
-export type Page = "today" | "history" | "archive" | "search" | "stats" | "reviews" | "settings";
+export type Page = "today" | "history" | "archive" | "search" | "stats" | "reviews" | "knowledge" | "settings";
 
 function App() {
   const [page, setPage] = useState<Page>("today");
@@ -31,11 +32,12 @@ function App() {
     setPage("search");
   }, []);
 
-  // Keyboard shortcuts: Ctrl+1-6 page switching
+  // Keyboard shortcuts: Ctrl+1-8 page switching
   useEffect(() => {
     const map: Record<string, Page> = {
       "1": "today", "2": "history", "3": "archive",
-      "4": "search", "5": "stats", "6": "settings",
+      "4": "search", "5": "stats", "6": "reviews",
+      "7": "knowledge", "8": "settings",
     };
     const handler = (e: KeyboardEvent) => {
       if ((e.ctrlKey || e.metaKey) && map[e.key]) {
@@ -76,7 +78,7 @@ function PageContent({
 }) {
   switch (page) {
     case "today":
-      return <TodayPage targetDate={recordTarget?.date} targetNonce={recordTarget?.nonce} />;
+      return <TodayPage targetDate={recordTarget?.date} targetNonce={recordTarget?.nonce} onNavigate={onNavigate} />;
     case "history":
       return <HistoryPage onEditDate={onEditDate} />;
     case "archive":
@@ -87,6 +89,8 @@ function PageContent({
       return <StatsPage onEditDate={onEditDate} onSearchTerm={onSearchTerm} onNavigate={onNavigate} />;
     case "reviews":
       return <ReviewsPage />;
+    case "knowledge":
+      return <KnowledgePage onEditDate={onEditDate} />;
     case "settings":
       return <SettingsPage />;
     default:

@@ -25,6 +25,7 @@
 - AI 日总结：服务端代理，浏览器不保存 AI Key，输出简洁纯文本。
 - AI 周/月复盘：独立保存为复盘库草稿，不占用每日记录。
 - 复盘库：按年月、周期、版本管理周/月复盘，可确认、编辑、删除。
+- 轻量知识库：把可复用的事实、方法、概念、决策、案例等沉淀为独立卡片，并保留来源。
 - SQLite 快照备份、下载、删除。
 - Markdown/JSON 导出，支持 Markdown ZIP 下载。
 - 手机端底部导航和设置页适配。
@@ -230,6 +231,11 @@ nano server/.env
 DAILY_SUMMARY_AI_API_KEY=你的key
 DAILY_SUMMARY_AI_BASE_URL=https://api.openai.com/v1
 DAILY_SUMMARY_AI_MODEL=gpt-4o-mini
+DAILY_SUMMARY_AI_TEMPERATURE=0.2
+DAILY_SUMMARY_AI_MAX_TOKENS=1800
+DAILY_SUMMARY_AI_TIMEOUT_SECS=45
+DAILY_SUMMARY_AI_RETRIES=2
+DAILY_SUMMARY_AI_MIN_INTERVAL_MS=1200
 ```
 
 重启：
@@ -241,8 +247,9 @@ sudo systemctl restart daily-summary
 AI 行为：
 
 - 今日页「AI 总结」只生成简洁纯文本，不写回正文。
+- 今日页可以从当前真实正文抽取知识卡片草稿；抽取结果默认是草稿，需要在知识库里确认后再作为沉淀内容使用。
 - 周复盘基于本周每日记录生成草稿。
-- 月复盘只读取已确认的周复盘，减少扫描每日记录的压力。
+- 月复盘优先读取已确认周复盘，并补充未被周复盘覆盖的每日记录摘要。
 - 同一周期可以重复生成多个版本。
 - 旧版本、草稿、已确认版本都可以删除。
 - 复盘确认不是不可变归档；这是个人工具，允许继续编辑。

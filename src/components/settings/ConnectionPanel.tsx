@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { ClipboardCopy, RefreshCw, Save, Trash2, Wifi } from "lucide-react";
 import * as api from "../../lib/api";
 import { useConfirmDialog } from "../ui/Feedback";
 import { Card, DangerBtn, Input, PrimaryBtn, SecondaryBtn, SectionTitle, StatusBox, type Tone, normalizeInputUrl } from "./shared";
@@ -91,7 +92,7 @@ export default function ConnectionPanel() {
   };
 
   return (
-    <div className="grid gap-4 max-w-4xl">
+    <div className="grid max-w-3xl gap-4">
       <Card>
         <SectionTitle desc="显示当前设备将连接到哪里。">连接状态</SectionTitle>
         <div className="grid sm:grid-cols-[180px_minmax(0,1fr)] gap-3 text-sm">
@@ -105,8 +106,8 @@ export default function ConnectionPanel() {
           </div>
         </div>
         <div className="mt-3 flex flex-col sm:flex-row gap-2">
-          <SecondaryBtn onClick={copyApiUrl} disabled={isUnconfiguredDesktop}>复制 API 地址</SecondaryBtn>
-          <SecondaryBtn onClick={() => testConnection()} disabled={testing}>{testing ? "测试中..." : "仅测试连接"}</SecondaryBtn>
+          <SecondaryBtn onClick={copyApiUrl} disabled={isUnconfiguredDesktop}><ClipboardCopy size={15} /> 复制 API 地址</SecondaryBtn>
+          <SecondaryBtn onClick={() => testConnection()} disabled={testing}><Wifi size={15} /> {testing ? "测试中..." : "仅测试连接"}</SecondaryBtn>
         </div>
         <div className="mt-3"><StatusBox message={msg} tone={tone} /></div>
       </Card>
@@ -116,53 +117,31 @@ export default function ConnectionPanel() {
         {healthError ? (
           <StatusBox tone="bad" message={healthError} />
         ) : health ? (
-          <div className="grid grid-cols-2 gap-x-4 gap-y-2 text-sm">
-            <div>
-              <span className="text-xs text-gray-400">服务端版本</span>
-              <p className="font-mono text-xs text-gray-700 dark:text-gray-300">{health.version}</p>
-            </div>
-            <div>
-              <span className="text-xs text-gray-400">前端版本</span>
-              <p className="font-mono text-xs text-gray-700 dark:text-gray-300">0.1.0</p>
-            </div>
-            <div>
-              <span className="text-xs text-gray-400">编译时间</span>
-              <p className="font-mono text-xs text-gray-700 dark:text-gray-300">{new Date(Number(health.build) * 1000).toLocaleString()}</p>
-            </div>
-            <div>
-              <span className="text-xs text-gray-400">AI 功能</span>
-              <span className={`ml-2 text-xs font-medium ${health.features.ai ? "text-emerald-500" : "text-gray-400"}`}>
-                {health.features.ai ? "已配置" : "未配置"}
-              </span>
-            </div>
-            <div>
-              <span className="text-xs text-gray-400">复盘功能</span>
-              <span className={`ml-2 text-xs font-medium ${health.features.reviews ? "text-emerald-500" : "text-gray-400"}`}>可用</span>
-            </div>
-            <div>
-              <span className="text-xs text-gray-400">导出功能</span>
-              <span className={`ml-2 text-xs font-medium ${health.features.exports ? "text-emerald-500" : "text-gray-400"}`}>可用</span>
-            </div>
+          <div className="grid gap-2 text-sm sm:grid-cols-2">
+            <InfoTile label="服务端版本" value={health.version} mono />
+            <InfoTile label="前端版本" value="0.1.0" mono />
+            <InfoTile label="编译时间" value={new Date(Number(health.build) * 1000).toLocaleString()} mono />
+            <InfoTile label="AI 功能" value={health.features.ai ? "已配置" : "未配置"} good={health.features.ai} />
+            <InfoTile label="复盘功能" value={health.features.reviews ? "可用" : "不可用"} good={health.features.reviews} />
+            <InfoTile label="知识库" value={health.features.knowledge ? "可用" : "不可用"} good={health.features.knowledge} />
+            <InfoTile label="导出功能" value={health.features.exports ? "可用" : "不可用"} good={health.features.exports} />
             {health.db_path && (
-              <div className="col-span-2">
-                <span className="text-xs text-gray-400">数据库路径</span>
-                <p className="font-mono text-xs text-gray-600 dark:text-gray-400 truncate">{health.db_path}</p>
-                <p className="text-xs text-gray-500 mt-0.5">
-                  {health.db_size ? (health.db_size < 1048576 ? `${(health.db_size/1024).toFixed(1)} KB` : `${(health.db_size/1048576).toFixed(1)} MB`) : "—"}
-                </p>
-              </div>
+              <InfoTile
+                label="数据库路径"
+                value={health.db_path}
+                meta={health.db_size ? (health.db_size < 1048576 ? `${(health.db_size/1024).toFixed(1)} KB` : `${(health.db_size/1048576).toFixed(1)} MB`) : "—"}
+                mono
+                wide
+              />
             )}
             {health.last_backup && (
-              <div>
-                <span className="text-xs text-gray-400">最近备份</span>
-                <p className="text-xs text-gray-700 dark:text-gray-300">{health.last_backup}</p>
-              </div>
+              <InfoTile label="最近备份" value={health.last_backup} />
             )}
           </div>
         ) : (
           <p className="text-xs text-gray-400">加载中...</p>
         )}
-        <SecondaryBtn onClick={checkHealth} className="mt-3">刷新诊断</SecondaryBtn>
+        <SecondaryBtn onClick={checkHealth} className="mt-3"><RefreshCw size={15} /> 刷新诊断</SecondaryBtn>
       </Card>
 
       <Card>
@@ -174,7 +153,7 @@ export default function ConnectionPanel() {
             <input type="checkbox" checked={showToken} onChange={(e) => setShowToken(e.target.checked)} className="accent-accent" />
             显示令牌
           </label>
-          <PrimaryBtn onClick={saveAndTest} disabled={testing}>保存并测试</PrimaryBtn>
+          <PrimaryBtn onClick={saveAndTest} disabled={testing}><Save size={15} /> 保存并测试</PrimaryBtn>
         </div>
       </Card>
 
@@ -194,10 +173,40 @@ export default function ConnectionPanel() {
       <Card>
         <SectionTitle>维护操作</SectionTitle>
         <div className="flex flex-col sm:flex-row gap-2">
-          <DangerBtn onClick={clearLocalConfig}>清除本机配置</DangerBtn>
+          <DangerBtn onClick={clearLocalConfig}><Trash2 size={15} /> 清除本机配置</DangerBtn>
         </div>
       </Card>
       {dialog}
+    </div>
+  );
+}
+
+function InfoTile({
+  label,
+  value,
+  meta,
+  mono = false,
+  good,
+  wide = false,
+}: {
+  label: string;
+  value: string;
+  meta?: string;
+  mono?: boolean;
+  good?: boolean;
+  wide?: boolean;
+}) {
+  return (
+    <div className={`rounded-lg bg-gray-50 p-3 dark:bg-white/[0.035] ${wide ? "sm:col-span-2" : ""}`}>
+      <div className="text-xs text-gray-400 dark:text-gray-500">{label}</div>
+      <div className={[
+        "mt-1 truncate text-sm font-medium",
+        mono ? "font-mono text-xs" : "",
+        good === undefined ? "text-gray-700 dark:text-gray-300" : good ? "text-emerald-600 dark:text-emerald-300" : "text-gray-400 dark:text-gray-500",
+      ].join(" ")}>
+        {value}
+      </div>
+      {meta && <div className="mt-0.5 text-xs text-gray-500 dark:text-gray-500">{meta}</div>}
     </div>
   );
 }

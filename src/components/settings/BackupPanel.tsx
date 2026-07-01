@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { Download, RefreshCw, Save, Trash2 } from "lucide-react";
 import * as api from "../../lib/api";
 import type { BackupMeta } from "../../lib/api";
 import { useConfirmDialog } from "../ui/Feedback";
@@ -30,7 +31,7 @@ export default function BackupPanel() {
   };
 
   return (
-    <div className="space-y-4 max-w-4xl">
+    <div className="max-w-3xl space-y-4">
       <Card>
         <SectionTitle desc="建议每周至少创建一次快照。">备份状态</SectionTitle>
         <StatusBox
@@ -38,8 +39,8 @@ export default function BackupPanel() {
           message={!newest ? "还没有备份。" : stale ? `最近备份已超过 7 天：${newest.name}` : `最近备份正常：${newest.name}`}
         />
         <div className="mt-3 flex flex-col sm:flex-row gap-2">
-          <PrimaryBtn onClick={create}>创建备份</PrimaryBtn>
-          <SecondaryBtn onClick={refresh}>刷新列表</SecondaryBtn>
+          <PrimaryBtn onClick={create}><Save size={15} /> 创建备份</PrimaryBtn>
+          <SecondaryBtn onClick={refresh}><RefreshCw size={15} /> 刷新列表</SecondaryBtn>
         </div>
         <div className="mt-3"><StatusBox message={msg} tone={tone} /></div>
       </Card>
@@ -56,8 +57,8 @@ export default function BackupPanel() {
                   <p className="text-xs text-gray-400 mt-1">{formatSize(b.size_bytes)} · {b.created_at}{index === 0 ? " · 最新" : ""}</p>
                 </div>
                 <div className="flex flex-col sm:flex-row gap-2">
-                  <SecondaryBtn onClick={() => download(b.name)} className="py-1.5 text-xs">下载</SecondaryBtn>
-                  <DangerBtn onClick={() => del(b.name)} className="py-1.5 text-xs">删除</DangerBtn>
+                  <SecondaryBtn onClick={() => download(b.name)} className="py-1.5 text-xs"><Download size={13} /> 下载</SecondaryBtn>
+                  <DangerBtn onClick={() => del(b.name)} className="py-1.5 text-xs"><Trash2 size={13} /> 删除</DangerBtn>
                 </div>
               </div>
             </div>
@@ -68,4 +69,3 @@ export default function BackupPanel() {
     </div>
   );
 }
-
