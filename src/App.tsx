@@ -90,7 +90,7 @@ function PageContent({
     case "reviews":
       return <ReviewsPage />;
     case "knowledge":
-      return <KnowledgePage onEditDate={onEditDate} />;
+      return <KnowledgePage onEditDate={onEditDate} onNavigate={onNavigate} />;
     case "settings":
       return <SettingsPage />;
     default:

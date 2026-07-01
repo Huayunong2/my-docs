@@ -1,4 +1,4 @@
-import { useEffect, useId, useState } from "react";
+import { memo, useEffect, useId, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import rehypeSanitize from "rehype-sanitize";
 import remarkGfm from "remark-gfm";
@@ -182,7 +182,7 @@ function CodeBlock({ children }: { children: unknown }) {
   return <PlainCodeBlock code={code} language={language} />;
 }
 
-export default function MarkdownContent({ content }: { content: string }) {
+function MarkdownContent({ content }: { content: string }) {
   if (!content.trim()) {
     return <p className="text-gray-300 dark:text-gray-500 italic text-sm">输入 Markdown 内容以预览...</p>;
   }
@@ -239,3 +239,5 @@ export default function MarkdownContent({ content }: { content: string }) {
     </div>
   );
 }
+
+export default memo(MarkdownContent);

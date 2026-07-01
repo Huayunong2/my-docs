@@ -1020,7 +1020,7 @@ export default function TodayPage({
             value={content}
             onChange={handleContentChange}
             placeholder={`开始写 ${date} 的总结...\n\n点击上方“模板”快速填充`}
-            className="ui-editor-surface min-h-[56dvh] w-full resize-none px-4 py-4 font-mono text-[15px] leading-7 text-gray-700 placeholder-gray-300 focus:border-accent/40 focus:ring-2 focus:ring-accent/20 dark:text-gray-200 dark:placeholder-gray-600 dark:focus:bg-white/[0.075] md:min-h-0 md:flex-1 md:p-5 md:text-sm"
+            className="ui-editor-surface h-[56dvh] min-h-0 w-full resize-none overflow-y-auto px-4 py-4 font-mono text-[15px] leading-7 text-gray-700 placeholder-gray-300 focus:border-accent/40 focus:ring-2 focus:ring-accent/20 dark:text-gray-200 dark:placeholder-gray-600 dark:focus:bg-white/[0.075] md:h-auto md:flex-1 md:p-5 md:text-sm"
           />
           <div className="h-24 md:hidden" />
         </div>
@@ -1030,7 +1030,7 @@ export default function TodayPage({
             <span>预览</span>
             <span className="font-mono normal-case tracking-normal">{charCount} 字符</span>
           </div>
-          <div className="ui-editor-surface min-h-[56dvh] overflow-y-auto p-4 md:min-h-0 md:flex-1 md:p-5">
+          <div className="ui-editor-surface h-[56dvh] min-h-0 overflow-y-auto p-4 md:h-auto md:flex-1 md:p-5">
             <div className="mx-auto max-w-[760px]">
               <MarkdownPreview content={content} />
             </div>
