@@ -1,6 +1,6 @@
 {
   "productName": "每日总结",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "identifier": "com.daily-summary.desktop",
   "build": {
     "frontendDist": "../dist",

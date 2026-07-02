@@ -93,7 +93,7 @@ pub(crate) fn valid_backup_name(name: &str) -> bool {
             .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
 }
 pub(crate) fn valid_exemption_reason(reason: &str) -> bool {
-    matches!(reason, "请假" | "放假" | "生病" | "出差" | "休息" | "其他")
+    matches!(reason, "休息" | "请假" | "生病" | "出差")
 }
 pub(crate) fn normalize_tags_json(raw: Option<String>) -> Result<String, (StatusCode, String)> {
     let Some(raw) = raw else {

@@ -119,7 +119,7 @@ export default function ConnectionPanel() {
         ) : health ? (
           <div className="grid gap-2 text-sm sm:grid-cols-2">
             <InfoTile label="服务端版本" value={health.version} mono />
-            <InfoTile label="前端版本" value="0.1.0" mono />
+            <InfoTile label="前端版本" value="1.0.0" mono />
             <InfoTile label="编译时间" value={new Date(Number(health.build) * 1000).toLocaleString()} mono />
             <InfoTile label="AI 功能" value={health.features.ai ? "已配置" : "未配置"} good={health.features.ai} />
             <InfoTile label="复盘功能" value={health.features.reviews ? "可用" : "不可用"} good={health.features.reviews} />
