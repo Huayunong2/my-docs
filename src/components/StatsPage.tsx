@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { MouseEvent } from "react";
 import { motion } from "framer-motion";
-import { Activity, BarChart3, BookOpenText, CalendarCheck, CalendarDays, CalendarRange, CheckCircle2, Clock, FileText, Heart, LineChart, LoaderCircle, PencilLine, ShieldCheck, Sparkles, Target, TrendingUp, Trophy } from "lucide-react";
+import { Activity, BarChart3, BookOpenText, CalendarCheck, CalendarDays, CalendarRange, CheckCircle2, CircleHelp, Clock, Coffee, FileText, Heart, HeartPulse, LineChart, LoaderCircle, PencilLine, Plane, ShieldCheck, Sparkles, Target, TrendingUp, Trophy, Umbrella } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import * as api from "../lib/api";
 import type { MonthDayStats, Review, ReviewKind, StatsOverview, WeekReview } from "../lib/api";
@@ -42,7 +42,7 @@ function todayDate(): string {
 }
 
 const weekdays = ["日", "一", "二", "三", "四", "五", "六"];
-const exemptionReasons = ["请假", "放假", "生病", "出差", "休息", "其他"];
+const exemptionReasons = ["休息", "请假", "生病", "出差"];
 type GenerationStep = "idle" | "collecting" | "requesting" | "saving";
 type StatTone = "accent" | "green" | "amber" | "gray" | "rose" | "sky";
 
@@ -129,6 +129,12 @@ export default function StatsPage({
     () => Object.entries(overview?.mood_counts || {}).sort((a, b) => b[1] - a[1]),
     [overview?.mood_counts]
   );
+  const moodDisplayLimit = moodEntries.length > 12 ? 11 : 12;
+  const visibleMoodEntries = moodEntries.slice(0, moodDisplayLimit);
+  const hiddenMoodCount = Math.max(0, moodEntries.length - visibleMoodEntries.length);
+  const moodColumnCount = Math.min(6, Math.max(1, moodEntries.length));
+  const compactMood = moodEntries.length > 6;
+  const denseMood = moodEntries.length > 12;
   const missingDays = weekReview?.missing_days || [];
   const visibleMissingDays = expandedMissingDays ? missingDays : missingDays.slice(0, 5);
   const monthHighlights = [
@@ -336,7 +342,7 @@ export default function StatsPage({
           label="连续覆盖"
           value={loading ? "..." : `${overview?.current_streak || 0} 天`}
           meta={overview?.streak_exempted_days ? `含 ${overview.streak_exempted_days} 天豁免` : "不含豁免"}
-          tone="green"
+          tone="sky"
         />
         <StatCard icon={FileText} label="总字数" value={loading ? "..." : `${overview?.total_words || 0}`} tone="amber" />
         <StatCard
@@ -349,8 +355,8 @@ export default function StatsPage({
       </div>
 
       <div className="space-y-4 md:space-y-6">
-        <div className="grid items-stretch gap-4 xl:grid-cols-[minmax(0,1.55fr)_minmax(360px,0.85fr)]">
-        <section className="min-w-0 h-full">
+        <div className="grid items-start gap-4 xl:grid-cols-[minmax(0,1.55fr)_minmax(360px,0.85fr)]">
+        <section className="min-w-0 h-[644px] sm:h-[684px] xl:h-[724px]">
           <div className="ui-panel flex h-full flex-col overflow-hidden">
             <div className="flex items-center justify-between gap-3 px-3 sm:px-4 py-3 border-b border-gray-100 dark:border-gray-700">
               <div>
@@ -370,7 +376,7 @@ export default function StatsPage({
               </div>
             </div>
 
-            <div className="flex-1 flex flex-col p-2 sm:p-3 min-h-0">
+            <div className="flex min-h-0 flex-1 flex-col p-2 sm:p-3">
               <div className="grid grid-cols-7 gap-1 sm:gap-2 mb-1.5 shrink-0">
                 {weekdays.map((d) => (
                   <div key={d} className="text-center text-xs font-semibold text-gray-400 dark:text-gray-500 py-1.5 uppercase tracking-wider">
@@ -378,7 +384,10 @@ export default function StatsPage({
                   </div>
                 ))}
               </div>
-              <div className="grid grid-cols-7 gap-1 sm:gap-2 flex-1 min-h-0 overflow-hidden" style={{ gridAutoRows: "1fr" }}>
+              <div
+                data-calendar-grid="month"
+                className="grid min-h-0 flex-1 grid-cols-7 grid-rows-[repeat(6,minmax(0,1fr))] items-stretch gap-1 overflow-hidden sm:gap-2"
+              >
                 {calendarCells.map((day, i) => (
                   day ? (
                     <CalendarDay
@@ -389,25 +398,29 @@ export default function StatsPage({
                       onManageExemption={openExemptionMenu}
                     />
                   ) : (
-                    <div key={`blank-${i}`} className="rounded-lg bg-gray-50/40 dark:bg-white/[0.02] min-h-0" />
+                    <div key={`blank-${i}`} data-calendar-cell="blank" className="box-border h-full min-h-0 rounded-lg border border-transparent bg-gray-50/40 dark:bg-white/[0.02]" />
                   )
                 ))}
               </div>
             </div>
 
-            <div className="flex flex-wrap items-center gap-x-3 gap-y-1 px-3 sm:px-4 py-2 border-t border-gray-100 dark:border-gray-700 text-[11px] text-gray-400">
-              <LegendDot className="bg-accent" label="记录" />
-              <LegendDot className="bg-emerald-400" label="休息" />
-              <LegendDot className="bg-amber-400" label="请假" />
-              <LegendDot className="bg-rose-400" label="生病" />
-              <LegendDot className="bg-sky-400" label="出差" />
-              <LegendDot className="bg-gray-300 dark:bg-white/20" label="空缺" />
-              <span className="ml-auto">{writtenDays} 天记录 · {exemptedDays} 天豁免</span>
+            <div className="flex h-9 shrink-0 items-center border-t border-gray-100 px-2 dark:border-gray-700 sm:px-3">
+              <div className="flex min-w-0 flex-1 items-center gap-1.5 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+                <LegendDot className="bg-accent" label="记录" />
+                <LegendDot className="bg-emerald-400" label="休息" />
+                <LegendDot className="bg-amber-400" label="请假" />
+                <LegendDot className="bg-rose-400" label="生病" />
+                <LegendDot className="bg-sky-400" label="出差" />
+                <LegendDot className="bg-gray-300 dark:bg-white/20" label="空缺" />
+                <span className="ml-1 inline-flex h-6 shrink-0 items-center rounded-full border border-gray-100 bg-white/70 px-2 text-[11px] font-medium text-gray-500 dark:border-white/5 dark:bg-white/[0.04] dark:text-gray-400 sm:ml-auto">
+                  {writtenDays} 天记录 · {exemptedDays} 天豁免
+                </span>
+              </div>
             </div>
           </div>
         </section>
 
-          <section className="ui-panel flex h-full min-h-[720px] flex-col p-4 sm:p-5 xl:min-h-0">
+          <section className="ui-panel h-[644px] min-w-0 overflow-y-auto p-3 sm:h-[684px] sm:p-4 xl:h-[724px]">
             <div className="mb-4 flex items-start justify-between gap-3">
               <div>
                 <h3 className="flex items-center gap-2 text-sm font-semibold text-gray-700 dark:text-gray-200">
@@ -447,10 +460,10 @@ export default function StatsPage({
               <div className="grid grid-cols-2 gap-2 2xl:grid-cols-3">
                 <CompactMetric icon={CalendarCheck} label="覆盖" value={`${coveredDays}`} unit="天" tone="accent" />
                 <CompactMetric icon={Clock} label="剩余" value={`${remainingDays}`} unit="天" tone="gray" />
-                <CompactMetric icon={TrendingUp} label="连续" value={`${overview?.current_streak || 0}`} unit="天" tone="green" />
+                <CompactMetric icon={TrendingUp} label="连续" value={`${overview?.current_streak || 0}`} unit="天" tone="sky" />
                 <CompactMetric icon={FileText} label="记录" value={`${writtenDays}`} unit="天" tone="green" />
-                <CompactMetric icon={ShieldCheck} label="豁免" value={`${exemptedDays}`} unit="天" tone={exemptionMetricTone} />
-                <CompactMetric icon={Activity} label="日均" value={`${Math.round(overview?.avg_words || 0)}`} unit="字" tone="gray" />
+                <CompactMetric icon={ShieldCheck} label="豁免" value={`${exemptedDays}`} unit="天" tone="rose" />
+                <CompactMetric icon={Activity} label="日均" value={`${Math.round(overview?.avg_words || 0)}`} unit="字" tone="amber" />
               </div>
             </div>
 
@@ -511,31 +524,42 @@ export default function StatsPage({
               {moodEntries.length === 0 ? (
                 <p className="text-sm text-gray-400 dark:text-gray-400">本月还没有心情记录</p>
               ) : (
-                <div className="grid gap-2 sm:grid-cols-2">
-                  {moodEntries.map(([mood, count], index) => (
-                    <div key={mood} className="rounded-lg bg-gray-50 px-2.5 py-2 dark:bg-white/[0.04]">
-                      <div className="mb-1 flex items-center justify-between gap-2 text-xs">
-                        <span className="truncate text-gray-700 dark:text-gray-200">{mood}</span>
-                        <span className="text-gray-400 dark:text-gray-500">{count} 天</span>
-                      </div>
-                      <div className="h-1.5 overflow-hidden rounded-full bg-gray-100 dark:bg-gray-700">
-                        <div
-                          className={[
-                            "h-full rounded-full",
-                            index % 3 === 0 ? "bg-accent" : index % 3 === 1 ? "bg-emerald-500" : "bg-amber-500",
-                          ].join(" ")}
-                          style={{ width: `${(count / maxMoodCount) * 100}%` }}
-                        />
-                      </div>
-                    </div>
+                <div
+                  className="grid gap-1.5 overflow-hidden"
+                  style={{
+                    gridTemplateColumns: `repeat(${moodColumnCount}, minmax(0, 1fr))`,
+                    gridAutoRows: compactMood ? "32px" : "42px",
+                    maxHeight: compactMood ? "70px" : "42px",
+                  }}
+                >
+                  {visibleMoodEntries.map(([mood, count], index) => (
+                    <MoodMetric
+                      key={mood}
+                      mood={mood}
+                      count={count}
+                      ratio={(count / maxMoodCount) * 100}
+                      colorClass={moodColorClass(index)}
+                      compact={compactMood}
+                      dense={denseMood}
+                    />
                   ))}
+                  {hiddenMoodCount > 0 && (
+                    <div className="flex h-full min-h-0 items-center justify-center rounded-lg bg-gray-50 px-2 text-center text-xs font-medium text-gray-400 dark:bg-white/[0.04] dark:text-gray-500">
+                      +{hiddenMoodCount}
+                    </div>
+                  )}
                 </div>
               )}
             </div>
             
             <button
               onClick={() => onEditDate(today)}
-              className="mt-4 w-full h-10 rounded-lg bg-accent text-white text-sm font-medium hover:bg-accent-hover transition-colors"
+              className={[
+                "h-10 w-full rounded-lg bg-accent text-sm font-medium text-white transition-colors hover:bg-accent-hover",
+                moodEntries.length == 0 ? "mt-16" :
+                moodEntries.length > 0 && moodEntries.length <= 6 ? "mt-11" : 
+                "mt-4",
+              ].join(" ")}
             >
               <span className="inline-flex items-center justify-center gap-1.5">
                 <PencilLine size={15} /> 编辑今天
@@ -709,6 +733,7 @@ export default function StatsPage({
             <div className="grid grid-cols-2 gap-2">
               {exemptionReasons.map((reason) => {
                 const tone = getExemptionTone(reason);
+                const ReasonIcon = getExemptionIcon(reason);
                 const selected = exemptionTarget.exemption?.reason === reason;
                 return (
                   <button
@@ -716,12 +741,13 @@ export default function StatsPage({
                     disabled={savingExemption}
                     onClick={() => saveExemption(reason)}
                     className={[
-                      "h-10 rounded-lg border text-sm font-semibold transition-colors disabled:opacity-60",
+                      "inline-flex h-10 items-center justify-center gap-1.5 rounded-lg border text-sm font-semibold transition-colors disabled:opacity-60",
                       selected
                         ? tone.solid
                         : tone.option,
                     ].join(" ")}
                   >
+                    <ReasonIcon size={15} />
                     {reason}
                   </button>
                 );
@@ -772,6 +798,7 @@ function CalendarDay({
   const words = Math.min(100, Math.max(8, Math.round(day.word_count / 8)));
   const canManageExemption = !day.has_article;
   const exemptionTone = getExemptionTone(day.exemption?.reason);
+  const ExemptionIcon = getExemptionIcon(day.exemption?.reason);
   const openExemption = (e: MouseEvent) => {
     e.preventDefault();
     e.stopPropagation();
@@ -779,6 +806,7 @@ function CalendarDay({
   };
   return (
     <div
+      data-calendar-cell="day"
       role="button"
       tabIndex={0}
       onClick={() => onEditDate(day.date)}
@@ -788,53 +816,58 @@ function CalendarDay({
       onContextMenu={openExemption}
       title={day.title || day.exemption?.reason || day.date}
       className={[
-        "group relative min-h-0 overflow-hidden rounded-lg border p-1.5 text-left transition-all sm:p-2",
+        "group relative box-border h-full min-h-0 overflow-hidden rounded-lg border text-left transition-all",
         "focus:outline-none focus:ring-2 focus:ring-accent/30",
         day.has_article
           ? "border-accent/30 bg-accent-light/80 dark:bg-accent-light/20 hover:border-accent hover:shadow-sm"
           : day.exemption
             ? `${exemptionTone.card} ${exemptionTone.hover}`
             : "border-gray-100 dark:border-gray-700 bg-white dark:bg-gray-800/20 hover:bg-gray-50 dark:hover:bg-gray-700/30",
-        isToday ? "ring-2 ring-amber-300 dark:ring-amber-500/60" : "",
+        isToday ? "ring-2 ring-inset ring-amber-300 dark:ring-amber-500/60" : "",
       ].join(" ")}
     >
-      <div className="flex items-center justify-between gap-1">
-        <span className={[
-          "inline-flex h-5 min-w-5 items-center justify-center rounded-md px-1 font-semibold text-xs",
-          day.has_article ? "bg-white/80 text-accent dark:bg-gray-900/30" : "text-gray-400 dark:text-gray-500"
-        ].join(" ")}>
-          {dateNum}
-        </span>
-        <span className="flex items-center gap-0.5">
-          {day.mood && <span className="text-xs leading-none">{day.mood}</span>}
-          {canManageExemption && (
-            <button type="button" onClick={openExemption}
-              className="inline-flex h-5 w-5 items-center justify-center rounded-md text-gray-300 hover:bg-gray-100 hover:text-gray-500 dark:text-gray-600 dark:hover:bg-gray-700 dark:hover:text-gray-300"
-              title="豁免原因"><ShieldCheck size={11} /></button>
-          )}
-        </span>
-      </div>
+      <span className={[
+        "absolute left-1.5 top-1.5 z-10 inline-flex h-5 min-w-5 items-center justify-center rounded-md px-1 text-xs font-semibold sm:left-2 sm:top-2",
+        day.has_article ? "bg-white/80 text-accent dark:bg-gray-900/30" : "text-gray-400 dark:text-gray-500"
+      ].join(" ")}>
+        {dateNum}
+      </span>
 
-      <div className="mt-1 sm:mt-2 flex-1 flex flex-col justify-end min-h-0 overflow-hidden">
-        {day.has_article ? (
-          <>
-            <div className="h-1 sm:h-1.5 rounded-full bg-white/80 dark:bg-gray-700 overflow-hidden mb-1 shrink-0">
-              <div className="h-full rounded-full bg-emerald-500" style={{ width: `${words}%` }} />
-            </div>
-            <div className="text-[10px] text-gray-500 dark:text-gray-400 leading-none truncate">{day.word_count} 字</div>
-          </>
-        ) : day.exemption ? (
-          <div className="flex justify-center">
-            <span className={`inline-flex items-center truncate rounded-full px-1.5 py-0.5 text-[10px] font-medium ${exemptionTone.pill}`}>
-              {day.exemption.reason}
-            </span>
-          </div>
-        ) : (
-          <div className="flex items-center justify-center text-gray-300 dark:text-gray-600 group-hover:text-gray-400">
-            <PencilLine size={12} />
-          </div>
+      <span className="absolute right-1.5 top-1.5 z-20 flex items-center gap-0.5 sm:right-2 sm:top-2">
+        {day.has_article && (
+          <span className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-md bg-white/70 text-accent dark:bg-gray-900/30">
+            <FileText size={11} />
+          </span>
         )}
-      </div>
+        {canManageExemption && (
+          <button type="button" onClick={openExemption}
+            className="inline-flex h-5 w-5 items-center justify-center rounded-md text-gray-300 hover:bg-gray-100 hover:text-gray-500 dark:text-gray-600 dark:hover:bg-gray-700 dark:hover:text-gray-300"
+            title="豁免原因"><ExemptionIcon size={12} /></button>
+        )}
+      </span>
+
+      {day.has_article ? (
+        <div className="absolute inset-x-1.5 bottom-1.5 sm:inset-x-2 sm:bottom-2">
+          <div className="mb-1 h-1 overflow-hidden rounded-full bg-white/80 dark:bg-gray-700 sm:h-1.5">
+            <div className="h-full rounded-full bg-emerald-500" style={{ width: `${words}%` }} />
+          </div>
+          <div className="flex items-center justify-between gap-1 text-[10px] leading-none text-gray-500 dark:text-gray-400">
+            <span className="truncate">{day.word_count} 字</span>
+            {day.mood && <span className="shrink-0">{day.mood}</span>}
+          </div>
+        </div>
+      ) : day.exemption ? (
+        <div className="absolute inset-x-1.5 top-1/2 flex -translate-y-1/2 justify-center sm:inset-x-2">
+          <span className={`inline-flex max-w-full items-center gap-1 truncate rounded-full px-1.5 py-0.5 text-[10px] font-medium ${exemptionTone.pill}`}>
+            <ExemptionIcon size={12} />
+            {day.exemption.reason}
+          </span>
+        </div>
+      ) : (
+        <div className="pointer-events-none absolute inset-0 flex items-center justify-center text-gray-300 dark:text-gray-600 group-hover:text-gray-400">
+          <PencilLine size={12} />
+        </div>
+      )}
     </div>
   );
 }
@@ -890,6 +923,25 @@ function getExemptionToneName(reason?: string): StatTone {
   if (reason === "出差") return "sky";
   if (reason) return "amber";
   return "gray";
+}
+
+function getExemptionIcon(reason?: string): LucideIcon {
+  if (reason === "休息" || reason === "放假") return Coffee;
+  if (reason === "生病") return HeartPulse;
+  if (reason === "出差") return Plane;
+  if (reason === "请假") return Umbrella;
+  return CircleHelp;
+}
+
+function moodColorClass(index: number) {
+  return [
+    "bg-accent",
+    "bg-emerald-500",
+    "bg-amber-500",
+    "bg-sky-500",
+    "bg-rose-500",
+    "bg-violet-500",
+  ][index % 6];
 }
 
 function ReviewPanel({
@@ -1211,6 +1263,52 @@ function CompactMetric({
   );
 }
 
+function MoodMetric({
+  mood,
+  count,
+  ratio,
+  colorClass,
+  compact,
+  dense,
+}: {
+  mood: string;
+  count: number;
+  ratio: number;
+  colorClass: string;
+  compact: boolean;
+  dense: boolean;
+}) {
+  if (dense) {
+    return (
+      <div className="flex h-full min-h-0 items-center justify-between gap-1 rounded-lg bg-gray-50 px-2 dark:bg-white/[0.04]">
+        <span className="truncate text-sm leading-none">{mood}</span>
+        <span className="shrink-0 text-[11px] font-medium text-gray-400 dark:text-gray-500">{count} 天</span>
+      </div>
+    );
+  }
+
+  if (compact) {
+    return (
+      <div className="flex h-full min-h-0 items-center justify-between gap-1 rounded-lg bg-gray-50 px-2 dark:bg-white/[0.04]">
+        <span className="truncate text-sm leading-none">{mood}</span>
+        <span className="shrink-0 text-[11px] font-medium text-gray-400 dark:text-gray-500">{count} 天</span>
+      </div>
+    );
+  }
+
+  return (
+    <div className="h-full min-h-0 rounded-lg bg-gray-50 px-2 py-1.5 dark:bg-white/[0.04]">
+      <div className="mb-1 flex items-center justify-between gap-2">
+        <span className="truncate text-sm leading-none">{mood}</span>
+        <span className="shrink-0 text-[11px] font-medium text-gray-400 dark:text-gray-500">{count} 天</span>
+      </div>
+      <div className="h-1.5 overflow-hidden rounded-full bg-gray-100 dark:bg-gray-700">
+        <div className={`h-full rounded-full ${colorClass}`} style={{ width: `${ratio}%` }} />
+      </div>
+    </div>
+  );
+}
+
 function MonthHighlightCard({
   icon: Icon,
   label,
@@ -1247,8 +1345,8 @@ function InfoRow({ label, value }: { label: string; value: string }) {
 
 function LegendDot({ className, label }: { className: string; label: string }) {
   return (
-    <span className="inline-flex items-center gap-1.5 text-[11px] text-gray-400 dark:text-gray-500">
-      <span className={`h-2 w-2 rounded-full ${className}`} />
+    <span className="inline-flex h-6 shrink-0 items-center gap-1.5 rounded-full border border-gray-100 bg-white/70 px-2 text-[11px] font-medium text-gray-500 dark:border-white/5 dark:bg-white/[0.04] dark:text-gray-400">
+      <span className={`h-1.5 w-1.5 shrink-0 rounded-full shadow-sm ${className}`} />
       {label}
     </span>
   );
