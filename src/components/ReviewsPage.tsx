@@ -94,7 +94,7 @@ export default function ReviewsPage() {
     const drafts = filtered.filter((review) => review.status === "draft").length;
     const confirmed = filtered.filter((review) => review.status === "confirmed").length;
     const currentMonthWeeklyDrafts = filtered.filter(
-      (review) => review.kind === "weekly" && review.period_start.startsWith(currentMonth) && review.status === "draft"
+      (review) => review.kind === "weekly" && majorityMonth(review.period_start, review.period_end) === currentMonth && review.status === "draft"
     ).length;
     const latest = filtered
       .map((review) => review.generated_at)
@@ -583,6 +583,27 @@ function countJsonItems(raw: string) {
   }
 }
 
+function majorityMonth(start: string, end: string): string {
+  const s = new Date(start + "T00:00:00");
+  const e = new Date(end + "T00:00:00");
+  const counts = new Map<string, number>();
+  const d = new Date(s);
+  while (d <= e) {
+    const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+    counts.set(key, (counts.get(key) || 0) + 1);
+    d.setDate(d.getDate() + 1);
+  }
+  let best = start.slice(0, 7);
+  let bestCount = 0;
+  for (const [month, count] of counts) {
+    if (count > bestCount) {
+      best = month;
+      bestCount = count;
+    }
+  }
+  return best;
+}
+
 function groupReviewsByMonth(reviews: Review[]): MonthGroup[] {
   const periodMap = new Map<string, Review[]>();
   for (const review of reviews) {
@@ -595,7 +616,7 @@ function groupReviewsByMonth(reviews: Review[]): MonthGroup[] {
     const sorted = [...versions].sort((a, b) => b.version - a.version);
     const current = sorted.find((review) => review.status === "confirmed") || sorted[0];
     const orderedVersions = [current, ...sorted.filter((review) => review.id !== current.id)];
-    const month = current.period_start.slice(0, 7);
+    const month = majorityMonth(current.period_start, current.period_end);
     const period: PeriodGroup = {
       key,
       kind: current.kind,
