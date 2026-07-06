@@ -372,17 +372,60 @@ pub(crate) fn load_monthly_review_source(
         let end = parse_date(&review.period_end)?;
         let month_start = parse_date(from)?;
         let month_end = parse_date(to)?;
+
+        // Count days in this month vs total week days
+        let mut days_in_month = 0i64;
+        let mut days_total = 0i64;
+        let mut d = start;
+        while d <= end {
+            days_total += 1;
+            if d >= month_start && d <= month_end { days_in_month += 1; }
+            d = d + chrono::Duration::days(1);
+        }
+        let is_cross_month = days_in_month < days_total;
+
         let mut date = start.max(month_start);
         while date <= end.min(month_end) {
             covered_dates.insert(format_date(date));
             date = date + chrono::Duration::days(1);
         }
         ids.push(review.id.clone());
+        let clip_start = format_date_short(start.max(month_start));
+        let clip_end = format_date_short(end.min(month_end));
+        let note = if is_cross_month {
+            let is_primary = days_in_month > days_total / 2;
+            let weight = if is_primary { "高" } else { "低" };
+            let role = if is_primary {
+                let position = if start < month_start {
+                    "第一周"
+                } else {
+                    "最后一周"
+                };
+                format!("主体归属本月，作为本月{position}主体复盘")
+            } else {
+                format!(
+                    "主体归属相邻月份，仅用于补足本月 {} 天（{}–{}），非本月主体复盘",
+                    days_in_month, clip_start, clip_end
+                )
+            };
+            format!(
+                "（跨月周复盘：本周共 {total} 天，本月覆盖 {in_month} 天（{clip_start}–{clip_end}）。归属：{role}。参考权重：{weight}。统计规则：只提取本月日期内容，不使用非本月内容。）",
+                total = days_total,
+                in_month = days_in_month,
+                clip_start = clip_start,
+                clip_end = clip_end,
+                role = role,
+                weight = weight,
+            )
+        } else {
+            String::new()
+        };
         parts.push(format!(
-            "## {} 至 {} · v{}\n标题：{}\n内容：\n{}",
-            review.period_start,
-            review.period_end,
+            "## {}–{} · v{}{}\n标题：{}\n内容：\n{}",
+            format_date_short(start),
+            format_date_short(end),
             review.version,
+            note,
             review.title,
             truncate_chars(&review.content, 12000),
         ));
@@ -648,7 +691,11 @@ pub(crate) async fn generate_review(
         format!(
             r#"下面是过去一个月的周复盘，以及可能未被周复盘覆盖的每日记录摘要。请直接输出一份适合复习的 Markdown 月度沉淀文档。不要编造，只说材料里真实存在的东西。目标是以后回看时能恢复本月学习/项目/决策脉络，而不是生成空泛总结。
 
-处理材料时，周复盘用于提供主题脉络，每日记录用于补充具体事实和技术细节。若周复盘和每日记录重复，不要重复写两遍；以每日记录补充细节，以周复盘把握整体结构。不得因为周复盘已有总结而忽略每日记录中的具体技术点；周复盘没有覆盖到的每日记录内容，需要主动整理进时间线、概念工具或可复用沉淀中。
+处理材料时，周复盘用于提供主题脉络，每日记录用于补充具体事实和技术细节。注意：材料中周复盘标题旁的括号标注（如"跨月周复盘：本周共…"）是处理指令，不要复制到输出正文中。
+
+权重规则（必须遵守）：部分周复盘标注了"参考权重：高"或"参考权重：低"。标有"参考权重：低"的周复盘只覆盖本月少数几天（≤3 天），仅用于补足时间线细节，不要让它的结构和结论主导本月主题、可复用沉淀或反复出现的主题。标有"参考权重：高"的周复盘覆盖本月大部分天数，可以作为本月主体结构参考。
+
+去重规则（硬约束）：同一日期、同一主题、同一任务只总结一次。若周复盘已归纳过某事项，月复盘沿用周复盘的归纳表达，不再从每日记录中单独提取同一事项。每日记录仅用于补充周复盘未覆盖的日期，或补充周复盘中未涉及的细节。不得因为周复盘已有总结而忽略每日记录中的具体技术点；周复盘没有覆盖到的每日记录内容，需要主动整理进时间线、概念工具或可复用沉淀中。
 
 必须使用下面的 Markdown 结构，不要输出 JSON，不要包裹代码块：
 ## {title}
