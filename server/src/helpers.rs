@@ -258,6 +258,9 @@ pub(crate) fn valid_review_status(status: &str) -> bool {
 pub(crate) fn format_date(date: NaiveDate) -> String {
     date.format("%Y-%m-%d").to_string()
 }
+pub(crate) fn format_date_short(date: NaiveDate) -> String {
+    date.format("%m.%d").to_string()
+}
 pub(crate) fn review_period(
     kind: &str,
     anchor: NaiveDate,
