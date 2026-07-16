@@ -45,3 +45,15 @@ jobs:
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           working-directory: server
+
+  desktop-security-audit:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      checks: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: rustsec/audit-check@69366f33c96575abad1ee0dba8212993eecbe998 # v2.0.0
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          working-directory: src-tauri
