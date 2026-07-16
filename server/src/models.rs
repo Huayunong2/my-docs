@@ -1,4 +1,4 @@
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use std::collections::BTreeMap;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -145,6 +145,7 @@ pub(crate) struct CreateArticlePayload {
     pub(crate) title: String,
     pub(crate) content: String,
     pub(crate) mood: String,
+    #[serde(default, deserialize_with = "deserialize_optional_tags")]
     pub(crate) tags: Option<Vec<String>>,
 }
 
@@ -153,7 +154,67 @@ pub(crate) struct UpdateArticlePayload {
     pub(crate) title: String,
     pub(crate) content: String,
     pub(crate) mood: String,
+    #[serde(default, deserialize_with = "deserialize_optional_tags")]
     pub(crate) tags: Option<Vec<String>>,
+}
+
+fn deserialize_optional_tags<'de, D>(deserializer: D) -> Result<Option<Vec<String>>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum TagsInput {
+        List(Vec<String>),
+        Json(String),
+    }
+
+    match Option::<TagsInput>::deserialize(deserializer)? {
+        None => Ok(None),
+        Some(TagsInput::List(tags)) => Ok(Some(tags)),
+        Some(TagsInput::Json(tags)) => serde_json::from_str::<Vec<String>>(&tags)
+            .map(Some)
+            .map_err(serde::de::Error::custom),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{CreateArticlePayload, UpdateArticlePayload};
+
+    #[test]
+    fn update_article_payload_accepts_legacy_json_encoded_tags() {
+        let payload: UpdateArticlePayload = serde_json::from_value(serde_json::json!({
+            "title": "标题",
+            "content": "编辑后的正文",
+            "mood": "",
+            "tags": "[]"
+        }))
+        .expect("legacy clients encode tags as a JSON string");
+
+        assert_eq!(payload.tags, Some(Vec::new()));
+    }
+
+    #[test]
+    fn article_payloads_keep_accepting_tag_arrays() {
+        let create: CreateArticlePayload = serde_json::from_value(serde_json::json!({
+            "date": "2026-07-16",
+            "title": "标题",
+            "content": "正文",
+            "mood": "",
+            "tags": ["工作", "Rust"]
+        }))
+        .expect("current clients send tags as an array");
+        let update: UpdateArticlePayload = serde_json::from_value(serde_json::json!({
+            "title": "标题",
+            "content": "正文",
+            "mood": ""
+        }))
+        .expect("tags remain optional");
+
+        assert_eq!(create.tags, Some(vec!["工作".into(), "Rust".into()]));
+        assert_eq!(update.tags, None);
+    }
 }
 
 #[derive(Debug, Deserialize)]
