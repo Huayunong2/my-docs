@@ -250,12 +250,10 @@ impl Database {
         Ok(())
     }
 
-    pub(crate) fn quick_check(&self) -> Result<String> {
-        self.conn
-            .query_row("PRAGMA quick_check", [], |row| row.get(0))
-    }
-
     pub(crate) fn verify_file(path: &std::path::Path) -> std::result::Result<(), String> {
+        // FTS5 participates in integrity_check through an internal write-style
+        // validation command, so SQLite requires a read-write handle even though
+        // this operation does not change application rows.
         let conn = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_WRITE)
             .map_err(|error| error.to_string())?;
         let integrity: String = conn

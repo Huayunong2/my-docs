@@ -1,6 +1,4 @@
-use crate::ai_client::{
-    complete_with_retry, record_ai_failure, record_ai_success, HttpAiAdapter,
-};
+use crate::ai_client::{complete_with_retry, record_ai_failure, record_ai_success, HttpAiAdapter};
 use crate::db::{Database, ReviewDraft};
 use crate::helpers::*;
 use crate::models::*;

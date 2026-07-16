@@ -20,6 +20,7 @@ BACKUP_ENV_FILE="${BACKUP_ENV_FILE:-$APP_DIR/server/.env.backup}"
 SERVER_BIN="$APP_DIR/server/target/release/daily-summary"
 OPS_SCRIPT="$APP_DIR/ops.sh"
 DEPLOY_TARGET_DIR="${DEPLOY_TARGET_DIR:-$APP_DIR/server/target/deploy-build}"
+MAINTENANCE_JOURNAL="${MAINTENANCE_JOURNAL:-$APP_DIR/server/target/$SERVICE_NAME-maintenance-rollback}"
 BOOTSTRAP=0
 FORCE_DEPS=0
 FORCE_SYSTEMD=0
@@ -41,6 +42,8 @@ UNIT_WAS_ENABLED=0
 CADDY_SWAPPED=0
 CADDY_HAD_PREVIOUS=0
 CADDY_WAS_ENABLED=0
+MAINTENANCE_SWAPPED=0
+DEPLOY_COMMITTED=0
 LOCK_DIR=""
 LOCK_DIR_HELD=0
 BUILD_ID=""
@@ -79,6 +82,40 @@ backup_configured() {
   [ -f "$BACKUP_ENV_FILE" ] \
     && grep -q '^RESTIC_REPOSITORY=.' "$BACKUP_ENV_FILE" \
     && grep -Eq '^RESTIC_PASSWORD(_FILE)?=.' "$BACKUP_ENV_FILE"
+}
+
+secure_secret_file() {
+  local path="$1"
+  local label="$2"
+  [ -f "$path" ] || { echo "ERROR: $label not found: $path" >&2; return 1; }
+  local owner mode
+  owner="$(stat -c '%u' "$path")" || return 1
+  [ "$owner" = "$(id -u)" ] || {
+    echo "ERROR: $label must be owned by $(id -un): $path" >&2
+    return 1
+  }
+  chmod 600 "$path" || return 1
+  mode="$(stat -c '%a' "$path")" || return 1
+  (( (8#$mode & 8#177) == 0 )) || {
+    echo "ERROR: $label permissions must not exceed 0600: $path" >&2
+    return 1
+  }
+  [ -r "$path" ] || { echo "ERROR: $label is not readable: $path" >&2; return 1; }
+}
+
+validate_backup_secrets() {
+  [ -f "$BACKUP_ENV_FILE" ] || return 0
+  secure_secret_file "$BACKUP_ENV_FILE" "Backup environment file" || return 1
+  local password_file
+  password_file="$(bash -c 'source "$1"; printf "%s" "${RESTIC_PASSWORD_FILE:-}"' _ "$BACKUP_ENV_FILE")" \
+    || return 1
+  if [ -n "$password_file" ]; then
+    [[ "$password_file" = /* ]] || {
+      echo "ERROR: RESTIC_PASSWORD_FILE must be an absolute path" >&2
+      return 1
+    }
+    secure_secret_file "$password_file" "Restic password file" || return 1
+  fi
 }
 
 usage() {
@@ -495,6 +532,12 @@ require_systemd() {
   has_cmd systemctl || fail "Safe automatic activation requires systemd. Stop any manual server and deploy artifacts manually on this host."
 }
 
+recover_interrupted_restore() {
+  [ -x "$OPS_SCRIPT" ] || fail "Operations script is missing or not executable: $OPS_SCRIPT"
+  "$OPS_SCRIPT" recover-restore --startup
+  record_step "restore journal checked"
+}
+
 build_app() {
   cd "$APP_DIR"
 
@@ -527,8 +570,13 @@ build_app() {
 
 cleanup_stage() {
   local status=$?
-  if [ "$ACTIVATED" = "1" ]; then
-    rollback_activation || true
+  if [ "$DEPLOY_COMMITTED" != "1" ]; then
+    if [ "$MAINTENANCE_SWAPPED" = "1" ]; then
+      rollback_maintenance_units || true
+    fi
+    if [ "$ACTIVATED" = "1" ]; then
+      rollback_activation || true
+    fi
   fi
   if [ -n "$STAGE_DIR" ] && [ -d "$STAGE_DIR" ]; then
     rm -rf "$STAGE_DIR"
@@ -668,6 +716,7 @@ Type=simple
 User=$(id -un)
 WorkingDirectory=$APP_DIR/server
 EnvironmentFile=$ENV_FILE
+ExecStartPre=$OPS_SCRIPT recover-restore --startup
 ExecStart=$SERVER_BIN
 Restart=always
 RestartSec=3
@@ -692,6 +741,7 @@ Type=oneshot
 User=$(id -un)
 WorkingDirectory=$APP_DIR
 Environment=HOME=$HOME
+Environment=DAILY_SUMMARY_LOCK_WAIT_SECONDS=600
 ExecStart=$OPS_SCRIPT offsite-backup
 UMask=0077
 NoNewPrivileges=true
@@ -729,6 +779,7 @@ Type=oneshot
 User=$(id -un)
 WorkingDirectory=$APP_DIR
 Environment=HOME=$HOME
+Environment=DAILY_SUMMARY_LOCK_WAIT_SECONDS=1800
 ExecStart=$OPS_SCRIPT verify-offsite
 UMask=0077
 NoNewPrivileges=true
@@ -792,49 +843,142 @@ systemd_unit_path() {
   echo "/etc/systemd/system/$SERVICE_NAME.service"
 }
 
-write_managed_unit() {
-  local name="$1"
-  local renderer="$2"
-  local path="/etc/systemd/system/$name"
-  local desired current
-  desired="$(mktemp)"
-  current="$(mktemp)"
-  "$renderer" >"$desired"
-  if $SUDO test -f "$path"; then
-    $SUDO cat "$path" >"$current"
+maintenance_unit_names() {
+  printf '%s\n' \
+    "$SERVICE_NAME-backup.service" \
+    "$SERVICE_NAME-backup.timer" \
+    "$SERVICE_NAME-verify-backup.service" \
+    "$SERVICE_NAME-verify-backup.timer" \
+    "$SERVICE_NAME-monitor.service" \
+    "$SERVICE_NAME-monitor.timer"
+}
+
+rollback_maintenance_units() {
+  [ "$MAINTENANCE_SWAPPED" = "1" ] || [ -d "$MAINTENANCE_JOURNAL" ] || return 0
+  [ -f "$MAINTENANCE_JOURNAL/unit-names" ] || return 1
+  local name path failed=0
+  while IFS= read -r name; do
+    path="/etc/systemd/system/$name"
+    if [ -f "$MAINTENANCE_JOURNAL/units/$name" ]; then
+      $SUDO install -m 0644 "$MAINTENANCE_JOURNAL/units/$name" "$path" || failed=1
+    else
+      $SUDO rm -f "$path" || failed=1
+    fi
+  done <"$MAINTENANCE_JOURNAL/unit-names"
+  $SUDO systemctl daemon-reload || failed=1
+  while IFS= read -r name; do
+    if [ -f "$MAINTENANCE_JOURNAL/enabled/$name" ]; then
+      $SUDO systemctl enable "$name" >/dev/null 2>&1 || failed=1
+    else
+      if [ -f "$MAINTENANCE_JOURNAL/units/$name" ]; then
+        $SUDO systemctl disable "$name" >/dev/null 2>&1 || failed=1
+      else
+        $SUDO systemctl disable "$name" >/dev/null 2>&1 || true
+      fi
+    fi
+  done <"$MAINTENANCE_JOURNAL/unit-names"
+  while IFS= read -r name; do
+    if [ -f "$MAINTENANCE_JOURNAL/active/$name" ]; then
+      $SUDO systemctl start "$name" >/dev/null 2>&1 || failed=1
+    else
+      if [ -f "$MAINTENANCE_JOURNAL/units/$name" ]; then
+        $SUDO systemctl stop "$name" >/dev/null 2>&1 || failed=1
+      else
+        $SUDO systemctl stop "$name" >/dev/null 2>&1 || true
+      fi
+    fi
+  done <"$MAINTENANCE_JOURNAL/unit-names"
+  [ "$failed" = "0" ] || return 1
+  rm -rf "$MAINTENANCE_JOURNAL" || return 1
+  sync -f "$(dirname "$MAINTENANCE_JOURNAL")" 2>/dev/null || true
+  MAINTENANCE_SWAPPED=0
+}
+
+recover_maintenance_units() {
+  [ -d "$MAINTENANCE_JOURNAL" ] || return 0
+  if grep -qx committed "$MAINTENANCE_JOURNAL/phase" 2>/dev/null; then
+    rm -rf "$MAINTENANCE_JOURNAL" || fail "Could not finalize committed maintenance-unit journal"
+    record_step "maintenance unit journal finalized"
+    return 0
   fi
-  if ! cmp -s "$desired" "$current"; then
-    $SUDO tee "$path" <"$desired" >/dev/null
-    MAINTENANCE_UNITS_CHANGED=1
-  fi
-  rm -f "$desired" "$current"
+  info "Recovering interrupted maintenance-unit activation"
+  MAINTENANCE_SWAPPED=1
+  rollback_maintenance_units || fail "Maintenance units could not be recovered; journal retained at $MAINTENANCE_JOURNAL"
+  record_step "maintenance units recovered"
+}
+
+commit_maintenance_units() {
+  [ "$MAINTENANCE_SWAPPED" = "1" ] || return 0
+  printf 'committed\n' >"$MAINTENANCE_JOURNAL/phase" || return 1
+  sync -f "$MAINTENANCE_JOURNAL" 2>/dev/null || true
+}
+
+finalize_maintenance_units() {
+  [ "$MAINTENANCE_SWAPPED" = "1" ] || return 0
+  rm -rf "$MAINTENANCE_JOURNAL" || return 1
+  sync -f "$(dirname "$MAINTENANCE_JOURNAL")" 2>/dev/null || true
+  MAINTENANCE_SWAPPED=0
 }
 
 configure_maintenance_units() {
-  [ -x "$OPS_SCRIPT" ] || fail "Operations script is missing or not executable: $OPS_SCRIPT"
-  if [ -f "$BACKUP_ENV_FILE" ]; then
-    chmod 600 "$BACKUP_ENV_FILE" || true
-  fi
+  [ -x "$OPS_SCRIPT" ] || return 1
+  validate_backup_secrets || return 1
   if backup_configured && ! has_cmd restic; then
-    fail "Offsite backup is configured but restic is missing. Re-run with --bootstrap or --force-deps."
+    echo "ERROR: Offsite backup is configured but restic is missing. Re-run with --bootstrap or --force-deps." >&2
+    return 1
   fi
 
-  MAINTENANCE_UNITS_CHANGED=0
-  write_managed_unit "$SERVICE_NAME-backup.service" render_backup_service_file
-  write_managed_unit "$SERVICE_NAME-backup.timer" render_backup_timer_file
-  write_managed_unit "$SERVICE_NAME-verify-backup.service" render_verify_service_file
-  write_managed_unit "$SERVICE_NAME-verify-backup.timer" render_verify_timer_file
-  write_managed_unit "$SERVICE_NAME-monitor.service" render_monitor_service_file
-  write_managed_unit "$SERVICE_NAME-monitor.timer" render_monitor_timer_file
-  if [ "$MAINTENANCE_UNITS_CHANGED" = "1" ]; then
-    $SUDO systemctl daemon-reload
+  local staged_dir="$STAGE_DIR/maintenance-units"
+  local journal_next="$STAGE_DIR/maintenance-rollback-journal"
+  mkdir -p "$staged_dir" || return 1
+  render_backup_service_file >"$staged_dir/$SERVICE_NAME-backup.service" || return 1
+  render_backup_timer_file >"$staged_dir/$SERVICE_NAME-backup.timer" || return 1
+  render_verify_service_file >"$staged_dir/$SERVICE_NAME-verify-backup.service" || return 1
+  render_verify_timer_file >"$staged_dir/$SERVICE_NAME-verify-backup.timer" || return 1
+  render_monitor_service_file >"$staged_dir/$SERVICE_NAME-monitor.service" || return 1
+  render_monitor_timer_file >"$staged_dir/$SERVICE_NAME-monitor.timer" || return 1
+  chmod 0644 "$staged_dir"/* || return 1
+  if has_cmd systemd-analyze; then
+    SYSTEMD_UNIT_PATH="$staged_dir:/etc/systemd/system:/usr/lib/systemd/system:/lib/systemd/system" \
+      systemd-analyze verify "$staged_dir"/* >/dev/null || return 1
   fi
-  $SUDO systemctl enable --now "$SERVICE_NAME-backup.timer" "$SERVICE_NAME-monitor.timer"
+
+  rm -rf "$journal_next" || return 1
+  mkdir -p "$journal_next/units" "$journal_next/enabled" "$journal_next/active" || return 1
+  maintenance_unit_names >"$journal_next/unit-names" || return 1
+  local name path
+  while IFS= read -r name; do
+    path="/etc/systemd/system/$name"
+    if $SUDO test -f "$path"; then
+      $SUDO cat "$path" >"$journal_next/units/$name" || return 1
+    fi
+    if $SUDO systemctl is-enabled --quiet "$name"; then
+      touch "$journal_next/enabled/$name" || return 1
+    fi
+    if $SUDO systemctl is-active --quiet "$name"; then
+      touch "$journal_next/active/$name" || return 1
+    fi
+  done < <(maintenance_unit_names)
+
+  printf 'prepared\n' >"$journal_next/phase" || return 1
+  chmod -R go-rwx "$journal_next" || return 1
+  mv "$journal_next" "$MAINTENANCE_JOURNAL" || return 1
+  sync -f "$(dirname "$MAINTENANCE_JOURNAL")" 2>/dev/null || true
+  MAINTENANCE_SWAPPED=1
+  while IFS= read -r name; do
+    $SUDO install -m 0644 "$staged_dir/$name" "/etc/systemd/system/$name" \
+      || { rollback_maintenance_units; return 1; }
+  done < <(maintenance_unit_names)
+  $SUDO systemctl daemon-reload || { rollback_maintenance_units; return 1; }
+  $SUDO systemctl enable --now "$SERVICE_NAME-backup.timer" "$SERVICE_NAME-monitor.timer" \
+    || { rollback_maintenance_units; return 1; }
   if backup_configured; then
-    $SUDO systemctl enable --now "$SERVICE_NAME-verify-backup.timer"
+    $SUDO systemctl enable --now "$SERVICE_NAME-verify-backup.timer" \
+      || { rollback_maintenance_units; return 1; }
     record_step "offsite backup verification timer enabled"
   else
-    $SUDO systemctl disable --now "$SERVICE_NAME-verify-backup.timer" >/dev/null 2>&1 || true
+    $SUDO systemctl disable --now "$SERVICE_NAME-verify-backup.timer" >/dev/null 2>&1 \
+      || { rollback_maintenance_units; return 1; }
     record_step "offsite backup awaiting configuration"
   fi
   record_step "backup and monitoring timers enabled"
@@ -1013,6 +1157,8 @@ trap cleanup_stage EXIT
 
 acquire_deploy_lock
 require_systemd
+recover_maintenance_units
+recover_interrupted_restore
 install_system_deps
 install_rust
 create_pre_upgrade_backup
@@ -1031,7 +1177,19 @@ if ! wait_for_health; then
 fi
 record_step "health check passed"
 configure_caddy_if_needed
-ACTIVATED=0
-configure_maintenance_units
+if ! configure_maintenance_units; then
+  rollback_activation
+  fail "Maintenance unit activation failed; previous application and units were restored"
+fi
 configure_firewall_if_needed
+if ! commit_maintenance_units; then
+  rollback_maintenance_units || true
+  rollback_activation
+  fail "Maintenance-unit transaction could not be committed; previous application and units were restored"
+fi
+DEPLOY_COMMITTED=1
+ACTIVATED=0
+if ! finalize_maintenance_units; then
+  record_step "committed maintenance journal will be finalized on the next setup"
+fi
 print_result
