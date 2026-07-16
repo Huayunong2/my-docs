@@ -7,6 +7,7 @@ import * as api from "../lib/api";
 import type { MonthDayStats, Review, ReviewKind, StatsOverview, WeekReview } from "../lib/api";
 import type { Page } from "../App";
 import { normalizeReviewContent } from "../lib/reviewContent";
+import { loadStatsSnapshot } from "../lib/statsSnapshot";
 import { ReviewStatusPill } from "./reviews/ReviewShared";
 
 function formatDate(d: Date): string {
@@ -87,6 +88,7 @@ export default function StatsPage({
   const [savingExemption, setSavingExemption] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const loadRevision = useRef(0);
 
   const bounds = useMemo(() => monthBounds(year, month), [year, month]);
   const selectedWeekBounds = useMemo(() => weekBounds(reviewWeekDate), [reviewWeekDate]);
@@ -154,42 +156,42 @@ export default function StatsPage({
   }, [bounds.offset, days]);
 
   const loadStats = useCallback(async (showLoading = true) => {
+    const revision = ++loadRevision.current;
     if (showLoading) setLoading(true);
     setError("");
     setReviewError("");
     try {
-      const [overviewRes, monthRes, weekRes] = await Promise.all([
-        api.getStatsOverview(bounds.first, bounds.last),
-        api.getMonthStats(year, month),
-        api.getWeekReview(today),
-      ]);
-      setOverview(overviewRes);
-      setDays(monthRes);
-      setWeekReview(weekRes);
+      const snapshot = await loadStatsSnapshot(api, {
+        year,
+        month,
+        monthFrom: bounds.first,
+        monthTo: bounds.last,
+        weekDate: reviewWeekDate,
+        weekFrom: selectedWeekBounds.first,
+        weekTo: selectedWeekBounds.last,
+      });
+      if (revision !== loadRevision.current) return;
+      setOverview(snapshot.overview);
+      setDays(snapshot.days);
+      setWeekReview(snapshot.week);
+      setWeeklyReviews(snapshot.weeklyReviews);
+      setMonthlyReviews(snapshot.monthlyReviews);
 
-      let weeklyReviewVersions: Review[] = [];
-      let monthlyReviewVersions: Review[] = [];
-      try {
-        [weeklyReviewVersions, monthlyReviewVersions] = await Promise.all([
-          api.listReviews("weekly", selectedWeekBounds.first, selectedWeekBounds.last),
-          api.listReviews("monthly", bounds.first, bounds.last),
-        ]);
-      } catch (reviewLoadError) {
+      if (snapshot.reviewError) {
+        const reviewLoadError = snapshot.reviewError;
         if (reviewLoadError instanceof api.ApiError && reviewLoadError.status === 404) {
           setReviewError("AI 复盘接口不存在：服务端可能还在运行旧版本。基础统计仍可使用，请更新并重启服务端。");
         } else {
           setReviewError(api.getErrorMessage(reviewLoadError));
         }
       }
-
-      setWeeklyReviews(weeklyReviewVersions);
-      setMonthlyReviews(monthlyReviewVersions);
     } catch (e: any) {
+      if (revision !== loadRevision.current) return;
       setError(api.getErrorMessage(e) || "加载统计失败");
     } finally {
-      if (showLoading) setLoading(false);
+      if (showLoading && revision === loadRevision.current) setLoading(false);
     }
-  }, [bounds.first, bounds.last, selectedWeekBounds.first, selectedWeekBounds.last, year, month, today]);
+  }, [bounds.first, bounds.last, selectedWeekBounds.first, selectedWeekBounds.last, year, month, reviewWeekDate]);
 
   useEffect(() => {
     loadStats();

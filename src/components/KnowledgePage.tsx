@@ -19,7 +19,7 @@ import {
 import * as api from "../lib/api";
 import type { Page } from "../App";
 import type { Article, KnowledgeCard, KnowledgeCardStatus, KnowledgeCardType } from "../lib/api";
-import { parseTags, stringifyTags } from "../lib/tags";
+import { normalizeTags } from "../lib/tags";
 import MarkdownContent from "./MarkdownContent";
 import { useConfirmDialog } from "./ui/Feedback";
 
@@ -63,7 +63,7 @@ function toDraft(card: KnowledgeCard): DraftState {
     status: card.status,
     title: card.title,
     content: card.content,
-    tagsText: parseTags(card.tags).join(", "),
+    tagsText: card.tags.join(", "),
     source_date: card.source_date,
     source_article_id: card.source_article_id,
     source_review_id: card.source_review_id,
@@ -77,7 +77,7 @@ function payloadFromDraft(draft: DraftState) {
     status: draft.status,
     title: draft.title.trim(),
     content: draft.content.trim(),
-    tags: stringifyTags(draft.tagsText.split(",").map((tag) => tag.trim()).filter(Boolean)),
+    tags: normalizeTags(draft.tagsText.split(",").map((tag) => tag.trim()).filter(Boolean)),
     source_date: draft.source_date.trim(),
     source_article_id: draft.source_article_id.trim(),
     source_review_id: draft.source_review_id.trim(),
@@ -469,7 +469,7 @@ export default function KnowledgePage({ onEditDate, onNavigate }: { onEditDate: 
                       <div className="mt-1 flex flex-wrap items-center gap-1.5 text-[11px] text-gray-400 dark:text-gray-500">
                         <span>{typeLabels[card.card_type]}</span>
                         {card.source_date && <span>· {card.source_date} · {card.source_review_id ? "AI 复盘" : "每日记录"}</span>}
-                        {parseTags(card.tags).slice(0, 2).map((tag) => <span key={tag}>#{tag}</span>)}
+                        {card.tags.slice(0, 2).map((tag) => <span key={tag}>#{tag}</span>)}
                       </div>
                     </div>
                   </div>

@@ -1,6 +1,7 @@
 import { useRef, useState } from "react";
 import { Download, FileArchive, FileJson, Upload } from "lucide-react";
 import * as api from "../../lib/api";
+import { normalizeTags, parseTags } from "../../lib/tags";
 import { Card, PrimaryBtn, SecondaryBtn, SectionTitle, StatusBox, type Tone } from "./shared";
 
 export default function ExportPanel() {
@@ -57,7 +58,8 @@ export default function ExportPanel() {
         // Plain article array
         const articles = (Array.isArray(data) ? data : [data]).map((item: any) => ({
           date: item.date || "", title: item.title || "", content: item.content || "",
-          mood: item.mood || "", tags: item.tags || "[]",
+          mood: item.mood || "",
+          tags: Array.isArray(item.tags) ? normalizeTags(item.tags) : parseTags(item.tags),
         })).filter((a: any) => a.date && a.content);
         if (!articles.length) throw new Error("文件中没有可导入的记录");
         const result = await api.importArticles(articles);

@@ -4,17 +4,15 @@ use crate::models::*;
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::response::Json;
-use rusqlite::params;
 use std::sync::{Arc, Mutex};
 
 type AppState = Arc<Mutex<Database>>;
+use axum::http::{header, HeaderMap, HeaderValue};
+use axum::response::{IntoResponse, Response};
 use chrono::{DateTime, Local};
 use std::fs;
 use std::path::PathBuf;
 use uuid::Uuid;
-use axum::http::{header, HeaderMap, HeaderValue};
-use axum::response::{IntoResponse, Response};
-
 
 // ── Helpers ─────────────────────────────────────────
 
@@ -46,8 +44,7 @@ pub(crate) async fn list_backups() -> Result<Json<Vec<BackupMeta>>, (StatusCode,
             .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
             .path();
         let fname = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
-        if path.is_file() && valid_backup_name(fname) && fname != "daily-summary-latest.db"
-        {
+        if path.is_file() && valid_backup_name(fname) && fname != "daily-summary-latest.db" {
             backups.push(backup_meta(path)?);
         }
     }
@@ -80,17 +77,19 @@ pub(crate) async fn create_backup(
         })?
         .to_string();
 
-    let db = db
+    let mut db = db
         .lock()
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-    db.conn()
-        .execute("VACUUM INTO ?1", params![path_str])
+    db.snapshot_to(&path_str)
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     drop(db);
 
     // Verify
     if !path.exists() || path.metadata().map(|m| m.len()).unwrap_or(0) == 0 {
-        return Err((StatusCode::INTERNAL_SERVER_ERROR, "Backup file is empty or missing".into()));
+        return Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "Backup file is empty or missing".into(),
+        ));
     }
 
     // Copy as latest
@@ -100,13 +99,25 @@ pub(crate) async fn create_backup(
 
     // Retention: keep last N
     let keep: usize = std::env::var("DAILY_SUMMARY_BACKUP_KEEP")
-        .ok().and_then(|v| v.parse().ok()).unwrap_or(10);
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(10);
     if let Ok(entries) = std::fs::read_dir(&dir) {
-        let mut files: Vec<_> = entries.filter_map(|e| e.ok()).filter(|e| {
-            e.path().is_file() &&
-            e.file_name().to_str().is_some_and(|n| valid_backup_name(n) && n != "daily-summary-latest.db")
-        }).collect();
-        files.sort_by_key(|e| std::fs::metadata(e.path()).ok().and_then(|m| m.modified().ok()).unwrap_or(std::time::SystemTime::UNIX_EPOCH));
+        let mut files: Vec<_> = entries
+            .filter_map(|e| e.ok())
+            .filter(|e| {
+                e.path().is_file()
+                    && e.file_name()
+                        .to_str()
+                        .is_some_and(|n| valid_backup_name(n) && n != "daily-summary-latest.db")
+            })
+            .collect();
+        files.sort_by_key(|e| {
+            std::fs::metadata(e.path())
+                .ok()
+                .and_then(|m| m.modified().ok())
+                .unwrap_or(std::time::SystemTime::UNIX_EPOCH)
+        });
         if files.len() > keep {
             for entry in &files[..files.len() - keep] {
                 let _ = std::fs::remove_file(entry.path());
@@ -116,7 +127,9 @@ pub(crate) async fn create_backup(
 
     backup_meta(path).map(Json)
 }
-pub(crate) async fn download_backup(Path(name): Path<String>) -> Result<Response, (StatusCode, String)> {
+pub(crate) async fn download_backup(
+    Path(name): Path<String>,
+) -> Result<Response, (StatusCode, String)> {
     if !valid_backup_name(&name) {
         return Err((StatusCode::BAD_REQUEST, "Invalid backup name".into()));
     }
@@ -141,7 +154,9 @@ pub(crate) async fn download_backup(Path(name): Path<String>) -> Result<Response
     );
     Ok((headers, bytes).into_response())
 }
-pub(crate) async fn delete_backup(Path(name): Path<String>) -> Result<StatusCode, (StatusCode, String)> {
+pub(crate) async fn delete_backup(
+    Path(name): Path<String>,
+) -> Result<StatusCode, (StatusCode, String)> {
     if !valid_backup_name(&name) {
         return Err((StatusCode::BAD_REQUEST, "Invalid backup name".into()));
     }

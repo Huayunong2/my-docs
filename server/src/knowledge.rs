@@ -1,54 +1,24 @@
 use crate::ai::call_ai;
-use crate::db::Database;
+use crate::db::{Database, KnowledgeCardDraft};
 use crate::helpers::*;
 use crate::models::*;
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::Json;
-use rusqlite::params;
 use serde_json::Value;
 use std::sync::{Arc, Mutex};
-use uuid::Uuid;
 
 type AppState = Arc<Mutex<Database>>;
 
 fn valid_card_type(value: &str) -> bool {
-    matches!(value, "fact" | "method" | "concept" | "decision" | "case" | "quote" | "principle")
+    matches!(
+        value,
+        "fact" | "method" | "concept" | "decision" | "case" | "quote" | "principle"
+    )
 }
 
 fn valid_card_status(value: &str) -> bool {
     matches!(value, "draft" | "confirmed" | "outdated")
-}
-
-fn row_to_card(row: &rusqlite::Row<'_>) -> rusqlite::Result<KnowledgeCard> {
-    Ok(KnowledgeCard {
-        id: row.get(0)?,
-        card_type: row.get(1)?,
-        status: row.get(2)?,
-        title: row.get(3)?,
-        content: row.get(4)?,
-        tags: row.get(5)?,
-        source_article_id: row.get(6)?,
-        source_review_id: row.get(7)?,
-        source_date: row.get(8)?,
-        source_excerpt: row.get(9)?,
-        created_at: row.get(10)?,
-        updated_at: row.get(11)?,
-    })
-}
-
-fn load_card(db: &Database, id: &str) -> Result<KnowledgeCard, (StatusCode, String)> {
-    db.conn()
-        .query_row(
-            "SELECT id, card_type, status, title, content, tags, source_article_id, source_review_id, source_date, source_excerpt, created_at, updated_at
-             FROM knowledge_cards WHERE id=?1",
-            params![id],
-            row_to_card,
-        )
-        .map_err(|e| match e {
-            rusqlite::Error::QueryReturnedNoRows => (StatusCode::NOT_FOUND, "Knowledge card not found".into()),
-            _ => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
-        })
 }
 
 fn parse_ai_cards(raw: &str) -> Result<Vec<Value>, (StatusCode, String)> {
@@ -59,15 +29,22 @@ fn parse_ai_cards(raw: &str) -> Result<Vec<Value>, (StatusCode, String)> {
         .and_then(|s| s.strip_suffix("```"))
         .unwrap_or(trimmed)
         .trim();
-    let value: Value = serde_json::from_str(without_fence)
-        .map_err(|_| (StatusCode::BAD_GATEWAY, "AI returned invalid knowledge JSON".to_string()))?;
+    let value: Value = serde_json::from_str(without_fence).map_err(|_| {
+        (
+            StatusCode::BAD_GATEWAY,
+            "AI returned invalid knowledge JSON".to_string(),
+        )
+    })?;
     if let Some(cards) = value.as_array() {
         return Ok(cards.clone());
     }
     if let Some(cards) = value.get("cards").and_then(Value::as_array) {
         return Ok(cards.clone());
     }
-    Err((StatusCode::BAD_GATEWAY, "AI returned invalid knowledge JSON".to_string()))
+    Err((
+        StatusCode::BAD_GATEWAY,
+        "AI returned invalid knowledge JSON".to_string(),
+    ))
 }
 
 fn value_text(value: &Value, key: &str) -> String {
@@ -79,8 +56,8 @@ fn value_text(value: &Value, key: &str) -> String {
         .to_string()
 }
 
-fn value_tags_json(value: &Value) -> Result<String, (StatusCode, String)> {
-    let tags = value
+fn value_tags(value: &Value) -> Vec<String> {
+    value
         .get("tags")
         .and_then(Value::as_array)
         .map(|items| {
@@ -92,9 +69,7 @@ fn value_tags_json(value: &Value) -> Result<String, (StatusCode, String)> {
                 .take(8)
                 .collect::<Vec<_>>()
         })
-        .unwrap_or_default();
-    let raw = serde_json::to_string(&tags).map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-    normalize_tags_json(Some(raw))
+        .unwrap_or_default()
 }
 
 pub(crate) async fn list_cards(
@@ -112,25 +87,19 @@ pub(crate) async fn list_cards(
         }
     }
 
-    let db = db.lock().map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-    let mut stmt = db
-        .conn()
-        .prepare(
-            "SELECT id, card_type, status, title, content, tags, source_article_id, source_review_id, source_date, source_excerpt, created_at, updated_at
-             FROM knowledge_cards
-             ORDER BY updated_at DESC, created_at DESC",
-        )
+    let mut db = db
+        .lock()
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-    let rows = stmt
-        .query_map([], row_to_card)
+    let rows = db
+        .knowledge()
+        .list()
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
     let query = q.q.unwrap_or_default().trim().to_lowercase();
     let card_type_filter = q.card_type.unwrap_or_default();
     let status_filter = q.status.unwrap_or_default();
     let mut cards = Vec::new();
-    for row in rows {
-        let card = row.map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    for card in rows {
         if !card_type_filter.is_empty() && card.card_type != card_type_filter {
             continue;
         }
@@ -138,7 +107,8 @@ pub(crate) async fn list_cards(
             continue;
         }
         if !query.is_empty() {
-            let haystack = format!("{} {} {}", card.title, card.content, card.tags).to_lowercase();
+            let haystack =
+                format!("{} {} {}", card.title, card.content, card.tags.join(" ")).to_lowercase();
             if !haystack.contains(&query) {
                 continue;
             }
@@ -193,50 +163,59 @@ JSON 格式：
     let source_article_id = payload.source_article_id.unwrap_or_default();
     let source_review_id = payload.source_review_id.unwrap_or_default();
     let source_date = payload.source_date.unwrap_or_default();
-    let now_str = now();
-    let mut created_ids = Vec::new();
-
-    {
-        let db = db.lock().map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-        for item in cards.into_iter().take(max_cards) {
-            let raw_type = value_text(&item, "card_type");
-            let card_type = if valid_card_type(&raw_type) { raw_type } else { "fact".to_string() };
-            let title = value_text(&item, "title").chars().take(160).collect::<String>();
-            let content = value_text(&item, "content");
-            let source_excerpt = value_text(&item, "source_excerpt")
-                .chars()
-                .take(500)
-                .collect::<String>();
-            if title.is_empty() || content.is_empty() || source_excerpt.is_empty() {
-                continue;
-            }
-            let tags = value_tags_json(&item)?;
-            let id = Uuid::new_v4().to_string();
-            db.conn()
-                .execute(
-                    "INSERT INTO knowledge_cards (id, card_type, status, title, content, tags, source_article_id, source_review_id, source_date, source_excerpt, created_at, updated_at)
-                     VALUES (?1, ?2, 'draft', ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?10)",
-                    params![id, card_type, title, content, tags, source_article_id, source_review_id, source_date, source_excerpt, now_str],
-                )
-                .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-            created_ids.push(id);
+    let mut drafts = Vec::new();
+    for item in cards.into_iter().take(max_cards) {
+        let raw_type = value_text(&item, "card_type");
+        let card_type = if valid_card_type(&raw_type) {
+            raw_type
+        } else {
+            "fact".to_string()
+        };
+        let title = value_text(&item, "title")
+            .chars()
+            .take(160)
+            .collect::<String>();
+        let content = value_text(&item, "content");
+        let source_excerpt = value_text(&item, "source_excerpt")
+            .chars()
+            .take(500)
+            .collect::<String>();
+        if title.is_empty() || content.is_empty() || source_excerpt.is_empty() {
+            continue;
         }
+        drafts.push(KnowledgeCardDraft {
+            card_type,
+            status: "draft".into(),
+            title,
+            content,
+            tags: value_tags(&item),
+            source_article_id: source_article_id.clone(),
+            source_review_id: source_review_id.clone(),
+            source_date: source_date.clone(),
+            source_excerpt,
+        });
     }
-
-    let db = db.lock().map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-    let mut created = Vec::new();
-    for id in created_ids {
-        created.push(load_card(&db, &id)?);
-    }
-    Ok(Json(created))
+    let mut db = db
+        .lock()
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    db.knowledge()
+        .save_many(drafts)
+        .map(Json)
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))
 }
 
 pub(crate) async fn get_card(
     State(db): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<Json<KnowledgeCard>, (StatusCode, String)> {
-    let db = db.lock().map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-    load_card(&db, &id).map(Json)
+    let mut db = db
+        .lock()
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    db.knowledge()
+        .find(&id)
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+        .map(Json)
+        .ok_or((StatusCode::NOT_FOUND, "Knowledge card not found".into()))
 }
 
 pub(crate) async fn create_card(
@@ -253,31 +232,36 @@ pub(crate) async fn create_card(
     }
     let title = payload.title.trim().chars().take(160).collect::<String>();
     if title.is_empty() {
-        return Err((StatusCode::BAD_REQUEST, "Knowledge card title is required".into()));
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "Knowledge card title is required".into(),
+        ));
     }
     let content = payload.content.trim().to_string();
     if content.is_empty() {
-        return Err((StatusCode::BAD_REQUEST, "Knowledge card content is required".into()));
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "Knowledge card content is required".into(),
+        ));
     }
 
-    let tags = normalize_tags_json(payload.tags)?;
-    let id = Uuid::new_v4().to_string();
-    let now_str = now();
-    let source_article_id = payload.source_article_id.unwrap_or_default();
-    let source_review_id = payload.source_review_id.unwrap_or_default();
-    let source_date = payload.source_date.unwrap_or_default();
-    let source_excerpt = payload.source_excerpt.unwrap_or_default();
-
-    let db = db.lock().map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-    db.conn()
-        .execute(
-            "INSERT INTO knowledge_cards (id, card_type, status, title, content, tags, source_article_id, source_review_id, source_date, source_excerpt, created_at, updated_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?11)",
-            params![id, card_type, status, title, content, tags, source_article_id, source_review_id, source_date, source_excerpt, now_str],
-        )
+    let mut db = db
+        .lock()
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-
-    load_card(&db, &id).map(Json)
+    db.knowledge()
+        .save(KnowledgeCardDraft {
+            card_type: card_type.into(),
+            status,
+            title,
+            content,
+            tags: payload.tags.unwrap_or_default(),
+            source_article_id: payload.source_article_id.unwrap_or_default(),
+            source_review_id: payload.source_review_id.unwrap_or_default(),
+            source_date: payload.source_date.unwrap_or_default(),
+            source_excerpt: payload.source_excerpt.unwrap_or_default(),
+        })
+        .map(Json)
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))
 }
 
 pub(crate) async fn update_card(
@@ -285,8 +269,14 @@ pub(crate) async fn update_card(
     Path(id): Path<String>,
     Json(payload): Json<UpdateKnowledgeCardPayload>,
 ) -> Result<Json<KnowledgeCard>, (StatusCode, String)> {
-    let db = db.lock().map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-    let existing = load_card(&db, &id)?;
+    let mut db = db
+        .lock()
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let existing = db
+        .knowledge()
+        .find(&id)
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+        .ok_or((StatusCode::NOT_FOUND, "Knowledge card not found".into()))?;
 
     let card_type = payload.card_type.unwrap_or(existing.card_type);
     if !valid_card_type(&card_type) {
@@ -304,45 +294,63 @@ pub(crate) async fn update_card(
         .take(160)
         .collect::<String>();
     if title.is_empty() {
-        return Err((StatusCode::BAD_REQUEST, "Knowledge card title is required".into()));
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "Knowledge card title is required".into(),
+        ));
     }
-    let content = payload.content.unwrap_or(existing.content).trim().to_string();
+    let content = payload
+        .content
+        .unwrap_or(existing.content)
+        .trim()
+        .to_string();
     if content.is_empty() {
-        return Err((StatusCode::BAD_REQUEST, "Knowledge card content is required".into()));
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "Knowledge card content is required".into(),
+        ));
     }
-    let tags = if payload.tags.is_some() {
-        normalize_tags_json(payload.tags)?
-    } else {
-        existing.tags
-    };
-    let source_article_id = payload.source_article_id.unwrap_or(existing.source_article_id);
-    let source_review_id = payload.source_review_id.unwrap_or(existing.source_review_id);
+    let tags = payload.tags.unwrap_or(existing.tags);
+    let source_article_id = payload
+        .source_article_id
+        .unwrap_or(existing.source_article_id);
+    let source_review_id = payload
+        .source_review_id
+        .unwrap_or(existing.source_review_id);
     let source_date = payload.source_date.unwrap_or(existing.source_date);
     let source_excerpt = payload.source_excerpt.unwrap_or(existing.source_excerpt);
-    let now_str = now();
-
-    db.conn()
-        .execute(
-            "UPDATE knowledge_cards
-             SET card_type=?1, status=?2, title=?3, content=?4, tags=?5, source_article_id=?6, source_review_id=?7, source_date=?8, source_excerpt=?9, updated_at=?10
-             WHERE id=?11",
-            params![card_type, status, title, content, tags, source_article_id, source_review_id, source_date, source_excerpt, now_str, id],
+    db.knowledge()
+        .update(
+            &id,
+            KnowledgeCardDraft {
+                card_type,
+                status,
+                title,
+                content,
+                tags,
+                source_article_id,
+                source_review_id,
+                source_date,
+                source_excerpt,
+            },
         )
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-
-    load_card(&db, &id).map(Json)
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+        .map(Json)
+        .ok_or((StatusCode::NOT_FOUND, "Knowledge card not found".into()))
 }
 
 pub(crate) async fn delete_card(
     State(db): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<StatusCode, (StatusCode, String)> {
-    let db = db.lock().map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-    let deleted = db
-        .conn()
-        .execute("DELETE FROM knowledge_cards WHERE id=?1", params![id])
+    let mut db = db
+        .lock()
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-    if deleted == 0 {
+    let deleted = db
+        .knowledge()
+        .delete(&id)
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    if !deleted {
         return Err((StatusCode::NOT_FOUND, "Knowledge card not found".into()));
     }
     Ok(StatusCode::NO_CONTENT)

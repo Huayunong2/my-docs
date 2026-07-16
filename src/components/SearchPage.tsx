@@ -5,7 +5,6 @@ import * as api from "../lib/api";
 import type { Article, ArticleSummary } from "../lib/api";
 import ArticleDetail from "./ArticleDetail";
 import { useConfirmDialog } from "./ui/Feedback";
-import { parseTags } from "../lib/tags";
 
 function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -135,9 +134,9 @@ export default function SearchPage({
     onEditDate(date);
   };
 
-  const availableTags = Array.from(new Set(results.flatMap((item) => parseTags(item.tags))));
+  const availableTags = Array.from(new Set(results.flatMap((item) => item.tags)));
   const visibleResults = activeTag
-    ? results.filter((item) => parseTags(item.tags).includes(activeTag))
+    ? results.filter((item) => item.tags.includes(activeTag))
     : results;
 
   return (
@@ -276,9 +275,9 @@ export default function SearchPage({
                   <p className="text-sm text-gray-400 dark:text-gray-400 mt-1 line-clamp-2">
                     <HighlightText text={a.preview} query={query} />
                   </p>
-                  {parseTags(a.tags).length > 0 && (
+                  {a.tags.length > 0 && (
                     <div className="mt-2 flex flex-wrap gap-1">
-                      {parseTags(a.tags).map((tag) => (
+                      {a.tags.map((tag) => (
                         <span key={tag} className="rounded-full bg-gray-100 px-2 py-0.5 text-[11px] text-gray-500 dark:bg-gray-800 dark:text-gray-300">
                           #{tag}
                         </span>

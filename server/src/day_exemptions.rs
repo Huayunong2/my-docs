@@ -1,105 +1,70 @@
 use crate::db::Database;
-use crate::helpers::*;
-use crate::models::*;
+use crate::helpers::{parse_date, valid_exemption_reason};
+use crate::models::{DateRangeQuery, DayExemption, UpsertDayExemptionPayload};
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::Json;
-use rusqlite::params;
 use std::sync::{Arc, Mutex};
 
 type AppState = Arc<Mutex<Database>>;
-use rusqlite::OptionalExtension;
-
-
-// ── Helpers ─────────────────────────────────────────
+type HttpError = (StatusCode, String);
 
 pub(crate) async fn list_day_exemptions(
     State(db): State<AppState>,
-    Query(q): Query<DateRangeQuery>,
-) -> Result<Json<Vec<DayExemption>>, (StatusCode, String)> {
-    let from = parse_date(&q.from)?;
-    let to = parse_date(&q.to)?;
+    Query(query): Query<DateRangeQuery>,
+) -> Result<Json<Vec<DayExemption>>, HttpError> {
+    let from = parse_date(&query.from)?;
+    let to = parse_date(&query.to)?;
     if from > to {
         return Err((
             StatusCode::BAD_REQUEST,
             "`from` must be before or equal to `to`".into(),
         ));
     }
-    let db = db
-        .lock()
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-    Ok(Json(
-        load_exemptions(&db, &q.from, &q.to)?
-            .into_values()
-            .collect(),
-    ))
+    let mut db = db.lock().map_err(lock_error)?;
+    db.exemptions()
+        .list(&query.from, &query.to)
+        .map(|items| Json(items.into_values().collect()))
+        .map_err(storage_error)
 }
+
 pub(crate) async fn upsert_day_exemption(
     State(db): State<AppState>,
     Path(date): Path<String>,
     Json(payload): Json<UpsertDayExemptionPayload>,
-) -> Result<Json<DayExemption>, (StatusCode, String)> {
+) -> Result<Json<DayExemption>, HttpError> {
     parse_date(&date)?;
     let reason = payload.reason.trim();
     if !valid_exemption_reason(reason) {
         return Err((StatusCode::BAD_REQUEST, "Invalid exemption reason".into()));
     }
-    let note = payload.note.unwrap_or_default();
-    let now_str = now();
-    let db = db
-        .lock()
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-    let article_exists: Option<String> = db
-        .conn()
-        .query_row(
-            "SELECT id FROM articles WHERE date=?1 LIMIT 1",
-            params![date],
-            |row| row.get(0),
-        )
-        .optional()
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-    if article_exists.is_some() {
-        return Err((
-            StatusCode::CONFLICT,
-            "Cannot exempt a day that already has an article".into(),
-        ));
-    }
-    db.conn()
-        .execute(
-            "INSERT INTO day_exemptions (date, reason, note, created_at, updated_at)
-             VALUES (?1, ?2, ?3, ?4, ?5)
-             ON CONFLICT(date) DO UPDATE SET reason=excluded.reason, note=excluded.note, updated_at=excluded.updated_at",
-            params![date, reason, note, now_str, now_str],
-        )
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-
-    db.conn()
-        .query_row(
-            "SELECT date, reason, note, created_at, updated_at FROM day_exemptions WHERE date=?1",
-            params![date],
-            |row| {
-                Ok(DayExemption {
-                    date: row.get(0)?,
-                    reason: row.get(1)?,
-                    note: row.get(2)?,
-                    created_at: row.get(3)?,
-                    updated_at: row.get(4)?,
-                })
-            },
-        )
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))
+    let mut db = db.lock().map_err(lock_error)?;
+    db.exemptions()
+        .set(&date, reason, &payload.note.unwrap_or_default())
+        .map_err(storage_error)?
         .map(Json)
+        .ok_or_else(|| {
+            (
+                StatusCode::CONFLICT,
+                "Cannot exempt a day that already has an article".into(),
+            )
+        })
 }
+
 pub(crate) async fn delete_day_exemption(
     State(db): State<AppState>,
     Path(date): Path<String>,
-) -> Result<StatusCode, (StatusCode, String)> {
+) -> Result<StatusCode, HttpError> {
     parse_date(&date)?;
-    let db = db
-        .lock()
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-    db.conn()
-        .execute("DELETE FROM day_exemptions WHERE date=?1", params![date])
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let mut db = db.lock().map_err(lock_error)?;
+    db.exemptions().delete(&date).map_err(storage_error)?;
     Ok(StatusCode::NO_CONTENT)
+}
+
+fn lock_error(error: std::sync::PoisonError<std::sync::MutexGuard<'_, Database>>) -> HttpError {
+    (StatusCode::INTERNAL_SERVER_ERROR, error.to_string())
+}
+
+fn storage_error(error: rusqlite::Error) -> HttpError {
+    (StatusCode::INTERNAL_SERVER_ERROR, error.to_string())
 }

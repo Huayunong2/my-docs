@@ -1,19 +1,19 @@
-use crate::db::Database;
+use crate::ai_client::{complete_with_retry, HttpAiAdapter};
+use crate::db::{Database, ReviewDraft};
 use crate::helpers::*;
 use crate::models::*;
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::Json;
-use rusqlite::params;
 use serde_json::Value;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration as StdDuration, SystemTime, UNIX_EPOCH};
 
 type AppState = Arc<Mutex<Database>>;
-use serde_json;
 use std::collections::BTreeSet;
-use uuid::Uuid;
+
+type MonthlyReviewSource = (String, Vec<String>, Vec<String>);
 
 static LAST_AI_REQUEST_MS: AtomicU64 = AtomicU64::new(0);
 
@@ -23,13 +23,6 @@ fn env_u64(key: &str, default: u64) -> u64 {
     std::env::var(key)
         .ok()
         .and_then(|v| v.parse::<u64>().ok())
-        .unwrap_or(default)
-}
-
-fn env_f32(key: &str, default: f32) -> f32 {
-    std::env::var(key)
-        .ok()
-        .and_then(|v| v.parse::<f32>().ok())
         .unwrap_or(default)
 }
 
@@ -67,128 +60,22 @@ pub(crate) async fn call_ai(
     prompt: String,
     system: &str,
 ) -> Result<(String, String), (StatusCode, String)> {
-    let api_key = std::env::var("DAILY_SUMMARY_AI_API_KEY").map_err(|_| {
-        (
-            StatusCode::SERVICE_UNAVAILABLE,
-            "AI API key is not configured".to_string(),
-        )
-    })?;
-    let base_url = std::env::var("DAILY_SUMMARY_AI_BASE_URL")
-        .unwrap_or_else(|_| "https://api.openai.com/v1".to_string())
-        .trim_end_matches('/')
-        .to_string();
-    let model =
-        std::env::var("DAILY_SUMMARY_AI_MODEL").unwrap_or_else(|_| "gpt-4o-mini".to_string());
-    let temperature = env_f32("DAILY_SUMMARY_AI_TEMPERATURE", 0.2);
-    let max_tokens = env_u64("DAILY_SUMMARY_AI_MAX_TOKENS", 0);
-    let timeout_secs = env_u64("DAILY_SUMMARY_AI_TIMEOUT_SECS", 45);
     let retries = env_u64("DAILY_SUMMARY_AI_RETRIES", 2);
-
-    let client = reqwest::Client::builder()
-        .timeout(StdDuration::from_secs(timeout_secs))
-        .build()
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-    let endpoint = format!("{}/chat/completions", base_url);
-    let mut body = serde_json::json!({
-        "model": model,
-        "messages": [
-            { "role": "system", "content": system },
-            { "role": "user", "content": prompt }
-        ],
-        "temperature": temperature,
-        "stream": false
-    });
-    if max_tokens > 0 {
-        body["max_tokens"] = serde_json::json!(max_tokens);
-    }
-
-    let mut last_error = "AI request failed".to_string();
-    for attempt in 0..=retries {
-        throttle_ai_requests().await;
-        let response = client
-            .post(&endpoint)
-            .bearer_auth(&api_key)
-            .json(&body)
-            .send()
-            .await;
-
-        let response = match response {
-            Ok(response) => response,
-            Err(e) => {
-                eprintln!(
-                    "AI request transport error on attempt {}: {}",
-                    attempt + 1,
-                    e
-                );
-                last_error = "AI 服务暂时不可用，请稍后重试。".to_string();
-                if attempt < retries {
-                    tokio::time::sleep(StdDuration::from_millis(600 * (attempt + 1))).await;
-                    continue;
-                }
-                return Err((StatusCode::BAD_GATEWAY, last_error));
-            }
-        };
-
-        if !response.status().is_success() {
-            let status = response.status();
-            let status_code = status.as_u16();
-            let text = response.text().await.unwrap_or_default();
-            eprintln!(
-                "AI upstream error on attempt {}: {} {}",
-                attempt + 1,
-                status,
-                text
-            );
-            last_error = if status_code == 401 || status_code == 403 {
-                "AI 配置无效或没有权限，请检查服务端 API Key。".to_string()
-            } else if status_code == 429 {
-                "AI 请求过于频繁或额度受限，请稍后重试。".to_string()
-            } else {
-                "AI 服务暂时不可用，请稍后重试。".to_string()
-            };
-            if attempt < retries && (status_code == 429 || status_code >= 500) {
-                tokio::time::sleep(StdDuration::from_millis(800 * (attempt + 1))).await;
-                continue;
-            }
-            return Err((StatusCode::BAD_GATEWAY, last_error));
-        }
-
-        let data = response
-            .json::<ChatCompletionResponse>()
-            .await
-            .map_err(|e| {
-                eprintln!("AI response parse error: {}", e);
-                (StatusCode::BAD_GATEWAY, "AI 返回格式无法解析。".to_string())
-            })?;
-        let summary = data
-            .choices
-            .into_iter()
-            .next()
-            .map(|choice| choice.message.content)
-            .unwrap_or_default();
-        if summary.trim().is_empty() {
-            eprintln!("AI response empty on attempt {}", attempt + 1);
-            last_error = "AI 返回了空内容，请重试；如果反复出现，请检查模型是否支持当前接口。".to_string();
-            if attempt < retries {
-                tokio::time::sleep(StdDuration::from_millis(800 * (attempt + 1))).await;
-                continue;
-            }
-            return Err((StatusCode::BAD_GATEWAY, last_error));
-        }
-
-        return Ok((summary, model));
-    }
-
-    Err((StatusCode::BAD_GATEWAY, last_error))
+    let adapter = HttpAiAdapter::from_env().map_err(|failure| (failure.status, failure.message))?;
+    throttle_ai_requests().await;
+    let response = complete_with_retry(&adapter, &prompt, system, retries, true)
+        .await
+        .map_err(|failure| (failure.status, failure.message))?;
+    Ok((response.content, response.model))
 }
 pub(crate) async fn list_reviews(
     State(db): State<AppState>,
     Query(q): Query<ReviewListQuery>,
 ) -> Result<Json<Vec<Review>>, (StatusCode, String)> {
-    let db = db
+    let mut db = db
         .lock()
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-    let rows = if let (Some(kind), Some(period_start), Some(period_end)) = (
+    let period = if let (Some(kind), Some(period_start), Some(period_end)) = (
         q.kind.as_deref(),
         q.period_start.as_deref(),
         q.period_end.as_deref(),
@@ -204,110 +91,51 @@ pub(crate) async fn list_reviews(
                 "`period_start` must be before or equal to `period_end`".into(),
             ));
         }
-        let mut stmt = db
-            .conn()
-            .prepare(
-                "SELECT id, kind, period_start, period_end, version, status, title, content, source_article_ids, source_review_ids, model, generated_at, updated_at
-                 FROM reviews
-                 WHERE kind=?1 AND period_start=?2 AND period_end=?3
-                 ORDER BY version DESC, updated_at DESC",
-            )
-            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-        let collected = stmt
-            .query_map(params![kind, period_start, period_end], row_to_review)
-            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-        collected
+        Some((period_start, period_end))
     } else if q.period_start.is_none() && q.period_end.is_none() {
         if let Some(kind) = q.kind.as_deref() {
             if !valid_review_kind(kind) {
                 return Err((StatusCode::BAD_REQUEST, "Invalid review kind".into()));
             }
-            let mut stmt = db
-                .conn()
-                .prepare(
-                    "SELECT id, kind, period_start, period_end, version, status, title, content, source_article_ids, source_review_ids, model, generated_at, updated_at
-                     FROM reviews
-                     WHERE kind=?1
-                     ORDER BY period_start DESC, period_end DESC, version DESC",
-                )
-                .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-            let collected = stmt
-                .query_map(params![kind], row_to_review)
-                .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
-                .collect::<Result<Vec<_>, _>>()
-                .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-            collected
-        } else {
-            let mut stmt = db
-                .conn()
-                .prepare(
-                    "SELECT id, kind, period_start, period_end, version, status, title, content, source_article_ids, source_review_ids, model, generated_at, updated_at
-                     FROM reviews
-                     ORDER BY period_start DESC, period_end DESC, kind ASC, version DESC",
-                )
-                .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-            let collected = stmt
-                .query_map([], row_to_review)
-                .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
-                .collect::<Result<Vec<_>, _>>()
-                .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-            collected
         }
+        None
     } else {
         return Err((
             StatusCode::BAD_REQUEST,
             "period_start and period_end must be provided together".into(),
         ));
     };
-    let mut reviews = Vec::new();
-    reviews.extend(rows);
-    Ok(Json(reviews))
+    db.reviews()
+        .list(q.kind.as_deref(), period)
+        .map(Json)
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))
 }
 pub(crate) async fn get_review(
     State(db): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<Json<Review>, (StatusCode, String)> {
-    let db = db
+    let mut db = db
         .lock()
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-    load_review(&db, &id).map(Json)
+    db.reviews()
+        .find(&id)
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+        .map(Json)
+        .ok_or((StatusCode::NOT_FOUND, "Review not found".into()))
 }
 pub(crate) fn load_weekly_review_source(
-    db: &Database,
+    db: &mut Database,
     from: &str,
     to: &str,
 ) -> Result<(String, Vec<String>), (StatusCode, String)> {
-    let mut stmt = db
-        .conn()
-        .prepare(
-            "SELECT id, date, title, mood, tags, word_count, content, created_at, updated_at
-             FROM articles
-             WHERE date BETWEEN ?1 AND ?2
-             ORDER BY date ASC",
-        )
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-    let rows = stmt
-        .query_map(params![from, to], |row| {
-            Ok(Article {
-                id: row.get(0)?,
-                date: row.get(1)?,
-                title: row.get(2)?,
-                mood: row.get(3)?,
-                tags: row.get(4)?,
-                word_count: row.get(5)?,
-                content: row.get(6)?,
-                created_at: row.get(7)?,
-                updated_at: row.get(8)?,
-            })
-        })
+    let rows = db
+        .articles()
+        .full_between(from, to)
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
     let mut ids = Vec::new();
     let mut parts = Vec::new();
-    for row in rows {
-        let article = row.map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    for article in rows {
         ids.push(article.id.clone());
         parts.push(format!(
             "## {}\n日期：{}\n标题：{}\n心情：{}\n字数：{}\n正文：\n{}",
@@ -338,32 +166,20 @@ pub(crate) fn load_weekly_review_source(
     Ok((truncate_chars(&parts.join("\n\n---\n\n"), 80000), ids))
 }
 pub(crate) fn load_monthly_review_source(
-    db: &Database,
+    db: &mut Database,
     from: &str,
     to: &str,
-) -> Result<(String, Vec<String>, Vec<String>), (StatusCode, String)> {
-    let mut stmt = db
-        .conn()
-        .prepare(
-            "SELECT id, kind, period_start, period_end, version, status, title, content, source_article_ids, source_review_ids, model, generated_at, updated_at
-             FROM reviews
-             WHERE kind='weekly'
-               AND status='confirmed'
-               AND period_start <= ?2
-               AND period_end >= ?1
-             ORDER BY period_start ASC, version DESC",
-        )
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-    let rows = stmt
-        .query_map(params![from, to], row_to_review)
+) -> Result<MonthlyReviewSource, (StatusCode, String)> {
+    let rows = db
+        .reviews()
+        .confirmed_weekly_overlapping(from, to)
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
     let mut ids = Vec::new();
     let mut parts = Vec::new();
     let mut seen_periods = BTreeSet::new();
     let mut covered_dates = BTreeSet::new();
-    for row in rows {
-        let review = row.map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    for review in rows {
         let period_key = format!("{}:{}", review.period_start, review.period_end);
         if !seen_periods.insert(period_key) {
             continue;
@@ -379,15 +195,17 @@ pub(crate) fn load_monthly_review_source(
         let mut d = start;
         while d <= end {
             days_total += 1;
-            if d >= month_start && d <= month_end { days_in_month += 1; }
-            d = d + chrono::Duration::days(1);
+            if d >= month_start && d <= month_end {
+                days_in_month += 1;
+            }
+            d += chrono::Duration::days(1);
         }
         let is_cross_month = days_in_month < days_total;
 
         let mut date = start.max(month_start);
         while date <= end.min(month_end) {
             covered_dates.insert(format_date(date));
-            date = date + chrono::Duration::days(1);
+            date += chrono::Duration::days(1);
         }
         ids.push(review.id.clone());
         let clip_start = format_date_short(start.max(month_start));
@@ -432,34 +250,13 @@ pub(crate) fn load_monthly_review_source(
     }
 
     let mut article_ids = Vec::new();
-    let mut stmt = db
-        .conn()
-        .prepare(
-            "SELECT id, date, title, mood, tags, word_count, content, created_at, updated_at
-             FROM articles
-             WHERE date BETWEEN ?1 AND ?2
-             ORDER BY date ASC",
-        )
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-    let article_rows = stmt
-        .query_map(params![from, to], |row| {
-            Ok(Article {
-                id: row.get(0)?,
-                date: row.get(1)?,
-                title: row.get(2)?,
-                mood: row.get(3)?,
-                tags: row.get(4)?,
-                word_count: row.get(5)?,
-                content: row.get(6)?,
-                created_at: row.get(7)?,
-                updated_at: row.get(8)?,
-            })
-        })
+    let article_rows = db
+        .articles()
+        .full_between(from, to)
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
     let mut uncovered_articles = Vec::new();
-    for row in article_rows {
-        let article = row.map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    for article in article_rows {
         if covered_dates.contains(&article.date) {
             continue;
         }
@@ -477,10 +274,10 @@ pub(crate) fn load_monthly_review_source(
             } else {
                 &article.mood
             },
-            if article.tags.trim().is_empty() {
-                "[]"
+            if article.tags.is_empty() {
+                "[]".to_string()
             } else {
-                &article.tags
+                article.tags.join("、")
             },
             article.word_count,
             truncate_chars(&article.content, 2500),
@@ -633,23 +430,20 @@ pub(crate) async fn generate_review(
     let to = format_date(period_end);
 
     let (source, source_article_ids, source_review_ids, version) = {
-        let db = db
+        let mut db = db
             .lock()
             .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-        let version: i64 = db
-            .conn()
-            .query_row(
-                "SELECT COALESCE(MAX(version), 0) + 1 FROM reviews WHERE kind=?1 AND period_start=?2 AND period_end=?3",
-                params![kind, from, to],
-                |row| row.get(0),
-            )
+        let version = db
+            .reviews()
+            .next_version(kind, &from, &to)
             .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
         if kind == "weekly" {
-            let (source, ids) = load_weekly_review_source(&db, &from, &to)?;
+            let (source, ids) = load_weekly_review_source(&mut db, &from, &to)?;
             (source, ids, Vec::new(), version)
         } else {
-            let (source, article_ids, review_ids) = load_monthly_review_source(&db, &from, &to)?;
+            let (source, article_ids, review_ids) =
+                load_monthly_review_source(&mut db, &from, &to)?;
             (source, article_ids, review_ids, version)
         }
     };
@@ -750,38 +544,23 @@ pub(crate) async fn generate_review(
     .await?;
     let content = render_review_response(kind, &title, &raw_content);
 
-    let id = Uuid::new_v4().to_string();
-    let now_str = now();
-    let source_article_ids_json = serde_json::to_string(&source_article_ids)
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-    let source_review_ids_json = serde_json::to_string(&source_review_ids)
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-
-    let db = db
+    let mut db = db
         .lock()
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-    db.conn()
-        .execute(
-            "INSERT INTO reviews (id, kind, period_start, period_end, version, status, title, content, source_article_ids, source_review_ids, model, generated_at, updated_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, 'draft', ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
-            params![
-                id,
-                kind,
-                from,
-                to,
-                version,
-                title,
-                content,
-                source_article_ids_json,
-                source_review_ids_json,
-                model,
-                now_str,
-                now_str,
-            ],
-        )
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-
-    load_review(&db, &id).map(Json)
+    db.reviews()
+        .save(ReviewDraft {
+            kind: kind.into(),
+            period_start: from,
+            period_end: to,
+            version,
+            title,
+            content,
+            source_article_ids,
+            source_review_ids,
+            model,
+        })
+        .map(Json)
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))
 }
 pub(crate) async fn update_review(
     State(db): State<AppState>,
@@ -797,10 +576,14 @@ pub(crate) async fn update_review(
         }
     }
 
-    let db = db
+    let mut db = db
         .lock()
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-    let existing = load_review(&db, &id)?;
+    let existing = db
+        .reviews()
+        .find(&id)
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+        .ok_or((StatusCode::NOT_FOUND, "Review not found".into()))?;
     let title = payload
         .title
         .unwrap_or(existing.title)
@@ -816,29 +599,24 @@ pub(crate) async fn update_review(
         return Err((StatusCode::BAD_REQUEST, "Review content is required".into()));
     }
     let status = payload.status.unwrap_or(existing.status);
-    let now_str = now();
-
-    db.conn()
-        .execute(
-            "UPDATE reviews SET title=?1, content=?2, status=?3, updated_at=?4 WHERE id=?5",
-            params![title, content, status, now_str, id],
-        )
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-
-    load_review(&db, &id).map(Json)
+    db.reviews()
+        .update(&id, &title, &content, &status)
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+        .map(Json)
+        .ok_or((StatusCode::NOT_FOUND, "Review not found".into()))
 }
 pub(crate) async fn delete_review(
     State(db): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<StatusCode, (StatusCode, String)> {
-    let db = db
+    let mut db = db
         .lock()
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     let deleted = db
-        .conn()
-        .execute("DELETE FROM reviews WHERE id=?1", params![id])
+        .reviews()
+        .delete(&id)
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-    if deleted == 0 {
+    if !deleted {
         return Err((StatusCode::NOT_FOUND, "Review not found".into()));
     }
     Ok(StatusCode::NO_CONTENT)

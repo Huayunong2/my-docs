@@ -4,13 +4,11 @@ use crate::models::*;
 use axum::extract::{Query, State};
 use axum::http::StatusCode;
 use axum::response::Json;
-use rusqlite::params;
 use std::sync::{Arc, Mutex};
 
 type AppState = Arc<Mutex<Database>>;
 use chrono::{Datelike, Duration, Local, NaiveDate};
 use std::collections::{BTreeMap, BTreeSet};
-
 
 // ── Helpers ─────────────────────────────────────────
 
@@ -27,37 +25,28 @@ pub(crate) async fn get_stats_overview(
         ));
     }
 
-    let db = db
+    let mut db = db
         .lock()
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-    let mut stmt = db
-        .conn()
-        .prepare("SELECT date, word_count, mood FROM articles WHERE date BETWEEN ?1 AND ?2 ORDER BY date ASC")
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-
-    let rows = stmt
-        .query_map(params![q.from, q.to], |row| {
-            Ok((
-                row.get::<_, String>(0)?,
-                row.get::<_, i64>(1)?,
-                row.get::<_, String>(2)?,
-            ))
-        })
+    let articles = db
+        .articles()
+        .full_between(&q.from, &q.to)
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
     let mut dates = BTreeSet::new();
     let mut total_words = 0;
     let mut mood_counts = BTreeMap::new();
-    for row in rows {
-        let (date, words, mood) =
-            row.map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-        dates.insert(date);
-        total_words += words;
-        if !mood.trim().is_empty() {
-            *mood_counts.entry(mood).or_insert(0) += 1;
+    for article in articles {
+        dates.insert(article.date);
+        total_words += article.word_count;
+        if !article.mood.trim().is_empty() {
+            *mood_counts.entry(article.mood).or_insert(0) += 1;
         }
     }
-    let mut exemptions = load_exemptions(&db, &q.from, &q.to)?;
+    let mut exemptions = db
+        .exemptions()
+        .list(&q.from, &q.to)
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     for date in &dates {
         exemptions.remove(date);
     }
@@ -114,38 +103,28 @@ pub(crate) async fn get_month_stats(
     .ok_or_else(|| (StatusCode::BAD_REQUEST, "Invalid year or month".to_string()))?;
 
     let from = first.format("%Y-%m-%d").to_string();
-    let to = next_month.format("%Y-%m-%d").to_string();
-
-    let db = db
+    let mut db = db
         .lock()
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-    let mut stmt = db
-        .conn()
-        .prepare("SELECT date, id, title, mood, word_count FROM articles WHERE date >= ?1 AND date < ?2 ORDER BY date ASC")
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-
-    let rows = stmt
-        .query_map(params![from, to], |row| {
-            Ok((
-                row.get::<_, String>(0)?,
-                row.get::<_, String>(1)?,
-                row.get::<_, String>(2)?,
-                row.get::<_, String>(3)?,
-                row.get::<_, i64>(4)?,
-            ))
-        })
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-
-    let mut articles = BTreeMap::new();
-    for row in rows {
-        let (date, id, title, mood, word_count) =
-            row.map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-        articles.insert(date, (id, title, mood, word_count));
-    }
     let last = (next_month - Duration::days(1))
         .format("%Y-%m-%d")
         .to_string();
-    let exemptions = load_exemptions(&db, &from, &last)?;
+    let rows = db
+        .articles()
+        .full_between(&from, &last)
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    let mut articles = BTreeMap::new();
+    for article in rows {
+        articles.insert(
+            article.date,
+            (article.id, article.title, article.mood, article.word_count),
+        );
+    }
+    let exemptions = db
+        .exemptions()
+        .list(&from, &last)
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
     let mut days = Vec::new();
     let mut cursor = first;
@@ -187,45 +166,38 @@ pub(crate) async fn get_week_review(
     let from = week_start.format("%Y-%m-%d").to_string();
     let to = week_end.format("%Y-%m-%d").to_string();
 
-    let db = db
+    let mut db = db
         .lock()
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-    let mut stmt = db
-        .conn()
-        .prepare("SELECT id, date, title, mood, tags, word_count, content FROM articles WHERE date BETWEEN ?1 AND ?2 ORDER BY date ASC")
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-    let rows = stmt
-        .query_map(params![from, to], |row| {
-            let content: String = row.get(6)?;
-            Ok((
-                ArticleSummary {
-                    id: row.get(0)?,
-                    date: row.get(1)?,
-                    title: row.get(2)?,
-                    mood: row.get(3)?,
-                    tags: row.get(4)?,
-                    word_count: row.get(5)?,
-                    preview: preview(&content, 120),
-                },
-                content,
-            ))
-        })
+    let rows = db
+        .articles()
+        .full_between(&from, &to)
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
     let mut articles = Vec::new();
     let mut written_dates = BTreeSet::new();
     let mut total_words = 0;
     let mut term_counts = BTreeMap::new();
-    for row in rows {
-        let (summary, content) =
-            row.map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    for article in rows {
+        let summary = ArticleSummary {
+            id: article.id,
+            date: article.date,
+            title: article.title,
+            mood: article.mood,
+            tags: article.tags,
+            word_count: article.word_count,
+            preview: preview(&article.content, 120),
+        };
         written_dates.insert(summary.date.clone());
         total_words += summary.word_count;
         collect_terms(&summary.title, &mut term_counts);
-        collect_terms(&content, &mut term_counts);
+        collect_terms(&article.content, &mut term_counts);
         articles.push(summary);
     }
-    let mut exemptions = load_exemptions(&db, &from, &to)?;
+    let mut exemptions = db
+        .exemptions()
+        .list(&from, &to)
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     for date in &written_dates {
         exemptions.remove(date);
     }

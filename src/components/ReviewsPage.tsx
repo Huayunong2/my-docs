@@ -387,8 +387,8 @@ function PeriodCard({
   const previewContent = normalizeReviewContent(current.kind, current.title, current.content);
   const kindLabel = period.kind === "weekly" ? "周复盘" : "月复盘";
   const sourceCount = period.kind === "weekly"
-    ? countJsonItems(current.source_article_ids)
-    : countJsonItems(current.source_review_ids);
+    ? current.source_article_ids.length
+    : current.source_review_ids.length;
   return (
     <article className="relative rounded-xl border border-gray-100 bg-gray-50/70 p-3 pl-7 transition-colors hover:border-accent/25 dark:border-white/10 dark:bg-white/[0.025]">
       <div className="absolute bottom-3 left-3 top-3 w-px bg-gray-200 dark:bg-white/10" />
@@ -572,15 +572,6 @@ function ComparePane({ label, review, accent = false }: { label: string; review:
       </div>
     </section>
   );
-}
-
-function countJsonItems(raw: string) {
-  try {
-    const parsed = JSON.parse(raw || "[]");
-    return Array.isArray(parsed) ? parsed.length : 0;
-  } catch {
-    return 0;
-  }
 }
 
 function majorityMonth(start: string, end: string): string {

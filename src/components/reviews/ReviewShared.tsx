@@ -48,8 +48,8 @@ export function ReviewViewerModal({
 }) {
   const [editing, setEditing] = useState(false);
   const sourceCount = review.kind === "weekly"
-    ? countJsonItems(review.source_article_ids)
-    : countJsonItems(review.source_review_ids);
+    ? review.source_article_ids.length
+    : review.source_review_ids.length;
   const displayContent = normalizeReviewContent(review.kind, title, content);
   const metaItems = [
     { label: "类型", value: review.kind === "weekly" ? "周复盘" : "月复盘" },
@@ -165,13 +165,4 @@ export function ReviewViewerModal({
       </div>
     </div>
   );
-}
-
-function countJsonItems(raw: string) {
-  try {
-    const parsed = JSON.parse(raw || "[]");
-    return Array.isArray(parsed) ? parsed.length : 0;
-  } catch {
-    return 0;
-  }
 }
