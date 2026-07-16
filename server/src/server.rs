@@ -13,43 +13,30 @@ use crate::models::*;
 use crate::stats;
 
 use axum::{extract::State, http::StatusCode, middleware, response::Json, Router};
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, Mutex};
 use tower_http::services::ServeDir;
 
 type AppState = Arc<Mutex<Database>>;
 
 const BUILD_TIME: &str = env!("BUILD_TIMESTAMP");
-static DATABASE_HEALTH_CACHE: OnceLock<Mutex<(u64, String)>> = OnceLock::new();
-
 fn maintenance_timestamp(name: &str) -> Option<u64> {
     std::fs::read_to_string(app_data_dir().join("status").join(name))
         .ok()
         .and_then(|value| value.trim().parse().ok())
 }
 
-fn cached_database_integrity(db: &AppState) -> String {
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs();
-    let cache = DATABASE_HEALTH_CACHE.get_or_init(|| Mutex::new((0, "unavailable".into())));
-    let mut cached = match cache.lock() {
-        Ok(cached) => cached,
-        Err(_) => return "unavailable".into(),
+fn database_integrity_status() -> (String, Option<u64>) {
+    let value = std::fs::read_to_string(app_data_dir().join("status/database-integrity"));
+    let Ok(value) = value else {
+        return ("pending".into(), None);
     };
-    if now.saturating_sub(cached.0) < 300 {
-        return cached.1.clone();
-    }
-    let result = db
-        .lock()
-        .ok()
-        .and_then(|database| database.quick_check().ok())
-        .unwrap_or_else(|| "unavailable".into());
-    *cached = (now, result.clone());
-    result
+    let mut parts = value.split_whitespace();
+    let checked_at = parts.next().and_then(|part| part.parse().ok());
+    let status = parts.next().unwrap_or("unavailable").to_string();
+    (status, checked_at)
 }
 
-async fn health_check(State(db): State<AppState>) -> Json<serde_json::Value> {
+async fn health_check() -> Json<serde_json::Value> {
     let ai = std::env::var("DAILY_SUMMARY_AI_API_KEY")
         .map(|k| !k.is_empty())
         .unwrap_or(false);
@@ -85,11 +72,10 @@ async fn health_check(State(db): State<AppState>) -> Json<serde_json::Value> {
         .and_then(|metadata| metadata.modified().ok())
         .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
         .map(|duration| duration.as_secs());
-    let database_integrity = cached_database_integrity(&db);
+    let (database_integrity, database_integrity_last_check_unix) = database_integrity_status();
     let ai_health = ai_health();
     let offsite_last_success_unix = maintenance_timestamp("offsite-last-success");
-    let offsite_verify_last_success_unix =
-        maintenance_timestamp("offsite-verify-last-success");
+    let offsite_verify_last_success_unix = maintenance_timestamp("offsite-verify-last-success");
     Json(serde_json::json!({
         "version": env!("CARGO_PKG_VERSION"),
         "build": BUILD_TIME,
@@ -109,6 +95,7 @@ async fn health_check(State(db): State<AppState>) -> Json<serde_json::Value> {
         "last_backup": last_backup_time,
         "monitoring": {
             "database_integrity": database_integrity,
+            "database_integrity_last_check_unix": database_integrity_last_check_unix,
             "last_backup_unix": last_backup_unix,
             "offsite_last_success_unix": offsite_last_success_unix,
             "offsite_verify_last_success_unix": offsite_verify_last_success_unix,
@@ -303,6 +290,17 @@ pub async fn run() {
         .unwrap_or_else(|error| panic!("Failed to bind {bind}: {error}"));
     println!("📓 每日总结服务端已启动 → http://{bind}");
     axum::serve(listener, router).await.expect("Server error");
+}
+
+pub(crate) async fn check_startup() -> Result<(), String> {
+    let db = Database::new().map_err(|error| error.to_string())?;
+    let _router = build_router(db);
+    let bind = bind_address(std::env::var("DAILY_SUMMARY_BIND").ok());
+    let listener = tokio::net::TcpListener::bind(&bind)
+        .await
+        .map_err(|error| format!("Failed to bind {bind}: {error}"))?;
+    drop(listener);
+    Ok(())
 }
 
 #[cfg(test)]

@@ -14,11 +14,15 @@ DATA_DIR="$DATA_HOME/.daily-summary"
 DB_PATH="$DATA_DIR/data.db"
 BACKUP_DIR="$DATA_DIR/backups"
 STATUS_DIR="$DATA_DIR/status"
+RESTORE_JOURNAL="$DATA_DIR/.restore-rollback"
 LAST_SNAPSHOT=""
 VERIFIED_DIR=""
 LOCK_MODE="fail"
 LOCK_ACQUIRED=0
+RESTORE_IN_PROGRESS=0
+RESTORE_WAS_ACTIVE=0
 TEMP_PATHS=()
+COMMAND="${1:-help}"
 
 if [ "$(id -u)" -eq 0 ]; then
   SUDO=""
@@ -26,7 +30,7 @@ else
   SUDO="sudo"
 fi
 
-if [ -f "$BACKUP_ENV_FILE" ]; then
+if [ -f "$BACKUP_ENV_FILE" ] && [ "$COMMAND" != "recover-restore" ]; then
   set -a
   # shellcheck disable=SC1090
   source "$BACKUP_ENV_FILE"
@@ -49,6 +53,13 @@ has_cmd() {
 cleanup() {
   local status=$?
   local path
+  if [ "$RESTORE_IN_PROGRESS" = "1" ]; then
+    set +e
+    $SUDO systemctl stop "$SERVICE_NAME" >/dev/null 2>&1
+    if rollback_pending_restore && [ "$RESTORE_WAS_ACTIVE" = "1" ]; then
+      $SUDO systemctl start "$SERVICE_NAME" >/dev/null 2>&1
+    fi
+  fi
   for path in "${TEMP_PATHS[@]}"; do
     [ -n "$path" ] && rm -rf "$path"
   done
@@ -69,6 +80,7 @@ Usage:
   ./ops.sh offsite-backup
   ./ops.sh verify-offsite
   ./ops.sh restore-offsite
+  ./ops.sh recover-restore
   ./ops.sh monitor
 
 Offsite backups use Restic configuration from:
@@ -81,7 +93,15 @@ acquire_lock() {
   has_cmd flock || fail "flock is required (install util-linux)"
   mkdir -p "$APP_DIR/server/target"
   exec 9>"$APP_DIR/server/target/deploy.lock"
-  if ! flock -n 9; then
+  local wait_seconds="${DAILY_SUMMARY_LOCK_WAIT_SECONDS:-0}"
+  [[ "$wait_seconds" =~ ^[0-9]+$ ]] || fail "DAILY_SUMMARY_LOCK_WAIT_SECONDS must be an integer"
+  local lock_result=0
+  if [ "$wait_seconds" -gt 0 ]; then
+    flock -w "$wait_seconds" 9 || lock_result=$?
+  else
+    flock -n 9 || lock_result=$?
+  fi
+  if [ "$lock_result" -ne 0 ]; then
     if [ "$LOCK_MODE" = "skip" ]; then
       info "Deployment or maintenance is already running; skipping this monitor cycle"
       exit 0
@@ -93,13 +113,6 @@ acquire_lock() {
 
 require_server_bin() {
   [ -x "$SERVER_BIN" ] || fail "Server binary not found. Run ./setup.sh first: $SERVER_BIN"
-}
-
-env_value() {
-  local file="$1"
-  local key="$2"
-  [ -f "$file" ] || return 0
-  grep -E "^${key}=" "$file" | tail -n 1 | cut -d= -f2- || true
 }
 
 prune_local_backups() {
@@ -141,8 +154,13 @@ create_snapshot() {
 package_bundle() {
   local database="$1"
   local output="$2"
+  local output_dir output_name
+  output_dir="$(dirname "$output")"
+  output_name="$(basename "$output")"
+  mkdir -p "$output_dir"
+  output_dir="$(cd "$output_dir" && pwd -P)"
+  output="$output_dir/$output_name"
   [ ! -e "$output" ] || fail "Bundle already exists: $output"
-  mkdir -p "$(dirname "$output")"
   local stage archive_next
   stage="$(mktemp -d)"
   archive_next="$output.next.$$"
@@ -188,13 +206,43 @@ verify_bundle() {
   local bundle="$1"
   [ -f "$bundle" ] || fail "Bundle not found: $bundle"
   require_server_bin
-  local entry stage
+  local max_compressed_mb="${DAILY_SUMMARY_BUNDLE_MAX_COMPRESSED_MB:-2048}"
+  local max_extracted_mb="${DAILY_SUMMARY_BUNDLE_MAX_EXTRACTED_MB:-4096}"
+  local min_free_mb="${DAILY_SUMMARY_BUNDLE_MIN_FREE_AFTER_EXTRACT_MB:-256}"
+  [[ "$max_compressed_mb" =~ ^[0-9]+$ ]] || fail "DAILY_SUMMARY_BUNDLE_MAX_COMPRESSED_MB must be an integer"
+  [[ "$max_extracted_mb" =~ ^[0-9]+$ ]] || fail "DAILY_SUMMARY_BUNDLE_MAX_EXTRACTED_MB must be an integer"
+  [[ "$min_free_mb" =~ ^[0-9]+$ ]] || fail "DAILY_SUMMARY_BUNDLE_MIN_FREE_AFTER_EXTRACT_MB must be an integer"
+  local compressed_bytes
+  compressed_bytes="$(stat -c '%s' "$bundle")"
+  ((compressed_bytes <= max_compressed_mb * 1024 * 1024)) \
+    || fail "Bundle exceeds the ${max_compressed_mb}MB compressed-size limit"
+
+  local entry stage entry_count=0 extracted_bytes=0
+  local -A seen_entries=()
   while IFS= read -r entry; do
+    entry_count=$((entry_count + 1))
+    [ "$entry_count" -le 4 ] || fail "Bundle contains too many entries"
     case "$entry" in
       manifest|SHA256SUMS|database.db|server.env) ;;
       *) fail "Bundle contains an unexpected path: $entry" ;;
     esac
+    [ -z "${seen_entries[$entry]:-}" ] || fail "Bundle contains a duplicate entry: $entry"
+    seen_entries[$entry]=1
   done < <(tar -tzf "$bundle")
+  [ "$entry_count" -ge 3 ] || fail "Bundle is incomplete"
+  local entry_type entry_size
+  while read -r entry_type entry_size; do
+    [ "$entry_type" = "-" ] || fail "Bundle contains a non-regular entry"
+    [[ "$entry_size" =~ ^[0-9]+$ ]] || fail "Bundle contains an invalid entry size"
+    extracted_bytes=$((extracted_bytes + entry_size))
+  done < <(tar --numeric-owner -tvzf "$bundle" | awk '{print substr($1, 1, 1), $3}')
+  ((extracted_bytes <= max_extracted_mb * 1024 * 1024)) \
+    || fail "Bundle exceeds the ${max_extracted_mb}MB extracted-size limit"
+  local temp_root="${TMPDIR:-/tmp}" temp_available_kb
+  temp_available_kb="$(df -Pk "$temp_root" 2>/dev/null | awk 'NR == 2 {print $4}' || true)"
+  [[ "$temp_available_kb" =~ ^[0-9]+$ ]] || fail "Could not determine free space for bundle extraction: $temp_root"
+  ((extracted_bytes + min_free_mb * 1024 * 1024 <= temp_available_kb * 1024)) \
+    || fail "Bundle extraction would leave less than ${min_free_mb}MB free in $temp_root"
   stage="$(mktemp -d)"
   TEMP_PATHS+=("$stage")
   tar -xzf "$bundle" -C "$stage" --no-same-owner --no-same-permissions
@@ -203,6 +251,9 @@ verify_bundle() {
   [ -f "$stage/database.db" ] && [ ! -L "$stage/database.db" ] || fail "Bundle database is missing or unsafe"
   if [ -e "$stage/server.env" ] && { [ ! -f "$stage/server.env" ] || [ -L "$stage/server.env" ]; }; then
     fail "Bundle environment file is unsafe"
+  fi
+  if [ -f "$stage/server.env" ] && [ ! -s "$stage/server.env" ]; then
+    fail "Bundle environment file is empty"
   fi
   grep -qx 'format=daily-summary-backup-bundle' "$stage/manifest" || fail "Invalid bundle format"
   grep -qx 'version=1' "$stage/manifest" || fail "Unsupported bundle version"
@@ -222,31 +273,42 @@ merge_restored_env() {
   local restored="$1"
   local current="$2"
   local output="$3"
-  local bind origins
-  bind="$(env_value "$current" DAILY_SUMMARY_BIND)"
-  origins="$(env_value "$current" DAILY_SUMMARY_ALLOWED_ORIGINS)"
-  if [ -z "$bind" ] && [ -z "$origins" ]; then
+  if [ ! -f "$current" ]; then
     install -m 0600 "$restored" "$output"
     return
   fi
-  awk -F= -v bind="$bind" -v origins="$origins" '
-    $1 == "DAILY_SUMMARY_BIND" && bind != "" { print "DAILY_SUMMARY_BIND=" bind; seen_bind=1; next }
-    $1 == "DAILY_SUMMARY_ALLOWED_ORIGINS" && origins != "" { print "DAILY_SUMMARY_ALLOWED_ORIGINS=" origins; seen_origins=1; next }
-    { print }
-    END {
-      if (bind != "" && !seen_bind) print "DAILY_SUMMARY_BIND=" bind
-      if (origins != "" && !seen_origins) print "DAILY_SUMMARY_ALLOWED_ORIGINS=" origins
+  awk -F= '
+    NR == FNR {
+      if ($1 == "DAILY_SUMMARY_TOKEN" || $1 ~ /^DAILY_SUMMARY_AI_/) {
+        restored[$1] = substr($0, index($0, "=") + 1)
+      }
+      next
     }
-  ' "$restored" >"$output"
+    {
+      key = $1
+      if (key in restored) {
+        print key "=" restored[key]
+      } else {
+        print
+      }
+      seen[key] = 1
+    }
+    END {
+      for (key in restored) {
+        if (!seen[key]) print key "=" restored[key]
+      }
+    }
+  ' "$restored" "$current" >"$output"
   chmod 600 "$output"
 }
 
 wait_for_service() {
-  local attempt response
+  local attempt response url
+  url="$(health_url)"
   for ((attempt = 1; attempt <= 20; attempt++)); do
     if systemctl is-active --quiet "$SERVICE_NAME"; then
-      response="$(curl -fsS --max-time 2 http://127.0.0.1:8080/health 2>/dev/null || true)"
-      if echo "$response" | grep -q '"database_integrity"[[:space:]]*:[[:space:]]*"ok"'; then
+      response="$(curl -fsS --max-time 2 "$url" 2>/dev/null || true)"
+      if echo "$response" | grep -q '"version"'; then
         return 0
       fi
     fi
@@ -255,78 +317,210 @@ wait_for_service() {
   return 1
 }
 
+health_url() {
+  local bind=""
+  if [ -f "$ENV_FILE" ]; then
+    bind="$(grep -E '^DAILY_SUMMARY_BIND=' "$ENV_FILE" | tail -n 1 | cut -d= -f2- || true)"
+  fi
+  bind="${bind:-0.0.0.0:8080}"
+  case "$bind" in
+    0.0.0.0:*) bind="127.0.0.1:${bind#*:}" ;;
+    \[::\]:*) bind="127.0.0.1:${bind##*:}" ;;
+  esac
+  printf 'http://%s/health\n' "$bind"
+}
+
+current_boot_id() {
+  if [ -r /proc/sys/kernel/random/boot_id ]; then
+    tr -d '\n' </proc/sys/kernel/random/boot_id
+  else
+    printf 'unknown'
+  fi
+}
+
+restore_owner_is_active() {
+  local owner_pid owner_boot owner_start current_start
+  [ -f "$RESTORE_JOURNAL/owner.pid" ] || return 1
+  [ -f "$RESTORE_JOURNAL/owner.boot-id" ] || return 1
+  owner_pid="$(cat "$RESTORE_JOURNAL/owner.pid")"
+  owner_boot="$(cat "$RESTORE_JOURNAL/owner.boot-id")"
+  [[ "$owner_pid" =~ ^[0-9]+$ ]] || return 1
+  [ "$owner_boot" = "$(current_boot_id)" ] || return 1
+  kill -0 "$owner_pid" 2>/dev/null || return 1
+  if [ -f "$RESTORE_JOURNAL/owner.start-time" ] && [ -r "/proc/$owner_pid/stat" ]; then
+    owner_start="$(cat "$RESTORE_JOURNAL/owner.start-time")"
+    current_start="$(awk '{print $22}' "/proc/$owner_pid/stat" 2>/dev/null || true)"
+    [ -n "$owner_start" ] && [ "$owner_start" = "$current_start" ] || return 1
+  fi
+}
+
+rollback_pending_restore() {
+  [ -d "$RESTORE_JOURNAL" ] || return 0
+  if grep -qx committed "$RESTORE_JOURNAL/phase" 2>/dev/null; then
+    return 1
+  fi
+  if [ -f "$RESTORE_JOURNAL/had-db" ]; then
+    [ -f "$RESTORE_JOURNAL/database.db" ] || return 1
+    install -m 0600 "$RESTORE_JOURNAL/database.db" "$DB_PATH" || return 1
+  else
+    rm -f "$DB_PATH" || return 1
+  fi
+  if [ -f "$RESTORE_JOURNAL/had-env" ]; then
+    [ -f "$RESTORE_JOURNAL/server.env" ] || return 1
+    install -m 0600 "$RESTORE_JOURNAL/server.env" "$ENV_FILE" || return 1
+  else
+    rm -f "$ENV_FILE" || return 1
+  fi
+  rm -rf "$RESTORE_JOURNAL" || return 1
+  sync -f "$DATA_DIR" 2>/dev/null || true
+  sync -f "$APP_DIR/server" 2>/dev/null || true
+}
+
+finalize_committed_restore() {
+  [ -d "$RESTORE_JOURNAL" ] || return 0
+  grep -qx committed "$RESTORE_JOURNAL/phase" 2>/dev/null || return 1
+  rm -rf "$RESTORE_JOURNAL" || return 1
+  sync -f "$DATA_DIR" 2>/dev/null || true
+}
+
+recover_pending_restore() {
+  [ -d "$RESTORE_JOURNAL" ] || return 0
+  if grep -qx committed "$RESTORE_JOURNAL/phase" 2>/dev/null; then
+    info "Finalizing a committed restore transaction"
+    if ! finalize_committed_restore; then
+      info "Warning: committed restore journal could not be removed; restored data will not be rolled back: $RESTORE_JOURNAL"
+    fi
+    return 0
+  fi
+  if restore_owner_is_active; then
+    info "A restore transaction owned by PID $(cat "$RESTORE_JOURNAL/owner.pid") is still active"
+    return 0
+  fi
+  local restart_service=0
+  if has_cmd systemctl && systemctl is-active --quiet "$SERVICE_NAME"; then
+    restart_service=1
+    $SUDO systemctl stop "$SERVICE_NAME"
+  fi
+  info "Recovering an interrupted restore transaction"
+  rollback_pending_restore || fail "Interrupted restore could not be rolled back; journal retained at $RESTORE_JOURNAL"
+  if [ "$restart_service" = "1" ]; then
+    $SUDO systemctl start "$SERVICE_NAME"
+  fi
+  info "Interrupted restore was rolled back"
+}
+
+write_database_status() {
+  local status="$1"
+  local next
+  mkdir -p "$STATUS_DIR"
+  next="$STATUS_DIR/.database-integrity.$$"
+  TEMP_PATHS+=("$next")
+  printf '%s %s\n' "$(date +%s)" "$status" >"$next"
+  chmod 600 "$next"
+  mv -f "$next" "$STATUS_DIR/database-integrity"
+}
+
+check_database_integrity() {
+  local stage snapshot
+  stage="$(mktemp -d "$DATA_DIR/.integrity-check.XXXXXX")"
+  snapshot="$stage/database.db"
+  TEMP_PATHS+=("$stage")
+  "$SERVER_BIN" --snapshot "$snapshot" >/dev/null 2>&1 \
+    && "$SERVER_BIN" --verify-db "$snapshot" >/dev/null 2>&1
+}
+
+preflight_restored_server() {
+  if [ ! -f "$ENV_FILE" ]; then
+    DAILY_SUMMARY_BIND=127.0.0.1:0 DAILY_SUMMARY_ALLOW_NO_TOKEN=1 \
+      "$SERVER_BIN" --check-startup >/dev/null 2>&1
+    return
+  fi
+  has_cmd systemd-run || fail "systemd-run is required for environment-equivalent restore validation"
+  $SUDO systemd-run --quiet --wait --collect --pipe \
+    --unit="$SERVICE_NAME-restore-preflight-$$" \
+    --uid="$(id -u)" \
+    --working-directory="$APP_DIR/server" \
+    --property="EnvironmentFile=$ENV_FILE" \
+    "$SERVER_BIN" --check-startup >/dev/null 2>&1
+}
+
 restore_bundle() {
   local bundle="$1"
   has_cmd systemctl || fail "Restore requires systemd service coordination"
   acquire_lock
+  recover_pending_restore
   verify_bundle "$bundle"
   mkdir -p "$DATA_DIR" "$BACKUP_DIR"
   chmod 700 "$DATA_DIR" "$BACKUP_DIR" 2>/dev/null || true
-  local was_active=0 had_db=0 had_env=0 timestamp previous_db previous_env next_db next_env
+  local was_active=0 had_db=0 had_env=0 timestamp previous_db next_db next_env journal_next
   timestamp="$(date +%Y%m%d-%H%M%S)"
   previous_db="$BACKUP_DIR/pre-restore-$timestamp-$$.db"
-  previous_env="$VERIFIED_DIR/previous.env"
   next_db="$DATA_DIR/.data.db.restore-$$"
   next_env="$APP_DIR/server/.env.restore-$$"
-  TEMP_PATHS+=("$next_db" "$next_env")
+  journal_next="$DATA_DIR/.restore-rollback.next.$$"
+  TEMP_PATHS+=("$next_db" "$next_env" "$journal_next")
   if [ -f "$DB_PATH" ]; then
     had_db=1
   fi
   if [ -f "$ENV_FILE" ]; then
-    cp "$ENV_FILE" "$previous_env"
-    chmod 600 "$previous_env"
     had_env=1
   fi
   install -m 0600 "$VERIFIED_DIR/database.db" "$next_db"
   if [ -f "$VERIFIED_DIR/server.env" ]; then
-    merge_restored_env "$VERIFIED_DIR/server.env" "$previous_env" "$next_env"
+    merge_restored_env "$VERIFIED_DIR/server.env" "$ENV_FILE" "$next_env"
   fi
   if systemctl is-active --quiet "$SERVICE_NAME"; then
     was_active=1
     $SUDO systemctl stop "$SERVICE_NAME"
   fi
+  RESTORE_IN_PROGRESS=1
+  RESTORE_WAS_ACTIVE="$was_active"
+  mkdir -m 0700 "$journal_next"
   if [ "$had_db" = "1" ]; then
-    if ! cp "$DB_PATH" "$previous_db"; then
-      [ "$was_active" = "1" ] && $SUDO systemctl start "$SERVICE_NAME" >/dev/null 2>&1 || true
+    if ! install -m 0600 "$DB_PATH" "$journal_next/database.db"; then
       fail "Could not preserve the current database before restore"
     fi
-    chmod 600 "$previous_db"
+    touch "$journal_next/had-db"
+    install -m 0600 "$DB_PATH" "$previous_db"
   fi
+  if [ "$had_env" = "1" ]; then
+    install -m 0600 "$ENV_FILE" "$journal_next/server.env"
+    touch "$journal_next/had-env"
+  fi
+  printf '%s\n' "$$" >"$journal_next/owner.pid"
+  current_boot_id >"$journal_next/owner.boot-id"
+  awk '{print $22}' "/proc/$$/stat" >"$journal_next/owner.start-time" 2>/dev/null || true
+  printf 'prepared\n' >"$journal_next/phase"
+  chmod 600 "$journal_next"/*
+  mv "$journal_next" "$RESTORE_JOURNAL"
+  sync -f "$DATA_DIR" 2>/dev/null || true
   if ! mv -f "$next_db" "$DB_PATH"; then
-    [ "$was_active" = "1" ] && $SUDO systemctl start "$SERVICE_NAME" >/dev/null 2>&1 || true
     fail "Could not activate the restored database"
   fi
   if [ -f "$VERIFIED_DIR/server.env" ] && ! mv -f "$next_env" "$ENV_FILE"; then
-    if [ "$had_db" = "1" ]; then
-      install -m 0600 "$previous_db" "$DB_PATH"
-    else
-      rm -f "$DB_PATH"
-    fi
-    [ "$was_active" = "1" ] && $SUDO systemctl start "$SERVICE_NAME" >/dev/null 2>&1 || true
-    fail "Could not activate the restored environment; previous database was restored"
+    fail "Could not activate the restored environment"
   fi
 
-  local restore_ok=1
-  if [ "$was_active" = "1" ]; then
-    $SUDO systemctl start "$SERVICE_NAME" || restore_ok=0
-    if [ "$restore_ok" = "1" ] && ! wait_for_service; then
-      restore_ok=0
-    fi
-  fi
-  if [ "$restore_ok" = "0" ]; then
-    $SUDO systemctl stop "$SERVICE_NAME" >/dev/null 2>&1 || true
-    if [ "$had_db" = "1" ]; then
-      install -m 0600 "$previous_db" "$DB_PATH"
-    else
-      rm -f "$DB_PATH"
-    fi
-    if [ "$had_env" = "1" ]; then
-      install -m 0600 "$previous_env" "$ENV_FILE"
-    else
-      rm -f "$ENV_FILE"
-    fi
+  if ! preflight_restored_server; then
+    rollback_pending_restore || fail "Restore failed and automatic rollback failed; journal retained at $RESTORE_JOURNAL"
+    RESTORE_IN_PROGRESS=0
     [ "$was_active" = "1" ] && $SUDO systemctl start "$SERVICE_NAME" >/dev/null 2>&1 || true
-    fail "Restored service failed health checks; previous database and environment were restored"
+    fail "Restored server failed isolated startup validation; previous database and environment were restored"
+  fi
+  write_database_status ok
+  sync -f "$DB_PATH" 2>/dev/null || true
+  sync -f "$APP_DIR/server" 2>/dev/null || true
+  printf 'committed\n' >"$RESTORE_JOURNAL/phase"
+  sync -f "$RESTORE_JOURNAL" 2>/dev/null || true
+  RESTORE_IN_PROGRESS=0
+  if ! finalize_committed_restore; then
+    info "Warning: restore is committed but its journal could not be removed; startup will continue"
+  fi
+  if [ "$was_active" = "1" ]; then
+    if ! $SUDO systemctl start "$SERVICE_NAME" || ! wait_for_service; then
+      $SUDO systemctl stop "$SERVICE_NAME" >/dev/null 2>&1 || true
+      fail "Restore was committed, but the service failed its health check; restored data and $previous_db were retained"
+    fi
   fi
   if [ "$had_db" = "1" ]; then
     info "Restore completed. Previous database backup: $previous_db"
@@ -373,6 +567,7 @@ offsite_backup() {
   package_bundle "$LAST_SNAPSHOT" "$bundle"
   restic backup "$bundle" --tag daily-summary
   restic forget --tag daily-summary \
+    --group-by host,tags \
     --keep-daily "${DAILY_SUMMARY_RESTIC_KEEP_DAILY:-7}" \
     --keep-weekly "${DAILY_SUMMARY_RESTIC_KEEP_WEEKLY:-4}" \
     --keep-monthly "${DAILY_SUMMARY_RESTIC_KEEP_MONTHLY:-12}" --prune
@@ -433,23 +628,25 @@ monitor() {
   LOCK_MODE="skip"
   acquire_lock
   local -a failures=()
-  local response integrity backup_unix ai_failures available_kb now max_age max_ai min_disk
+  local response integrity backup_unix ai_failures available_kb now max_age max_verify_age max_ai min_disk db_check_interval
   now="$(date +%s)"
   max_age="${DAILY_SUMMARY_MONITOR_MAX_BACKUP_AGE_HOURS:-48}"
+  max_verify_age="${DAILY_SUMMARY_MONITOR_MAX_VERIFY_AGE_HOURS:-192}"
   max_ai="${DAILY_SUMMARY_MONITOR_MAX_AI_FAILURES:-3}"
   min_disk="${DAILY_SUMMARY_MONITOR_MIN_DISK_MB:-512}"
+  db_check_interval="${DAILY_SUMMARY_MONITOR_DB_CHECK_INTERVAL_HOURS:-24}"
   [[ "$max_age" =~ ^[0-9]+$ ]] || fail "DAILY_SUMMARY_MONITOR_MAX_BACKUP_AGE_HOURS must be an integer"
+  [[ "$max_verify_age" =~ ^[0-9]+$ ]] || fail "DAILY_SUMMARY_MONITOR_MAX_VERIFY_AGE_HOURS must be an integer"
   [[ "$max_ai" =~ ^[0-9]+$ ]] || fail "DAILY_SUMMARY_MONITOR_MAX_AI_FAILURES must be an integer"
   [[ "$min_disk" =~ ^[0-9]+$ ]] || fail "DAILY_SUMMARY_MONITOR_MIN_DISK_MB must be an integer"
+  [[ "$db_check_interval" =~ ^[0-9]+$ ]] || fail "DAILY_SUMMARY_MONITOR_DB_CHECK_INTERVAL_HOURS must be an integer"
   if ! systemctl is-active --quiet "$SERVICE_NAME"; then
     failures+=("service is not active")
   fi
-  response="$(curl -fsS --max-time 5 http://127.0.0.1:8080/health 2>/dev/null || true)"
+  response="$(curl -fsS --max-time 5 "$(health_url)" 2>/dev/null || true)"
   if [ -z "$response" ]; then
     failures+=("health endpoint is unreachable")
   else
-    integrity="$(printf '%s\n' "$response" | sed -n 's/.*"database_integrity"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')"
-    [ "$integrity" = "ok" ] || failures+=("SQLite quick-check is ${integrity:-unknown}")
     backup_unix="$(json_number "$response" last_backup_unix)"
     if [ -z "$backup_unix" ] || ((now - backup_unix > max_age * 3600)); then
       failures+=("latest local backup is missing or older than ${max_age}h")
@@ -459,15 +656,37 @@ monitor() {
       failures+=("AI has ${ai_failures} consecutive failures")
     fi
   fi
-  available_kb="$(df -Pk "$DATA_DIR" | awk 'NR == 2 {print $4}')"
+  local integrity_unix=""
+  if [ -f "$STATUS_DIR/database-integrity" ]; then
+    read -r integrity_unix integrity <"$STATUS_DIR/database-integrity" || true
+  fi
+  if ! [[ "$integrity_unix" =~ ^[0-9]+$ ]] || ((now - integrity_unix >= db_check_interval * 3600)); then
+    if check_database_integrity; then
+      write_database_status ok
+      integrity="ok"
+    else
+      write_database_status error
+      integrity="error"
+    fi
+  fi
+  [ "$integrity" = "ok" ] || failures+=("SQLite integrity check is ${integrity:-unknown}")
+  available_kb="$(df -Pk "$DATA_DIR" 2>/dev/null | awk 'NR == 2 {print $4}' || true)"
   if [ -z "$available_kb" ] || ((available_kb < min_disk * 1024)); then
     failures+=("free disk space is below ${min_disk}MB")
   fi
   if restic_configured; then
-    local offsite_unix=""
+    local offsite_unix="" verify_unix=""
     [ -f "$STATUS_DIR/offsite-last-success" ] && offsite_unix="$(cat "$STATUS_DIR/offsite-last-success")"
     if ! [[ "$offsite_unix" =~ ^[0-9]+$ ]] || ((now - offsite_unix > max_age * 3600)); then
       failures+=("latest offsite backup is missing or older than ${max_age}h")
+    fi
+    [ -f "$STATUS_DIR/offsite-verify-last-success" ] && verify_unix="$(cat "$STATUS_DIR/offsite-verify-last-success")"
+    if ! [[ "$verify_unix" =~ ^[0-9]+$ ]]; then
+      if ! [[ "$offsite_unix" =~ ^[0-9]+$ ]] || ((now - offsite_unix > 3600)); then
+        failures+=("offsite restore drill has not completed")
+      fi
+    elif ((now - verify_unix > max_verify_age * 3600)); then
+      failures+=("latest offsite restore drill is missing or older than ${max_verify_age}h")
     fi
   fi
   if [ "${#failures[@]}" -gt 0 ]; then
@@ -479,8 +698,7 @@ monitor() {
   info "Service, backup freshness, disk space, SQLite and AI checks passed"
 }
 
-command="${1:-help}"
-case "$command" in
+case "$COMMAND" in
   local-backup)
     acquire_lock
     create_snapshot
@@ -512,6 +730,12 @@ case "$command" in
   restore-offsite)
     restore_offsite
     ;;
+  recover-restore)
+    if [ "${2:-}" != "--startup" ]; then
+      acquire_lock
+    fi
+    recover_pending_restore
+    ;;
   monitor)
     monitor
     ;;
@@ -520,6 +744,6 @@ case "$command" in
     ;;
   *)
     usage >&2
-    fail "Unknown command: $command"
+    fail "Unknown command: $COMMAND"
     ;;
 esac

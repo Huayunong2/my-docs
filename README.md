@@ -309,7 +309,7 @@ cd daily-summary
 ./ops.sh restore /path/to/daily-summary-migration-时间.tar.gz
 ```
 
-恢复会验证 archive 路径、SHA-256 和 SQLite `integrity_check`，短暂停止服务并保留 `pre-restore-时间.db`。如果新数据库启动失败，会恢复原数据库和环境配置。迁移包中的 token/AI 配置会恢复，但新服务器当前的监听地址和 CORS 地址会保留，避免重新写回老服务器 IP。
+恢复会限制压缩包条目、类型和解压大小，并验证 archive 路径、SHA-256 和 SQLite `integrity_check`；随后短暂停止服务并保留 `pre-restore-时间.db`。数据库和环境切换期间会在数据目录保存持久 rollback journal；即使断电，systemd 下次启动服务前也会先恢复完整旧状态。迁移包中的 token/AI 配置会恢复，但新服务器当前的监听地址和 CORS 地址会保留，避免重新写回老服务器 IP。
 
 ### Restic 加密异地备份
 
@@ -342,7 +342,7 @@ AWS_SECRET_ACCESS_KEY=...
 ./ops.sh verify-offsite
 ```
 
-每日 timer 会生成本地快照并上传加密迁移包，默认保留最近 7 个日备份、4 个周备份和 12 个月备份。每周 timer 会从对象存储真实下载最新备份、校验并打开 SQLite，而不是只检查远端文件是否存在。
+每日 timer 会生成本地快照并上传加密迁移包，默认保留最近 7 个日备份、4 个周备份和 12 个月备份。保留策略按主机和 `daily-summary` 标签分组，不受每次备份临时路径变化影响。每周 timer 会从对象存储真实下载最新备份、校验并打开 SQLite，而不是只检查远端文件是否存在。
 
 灾难恢复时，在新服务器配置同一个 Restic repository 和密码，然后执行：
 
@@ -361,7 +361,7 @@ systemctl list-timers 'daily-summary-*'
 journalctl -u daily-summary-monitor.service
 ```
 
-监控项包括 systemd 服务、`/health`、本地/异地备份新鲜度、磁盘剩余空间、SQLite quick-check 和 AI 连续失败次数。默认阈值在 `server/backup.env.example` 中；配置 `DAILY_SUMMARY_ALERT_WEBHOOK_URL` 后，失败会向兼容 `{ "text": "..." }` 的 webhook 发送通知。
+监控项包括 systemd 服务、按实际 `DAILY_SUMMARY_BIND` 探测的 `/health`、本地/异地备份新鲜度、磁盘剩余空间、SQLite 完整性和 AI 连续失败次数。SQLite 检查由独立进程默认每 24 小时执行，HTTP 健康接口只读取结果，不会占用业务数据库的全局锁。默认阈值在 `server/backup.env.example` 中；配置 `DAILY_SUMMARY_ALERT_WEBHOOK_URL` 后，失败会向兼容 `{ "text": "..." }` 的 webhook 发送通知。
 
 不提供网页恢复按钮，是为了避免误点覆盖数据库。
 

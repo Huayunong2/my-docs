@@ -24,6 +24,7 @@ enum CliCommand {
     BuildId,
     Snapshot(PathBuf),
     VerifyDb(PathBuf),
+    CheckStartup,
 }
 
 fn parse_cli<I, S>(args: I) -> Result<CliCommand, String>
@@ -36,13 +37,19 @@ where
     match (args.next(), args.next(), args.next()) {
         (None, None, None) => Ok(CliCommand::Serve),
         (Some(flag), None, None) if flag.as_ref() == "--build-id" => Ok(CliCommand::BuildId),
+        (Some(flag), None, None) if flag.as_ref() == "--check-startup" => {
+            Ok(CliCommand::CheckStartup)
+        }
         (Some(flag), Some(path), None) if flag.as_ref() == "--snapshot" => {
             Ok(CliCommand::Snapshot(PathBuf::from(path.as_ref())))
         }
         (Some(flag), Some(path), None) if flag.as_ref() == "--verify-db" => {
             Ok(CliCommand::VerifyDb(PathBuf::from(path.as_ref())))
         }
-        _ => Err("Usage: daily-summary [--build-id | --snapshot PATH | --verify-db PATH]".into()),
+        _ => Err(
+            "Usage: daily-summary [--build-id | --check-startup | --snapshot PATH | --verify-db PATH]"
+                .into(),
+        ),
     }
 }
 
@@ -56,6 +63,12 @@ async fn main() {
     match parse_cli(std::env::args()).unwrap_or_else(|error| fail_cli(error)) {
         CliCommand::Serve => server::run().await,
         CliCommand::BuildId => println!("{}", env!("BUILD_TIMESTAMP")),
+        CliCommand::CheckStartup => {
+            server::check_startup()
+                .await
+                .unwrap_or_else(|error| fail_cli(error));
+            println!("ok");
+        }
         CliCommand::Snapshot(path) => {
             if path.exists() {
                 fail_cli(format!("Snapshot already exists: {}", path.display()));
@@ -85,6 +98,10 @@ mod cli_tests {
         assert_eq!(
             parse_cli(["daily-summary", "--snapshot", "/tmp/backup.db"]),
             Ok(CliCommand::Snapshot("/tmp/backup.db".into()))
+        );
+        assert_eq!(
+            parse_cli(["daily-summary", "--check-startup"]),
+            Ok(CliCommand::CheckStartup)
         );
         assert_eq!(
             parse_cli(["daily-summary", "--verify-db", "/tmp/backup.db"]),
