@@ -209,6 +209,7 @@ dependencies = [
  "async-trait",
  "axum",
  "chrono",
+ "libc",
  "reqwest",
  "rusqlite",
  "serde",

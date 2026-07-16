@@ -266,6 +266,20 @@ AI 行为：
 
 设置页「备份」可以创建、下载、删除 SQLite 快照。`setup.sh` 还会安装每日备份和五分钟健康监控 timer；这些功能不要求对象存储，旧版本数据库和现有 `server/.env` 可以继续使用。
 
+本地备份按类别独立保留，避免手工快照误删升级或恢复保护点：
+
+- 每日自动快照保留 14 份；
+- 每次部署前的 `pre-upgrade` 保留 5 份；
+- 每次恢复前的 `pre-restore` 保留 5 份；
+- 设置页创建的手工快照保留 10 份；
+- 超过 24 小时的已知临时快照和运维临时目录会自动清理。
+
+磁盘使用率达到 80% 时监控告警；达到 90% 时，本地快照、迁移包、升级前备份和恢复操作会拒绝继续写入。清理已有冗余备份不受 90% 限制，可手工执行：
+
+```bash
+./ops.sh maintain-backups
+```
+
 服务器默认数据目录：
 
 ```text
@@ -361,7 +375,7 @@ systemctl list-timers 'daily-summary-*'
 journalctl -u daily-summary-monitor.service
 ```
 
-监控项包括 systemd 服务、按实际 `DAILY_SUMMARY_BIND` 探测的 `/health`、本地/异地备份新鲜度、磁盘剩余空间、SQLite 完整性和 AI 连续失败次数。SQLite 检查由独立进程默认每 24 小时执行，HTTP 健康接口只读取结果，不会占用业务数据库的全局锁。默认阈值在 `server/backup.env.example` 中；配置 `DAILY_SUMMARY_ALERT_WEBHOOK_URL` 后，失败会向兼容 `{ "text": "..." }` 的 webhook 发送通知。
+监控项包括 systemd 服务、按实际 `DAILY_SUMMARY_BIND` 探测的 `/health`、本地/异地备份新鲜度、磁盘剩余空间与使用率、SQLite 完整性和 AI 连续失败次数。SQLite 检查由独立进程默认每 24 小时执行，HTTP 健康接口只读取结果，不会占用业务数据库的全局锁。磁盘使用率达到 80% 会告警，达到 90% 会停止生成新备份。默认阈值在 `server/backup.env.example` 中；配置 `DAILY_SUMMARY_ALERT_WEBHOOK_URL` 后，失败会向兼容 `{ "text": "..." }` 的 webhook 发送通知。
 
 不提供网页恢复按钮，是为了避免误点覆盖数据库。
 

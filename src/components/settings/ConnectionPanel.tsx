@@ -137,6 +137,13 @@ export default function ConnectionPanel() {
                   value={`${health.monitoring.ai_consecutive_failures} 次`}
                   good={health.monitoring.ai_consecutive_failures === 0}
                 />
+                {health.monitoring.disk_usage_percent != null && (
+                  <InfoTile
+                    label="磁盘使用率"
+                    value={`${health.monitoring.disk_usage_percent}%`}
+                    good={!health.monitoring.disk_usage_warning}
+                  />
+                )}
                 {health.monitoring.offsite_last_success_unix && (
                   <InfoTile
                     label="最近异地备份"

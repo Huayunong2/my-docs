@@ -2,6 +2,7 @@ mod ai;
 mod ai_client;
 mod archive;
 mod articles;
+mod backup_policy;
 mod backups;
 mod day_exemptions;
 mod db;
@@ -25,6 +26,7 @@ enum CliCommand {
     Snapshot(PathBuf),
     VerifyDb(PathBuf),
     CheckStartup,
+    MaintainBackups,
 }
 
 fn parse_cli<I, S>(args: I) -> Result<CliCommand, String>
@@ -40,6 +42,9 @@ where
         (Some(flag), None, None) if flag.as_ref() == "--check-startup" => {
             Ok(CliCommand::CheckStartup)
         }
+        (Some(flag), None, None) if flag.as_ref() == "--maintain-backups" => {
+            Ok(CliCommand::MaintainBackups)
+        }
         (Some(flag), Some(path), None) if flag.as_ref() == "--snapshot" => {
             Ok(CliCommand::Snapshot(PathBuf::from(path.as_ref())))
         }
@@ -47,7 +52,7 @@ where
             Ok(CliCommand::VerifyDb(PathBuf::from(path.as_ref())))
         }
         _ => Err(
-            "Usage: daily-summary [--build-id | --check-startup | --snapshot PATH | --verify-db PATH]"
+            "Usage: daily-summary [--build-id | --check-startup | --maintain-backups | --snapshot PATH | --verify-db PATH]"
                 .into(),
         ),
     }
@@ -66,6 +71,11 @@ async fn main() {
         CliCommand::CheckStartup => {
             server::check_startup()
                 .await
+                .unwrap_or_else(|error| fail_cli(error));
+            println!("ok");
+        }
+        CliCommand::MaintainBackups => {
+            backup_policy::maintain_backups(&helpers::app_data_dir())
                 .unwrap_or_else(|error| fail_cli(error));
             println!("ok");
         }
@@ -102,6 +112,10 @@ mod cli_tests {
         assert_eq!(
             parse_cli(["daily-summary", "--check-startup"]),
             Ok(CliCommand::CheckStartup)
+        );
+        assert_eq!(
+            parse_cli(["daily-summary", "--maintain-backups"]),
+            Ok(CliCommand::MaintainBackups)
         );
         assert_eq!(
             parse_cli(["daily-summary", "--verify-db", "/tmp/backup.db"]),
