@@ -534,6 +534,18 @@ cleanup_stale_deploy_stages() {
     -name '.deploy-stage.*' -mmin +1440 -exec rm -rf -- {} + 2>/dev/null || true
 }
 
+secure_runtime_data_permissions() {
+  local data_home="${XDG_DATA_HOME:-$HOME/.local/share}"
+  local data_dir="$data_home/.daily-summary"
+  mkdir -p "$data_dir" "$data_dir/backups" "$data_dir/status"
+  chmod 700 "$data_dir" "$data_dir/backups" "$data_dir/status" \
+    || fail "Could not secure runtime data directories"
+  [ ! -f "$data_dir/data.db" ] || chmod 600 "$data_dir/data.db" \
+    || fail "Could not secure the SQLite database"
+  find "$data_dir/backups" "$data_dir/status" -maxdepth 1 -type f \
+    -exec chmod 600 {} + || fail "Could not secure backup or status files"
+}
+
 acquire_deploy_lock() {
   local lock_root="$APP_DIR/server/target"
   mkdir -p "$lock_root"
@@ -1183,6 +1195,7 @@ fi
 trap cleanup_stage EXIT
 
 acquire_deploy_lock
+secure_runtime_data_permissions
 require_systemd
 recover_maintenance_units
 recover_interrupted_restore

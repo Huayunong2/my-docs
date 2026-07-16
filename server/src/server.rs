@@ -38,6 +38,14 @@ fn database_integrity_status() -> (String, Option<u64>) {
 }
 
 async fn health_check() -> Json<serde_json::Value> {
+    Json(serde_json::json!({
+        "status": "ok",
+        "version": env!("CARGO_PKG_VERSION"),
+        "build": BUILD_TIME,
+    }))
+}
+
+async fn detailed_health_check() -> Json<serde_json::Value> {
     let ai = std::env::var("DAILY_SUMMARY_AI_API_KEY")
         .map(|k| !k.is_empty())
         .unwrap_or(false);
@@ -267,6 +275,7 @@ fn build_router(db: Database) -> Router {
                 .delete(knowledge::delete_card),
         )
         .route("/ai/summary", axum::routing::post(ai::ai_summary))
+        .route("/health", axum::routing::get(detailed_health_check))
         .route("/articles/import", axum::routing::post(import_articles))
         .route("/articles/import-full", axum::routing::post(import_full))
         .route("/export/full", axum::routing::post(export_full))
@@ -321,5 +330,15 @@ mod tests {
             bind_address(Some("127.0.0.1:8080".into())),
             "127.0.0.1:8080"
         );
+    }
+
+    #[tokio::test]
+    async fn public_health_does_not_expose_private_operational_metadata() {
+        let Json(health) = health_check().await;
+        assert_eq!(health["status"], "ok");
+        assert!(health.get("db_path").is_none());
+        assert!(health.get("db_size").is_none());
+        assert!(health.get("ai_config").is_none());
+        assert!(health.get("monitoring").is_none());
     }
 }

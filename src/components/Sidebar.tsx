@@ -29,16 +29,17 @@ const navItems: { id: Page; label: string; icon: LucideIcon }[] = [
 interface SidebarProps {
   page: Page;
   onNavigate: (p: Page) => void;
+  onPrefetch: (p: Page) => void;
   dark: boolean;
   onToggleDark: () => void;
 }
 
-export default function Sidebar({ page, onNavigate, dark, onToggleDark }: SidebarProps) {
+export default function Sidebar({ page, onNavigate, onPrefetch, dark, onToggleDark }: SidebarProps) {
   return (
     <>
       {/* Desktop sidebar */}
       <aside className="hidden md:flex w-[220px] min-w-[220px] h-full glass bg-sidebar dark:bg-sidebar-dark border-r border-gray-200/50 dark:border-white/10 flex-col select-none z-10">
-        <DesktopSidebar page={page} onNavigate={onNavigate} dark={dark} onToggleDark={onToggleDark} />
+        <DesktopSidebar page={page} onNavigate={onNavigate} onPrefetch={onPrefetch} dark={dark} onToggleDark={onToggleDark} />
       </aside>
 
       {/* Mobile bottom tab bar */}
@@ -49,6 +50,7 @@ export default function Sidebar({ page, onNavigate, dark, onToggleDark }: Sideba
             item={item}
             active={page === item.id}
             onClick={() => onNavigate(item.id)}
+            onPrefetch={() => onPrefetch(item.id)}
           />
         ))}
         <button
@@ -64,7 +66,7 @@ export default function Sidebar({ page, onNavigate, dark, onToggleDark }: Sideba
   );
 }
 
-function DesktopSidebar({ page, onNavigate, dark, onToggleDark }: SidebarProps) {
+function DesktopSidebar({ page, onNavigate, onPrefetch, dark, onToggleDark }: SidebarProps) {
   const ThemeIcon = dark ? Sun : Moon;
   return (
     <>
@@ -90,6 +92,7 @@ function DesktopSidebar({ page, onNavigate, dark, onToggleDark }: SidebarProps) 
               key={item.id}
               active={page === item.id}
               onClick={() => onNavigate(item.id)}
+              onPrefetch={() => onPrefetch(item.id)}
             >
               <Icon className="mr-3" size={18} strokeWidth={page === item.id ? 2.4 : 2.1} />
               {item.label}
@@ -119,15 +122,19 @@ function DesktopSidebar({ page, onNavigate, dark, onToggleDark }: SidebarProps) 
 function NavButton({
   active,
   onClick,
+  onPrefetch,
   children,
 }: {
   active: boolean;
   onClick: () => void;
+  onPrefetch: () => void;
   children: React.ReactNode;
 }) {
   return (
     <motion.button
       onClick={onClick}
+      onPointerEnter={onPrefetch}
+      onFocus={onPrefetch}
       whileTap={{ scale: 0.96 }}
       className={`
         w-full flex items-center px-3.5 py-2.5 rounded-xl text-sm font-medium
@@ -155,15 +162,20 @@ function MobileNavButton({
   item,
   active,
   onClick,
+  onPrefetch,
 }: {
   item: { id: Page; label: string; icon: LucideIcon };
   active: boolean;
   onClick: () => void;
+  onPrefetch: () => void;
 }) {
   const Icon = item.icon;
   return (
     <button
       onClick={onClick}
+      onPointerEnter={onPrefetch}
+      onFocus={onPrefetch}
+      onTouchStart={onPrefetch}
       className={[
         "relative flex min-w-0 flex-col items-center gap-0.5 rounded-lg px-1 py-1 transition-all duration-200 active:scale-95",
         active

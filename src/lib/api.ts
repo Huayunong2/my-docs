@@ -430,9 +430,7 @@ export function deleteReview(id: string) {
 }
 
 export function healthCheck() {
-  const base = localStorage.getItem("server_url") || (isTauri() ? "http://115.191.3.251:8080/api" : "/api");
-  const root = base.replace(/\/api\/?$/, "");
-  return fetch(`${root}/health`).then(r => r.json()) as Promise<{
+  return httpRequest<{
     version: string;
     build: string;
     features: Record<string, boolean>;
@@ -461,7 +459,7 @@ export function healthCheck() {
       ai_last_failure_unix?: number;
       ai_last_success_unix?: number;
     };
-  }>;
+  }>("/health");
 }
 
 // ── Day exemptions ─────────────────────────────────
