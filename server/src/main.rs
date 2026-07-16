@@ -18,5 +18,9 @@ mod persistence_tests;
 
 #[tokio::main]
 async fn main() {
+    if std::env::args().nth(1).as_deref() == Some("--build-id") {
+        println!("{}", env!("BUILD_TIMESTAMP"));
+        return;
+    }
     server::run().await;
 }
