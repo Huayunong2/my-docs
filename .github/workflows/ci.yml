@@ -33,6 +33,7 @@ jobs:
       - run: cargo test --manifest-path server/Cargo.toml --locked
       - run: cargo clippy --manifest-path server/Cargo.toml --all-targets --locked -- -D warnings
       - run: bash -n setup.sh ops.sh
+      - run: bash scripts/test-setup-mode-guards.sh
 
   rust-security-audit:
     runs-on: ubuntu-latest

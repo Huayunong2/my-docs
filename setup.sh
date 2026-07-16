@@ -1071,7 +1071,7 @@ ensure_systemd_service() {
 }
 
 configure_caddy_if_needed() {
-  [ "$MODE" = "domain" ] || return
+  [ "$MODE" = "domain" ] || return 0
   if ! has_cmd caddy; then
     fail "Caddy is not installed. Re-run with --bootstrap or --force-deps to install it."
   fi
@@ -1110,7 +1110,7 @@ EOF
 }
 
 configure_firewall_if_needed() {
-  [ "$MODE" = "ip" ] || return
+  [ "$MODE" = "ip" ] || return 0
   if ! has_cmd ufw; then
     record_step "firewall skipped: ufw missing"
     return
