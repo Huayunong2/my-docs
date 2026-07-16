@@ -1,4 +1,4 @@
-use crate::db::{ArticleDraft, Database};
+use crate::db::{ArticleDraft, Database, KnowledgeCardDraft, ReviewDraft};
 use crate::models::{Article, KnowledgeCard, Review};
 use serde_json::json;
 
@@ -164,4 +164,45 @@ fn review_and_knowledge_http_shapes_hide_storage_serialization() {
     assert_eq!(review_json["source_article_ids"], json!(["article-1"]));
     assert_eq!(review_json["source_review_ids"], json!([]));
     assert_eq!(card_json["tags"], json!(["架构"]));
+}
+
+#[test]
+fn review_versions_are_allocated_when_the_review_is_persisted() {
+    let mut db = Database::new_in_memory().expect("in-memory database");
+    let draft = || ReviewDraft {
+        kind: "weekly".into(),
+        period_start: "2026-07-13".into(),
+        period_end: "2026-07-19".into(),
+        title: "周复盘".into(),
+        content: "content".into(),
+        source_article_ids: vec![],
+        source_review_ids: vec![],
+        model: "mock".into(),
+    };
+
+    let first = db.reviews().save(draft()).expect("first review");
+    let second = db.reviews().save(draft()).expect("second review");
+    assert_eq!((first.version, second.version), (1, 2));
+}
+
+#[test]
+fn invalid_knowledge_batch_persists_nothing() {
+    let mut db = Database::new_in_memory().expect("in-memory database");
+    let draft = |status: &str| KnowledgeCardDraft {
+        card_type: "method".into(),
+        status: status.into(),
+        title: "事务".into(),
+        content: "all or nothing".into(),
+        tags: vec!["架构".into()],
+        source_article_id: String::new(),
+        source_review_id: String::new(),
+        source_date: "2026-07-16".into(),
+        source_excerpt: "evidence".into(),
+    };
+
+    assert!(db
+        .knowledge()
+        .save_many(vec![draft("draft"), draft("invalid")])
+        .is_err());
+    assert!(db.knowledge().list().expect("list cards").is_empty());
 }

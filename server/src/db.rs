@@ -1,5 +1,6 @@
 use crate::models::{ArchiveMonth, Article, ArticleSummary, DayExemption, KnowledgeCard, Review};
 use chrono::{Local, NaiveDate};
+use rusqlite::types::Type;
 use rusqlite::{params, Connection, OptionalExtension, Result};
 use serde::Deserialize;
 use serde_json::Value;
@@ -50,7 +51,6 @@ pub(crate) struct ReviewDraft {
     pub(crate) kind: String,
     pub(crate) period_start: String,
     pub(crate) period_end: String,
-    pub(crate) version: i64,
     pub(crate) title: String,
     pub(crate) content: String,
     pub(crate) source_article_ids: Vec<String>,
@@ -706,7 +706,7 @@ impl PortableArchivePersistence<'_> {
                         "title": row.get::<_, String>(2)?,
                         "content": row.get::<_, String>(3)?,
                         "mood": row.get::<_, String>(4)?,
-                        "tags": parse_json_vec(&tags),
+                        "tags": parse_json_vec(&tags)?,
                         "word_count": row.get::<_, i64>(6)?,
                         "created_at": row.get::<_, String>(7)?,
                         "updated_at": row.get::<_, String>(8)?,
@@ -734,8 +734,8 @@ impl PortableArchivePersistence<'_> {
                         "status": row.get::<_, String>(5)?,
                         "title": row.get::<_, String>(6)?,
                         "content": row.get::<_, String>(7)?,
-                        "source_article_ids": parse_json_vec(&article_ids),
-                        "source_review_ids": parse_json_vec(&review_ids),
+                        "source_article_ids": parse_json_vec(&article_ids)?,
+                        "source_review_ids": parse_json_vec(&review_ids)?,
                         "model": row.get::<_, String>(10)?,
                         "generated_at": row.get::<_, String>(11)?,
                         "updated_at": row.get::<_, String>(12)?,
@@ -759,7 +759,7 @@ impl PortableArchivePersistence<'_> {
                         "status": row.get::<_, String>(2)?,
                         "title": row.get::<_, String>(3)?,
                         "content": row.get::<_, String>(4)?,
-                        "tags": parse_json_vec(&tags),
+                        "tags": parse_json_vec(&tags)?,
                         "source_article_id": row.get::<_, String>(6)?,
                         "source_review_id": row.get::<_, String>(7)?,
                         "source_date": row.get::<_, String>(8)?,
@@ -932,14 +932,6 @@ impl ReviewPersistence<'_> {
         Ok(rows)
     }
 
-    pub(crate) fn next_version(&mut self, kind: &str, from: &str, to: &str) -> Result<i64> {
-        self.conn.query_row(
-            "SELECT COALESCE(MAX(version), 0) + 1 FROM reviews WHERE kind=?1 AND period_start=?2 AND period_end=?3",
-            params![kind, from, to],
-            |row| row.get(0),
-        )
-    }
-
     pub(crate) fn find(&mut self, id: &str) -> Result<Option<Review>> {
         self.conn
             .query_row(
@@ -955,12 +947,19 @@ impl ReviewPersistence<'_> {
         let now = Local::now().format("%Y-%m-%dT%H:%M:%S").to_string();
         let article_ids = serialize_string_vec(&draft.source_article_ids)?;
         let review_ids = serialize_string_vec(&draft.source_review_ids)?;
-        self.conn.execute(
+        let transaction = self.conn.transaction()?;
+        let version = transaction.query_row(
+            "SELECT COALESCE(MAX(version), 0) + 1 FROM reviews WHERE kind=?1 AND period_start=?2 AND period_end=?3",
+            params![draft.kind, draft.period_start, draft.period_end],
+            |row| row.get::<_, i64>(0),
+        )?;
+        transaction.execute(
             "INSERT INTO reviews (id, kind, period_start, period_end, version, status, title, content, source_article_ids, source_review_ids, model, generated_at, updated_at)
              VALUES (?1, ?2, ?3, ?4, ?5, 'draft', ?6, ?7, ?8, ?9, ?10, ?11, ?11)",
-            params![id, draft.kind, draft.period_start, draft.period_end, draft.version, draft.title,
+            params![id, draft.kind, draft.period_start, draft.period_end, version, draft.title,
                 draft.content, article_ids, review_ids, draft.model, now],
         )?;
+        transaction.commit()?;
         self.find(&id)?.ok_or(rusqlite::Error::QueryReturnedNoRows)
     }
 
@@ -1023,6 +1022,9 @@ impl KnowledgePersistence<'_> {
         &mut self,
         drafts: Vec<KnowledgeCardDraft>,
     ) -> Result<Vec<KnowledgeCard>> {
+        if drafts.iter().any(|draft| !valid_knowledge_draft(draft)) {
+            return Err(rusqlite::Error::InvalidQuery);
+        }
         let transaction = self.conn.transaction()?;
         let now = Local::now().format("%Y-%m-%dT%H:%M:%S").to_string();
         let mut ids = Vec::with_capacity(drafts.len());
@@ -1072,6 +1074,16 @@ impl KnowledgePersistence<'_> {
 fn serialize_string_vec(values: &[String]) -> Result<String> {
     serde_json::to_string(values)
         .map_err(|error| rusqlite::Error::ToSqlConversionFailure(Box::new(error)))
+}
+
+fn valid_knowledge_draft(draft: &KnowledgeCardDraft) -> bool {
+    matches!(draft.status.as_str(), "draft" | "confirmed" | "outdated")
+        && matches!(
+            draft.card_type.as_str(),
+            "fact" | "method" | "concept" | "decision" | "case" | "quote" | "principle"
+        )
+        && !draft.title.trim().is_empty()
+        && !draft.content.trim().is_empty()
 }
 
 fn validate_archive(archive: &PortableArchiveInput) -> std::result::Result<(), ArchiveImportError> {
@@ -1199,13 +1211,14 @@ fn normalize_tags(values: Vec<String>) -> Vec<String> {
     result
 }
 
-fn parse_json_vec(raw: &str) -> Vec<String> {
-    serde_json::from_str(raw).unwrap_or_default()
+fn parse_json_vec(raw: &str) -> Result<Vec<String>> {
+    serde_json::from_str(raw)
+        .map_err(|error| rusqlite::Error::FromSqlConversionFailure(0, Type::Text, Box::new(error)))
 }
 
 fn row_to_article(row: &rusqlite::Row<'_>) -> Result<Article> {
     let tags_json: String = row.get(5)?;
-    let tags = serde_json::from_str(&tags_json).unwrap_or_default();
+    let tags = parse_json_vec(&tags_json)?;
     Ok(Article {
         id: row.get(0)?,
         date: row.get(1)?,
@@ -1227,7 +1240,7 @@ fn row_to_article_summary(row: &rusqlite::Row<'_>) -> Result<ArticleSummary> {
         date: row.get(1)?,
         title: row.get(2)?,
         mood: row.get(3)?,
-        tags: parse_json_vec(&tags),
+        tags: parse_json_vec(&tags)?,
         word_count: row.get(5)?,
         preview: article_preview(&content, 120),
     })
@@ -1253,8 +1266,8 @@ fn row_to_review(row: &rusqlite::Row<'_>) -> Result<Review> {
         status: row.get(5)?,
         title: row.get(6)?,
         content: row.get(7)?,
-        source_article_ids: parse_json_vec(&row.get::<_, String>(8)?),
-        source_review_ids: parse_json_vec(&row.get::<_, String>(9)?),
+        source_article_ids: parse_json_vec(&row.get::<_, String>(8)?)?,
+        source_review_ids: parse_json_vec(&row.get::<_, String>(9)?)?,
         model: row.get(10)?,
         generated_at: row.get(11)?,
         updated_at: row.get(12)?,
@@ -1268,7 +1281,7 @@ fn row_to_knowledge_card(row: &rusqlite::Row<'_>) -> Result<KnowledgeCard> {
         status: row.get(2)?,
         title: row.get(3)?,
         content: row.get(4)?,
-        tags: parse_json_vec(&row.get::<_, String>(5)?),
+        tags: parse_json_vec(&row.get::<_, String>(5)?)?,
         source_article_id: row.get(6)?,
         source_review_id: row.get(7)?,
         source_date: row.get(8)?,

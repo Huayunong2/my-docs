@@ -329,21 +329,25 @@ export default function TodayPage({
         const idx = undoIndex.current;
         if (idx > 0) {
           undoIndex.current = idx - 1;
-          setContent(undoStack.current[idx - 1]);
+          const previous = undoStack.current[idx - 1];
+          setContent(previous);
+          autoSave(title, previous, mood);
         }
       }
-      if ((e.ctrlKey || e.metaKey) && e.key === "z" && e.shiftKey || (e.ctrlKey || e.metaKey) && e.key === "y") {
+      if (((e.ctrlKey || e.metaKey) && e.key === "z" && e.shiftKey) || ((e.ctrlKey || e.metaKey) && e.key === "y")) {
         e.preventDefault();
         const idx = undoIndex.current;
         if (idx < undoStack.current.length - 1) {
           undoIndex.current = idx + 1;
-          setContent(undoStack.current[idx + 1]);
+          const next = undoStack.current[idx + 1];
+          setContent(next);
+          autoSave(title, next, mood);
         }
       }
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, []);
+  }, [autoSave, mood, title]);
 
   const handleMoodChange = (m: string) => {
     // Click selected mood again to clear
@@ -388,8 +392,15 @@ export default function TodayPage({
       danger: true,
     });
     if (!ok) return;
+    if (saveTimer.current) {
+      clearTimeout(saveTimer.current);
+      saveTimer.current = undefined;
+    }
     try {
+      await recordSession.current.whenIdle();
       await api.deleteArticle(current.id);
+      recordSession.current.clear();
+      articleRef.current = null;
       setArticle(null);
       setTitle("");
       setContent("");

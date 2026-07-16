@@ -24,6 +24,7 @@ export class DailyRecordSession {
   private requestRevision = 0;
   private date = "";
   private readonly port: DailyRecordPort;
+  private saveTail: Promise<void> = Promise.resolve();
 
   constructor(port: DailyRecordPort) {
     this.port = port;
@@ -33,13 +34,14 @@ export class DailyRecordSession {
     this.generation += 1;
     this.editRevision = 0;
     this.requestRevision = 0;
+    this.saveTail = Promise.resolve();
     this.date = date;
     this.article = article;
     return this.generation;
   }
 
   acceptLoaded(generation: number, article: Article | null): boolean {
-    if (generation !== this.generation) return false;
+    if (generation !== this.generation || this.editRevision !== 0 || this.requestRevision !== 0) return false;
     this.article = article;
     return true;
   }
@@ -48,10 +50,34 @@ export class DailyRecordSession {
     this.editRevision += 1;
   }
 
+  clear(): void {
+    this.generation += 1;
+    this.editRevision = 0;
+    this.requestRevision = 0;
+    this.saveTail = Promise.resolve();
+    this.article = null;
+  }
+
+  whenIdle(): Promise<void> {
+    return this.saveTail;
+  }
+
   async save(draft: DailyRecordDraft): Promise<SaveResult> {
     const generation = this.generation;
     const editRevision = this.editRevision;
     const requestRevision = ++this.requestRevision;
+    const previousSave = this.saveTail;
+    let releaseSave!: () => void;
+    this.saveTail = new Promise<void>((resolve) => { releaseSave = resolve; });
+    await previousSave;
+    const isStale = () => generation !== this.generation
+      || draft.date !== this.date
+      || editRevision !== this.editRevision
+      || requestRevision !== this.requestRevision;
+    if (isStale()) {
+      releaseSave();
+      return { applied: false, article: null };
+    }
     const existing = this.article;
     let article: Article;
     try {
@@ -64,17 +90,12 @@ export class DailyRecordSession {
           })
         : await this.port.create(draft);
     } catch (error) {
-      const stale = generation !== this.generation
-        || draft.date !== this.date
-        || editRevision !== this.editRevision
-        || requestRevision !== this.requestRevision;
-      if (stale) return { applied: false, article: null };
+      releaseSave();
+      if (isStale()) return { applied: false, article: null };
       throw error;
     }
-    const applied = generation === this.generation
-      && draft.date === this.date
-      && editRevision === this.editRevision
-      && requestRevision === this.requestRevision;
+    releaseSave();
+    const applied = !isStale();
     if (!applied) return { applied: false, article: null };
     this.article = article;
     return { applied: true, article };

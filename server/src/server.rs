@@ -3,7 +3,7 @@ use crate::archive;
 use crate::articles;
 use crate::backups;
 use crate::day_exemptions;
-use crate::db::{ArticleDraft, Database};
+use crate::db::{ArchiveImportError, ArticleDraft, Database};
 use crate::exports;
 use crate::helpers::backups_dir;
 use crate::knowledge;
@@ -97,7 +97,14 @@ async fn import_full(
     let report = db
         .portable_archive()
         .import_json(payload)
-        .map_err(|error| (StatusCode::BAD_REQUEST, error.to_string()))?;
+        .map_err(|error| match error {
+            ArchiveImportError::Invalid(_) | ArchiveImportError::Json(_) => {
+                (StatusCode::BAD_REQUEST, error.to_string())
+            }
+            ArchiveImportError::Storage(_) => {
+                (StatusCode::INTERNAL_SERVER_ERROR, error.to_string())
+            }
+        })?;
     Ok(Json(serde_json::json!({
         "imported_articles": report.imported_articles,
         "imported_reviews": report.imported_reviews,

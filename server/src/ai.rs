@@ -6,16 +6,12 @@ use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::Json;
 use serde_json::Value;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::{Duration as StdDuration, SystemTime, UNIX_EPOCH};
 
 type AppState = Arc<Mutex<Database>>;
 use std::collections::BTreeSet;
 
 type MonthlyReviewSource = (String, Vec<String>, Vec<String>);
-
-static LAST_AI_REQUEST_MS: AtomicU64 = AtomicU64::new(0);
 
 // ── Helpers ─────────────────────────────────────────
 
@@ -26,43 +22,12 @@ fn env_u64(key: &str, default: u64) -> u64 {
         .unwrap_or(default)
 }
 
-fn now_millis() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis() as u64
-}
-
-async fn throttle_ai_requests() {
-    let min_interval_ms = env_u64("DAILY_SUMMARY_AI_MIN_INTERVAL_MS", 1200);
-    if min_interval_ms == 0 {
-        return;
-    }
-
-    loop {
-        let now = now_millis();
-        let previous = LAST_AI_REQUEST_MS.load(Ordering::SeqCst);
-        let next_allowed = previous.saturating_add(min_interval_ms);
-        if now >= next_allowed {
-            if LAST_AI_REQUEST_MS
-                .compare_exchange(previous, now, Ordering::SeqCst, Ordering::SeqCst)
-                .is_ok()
-            {
-                return;
-            }
-        } else {
-            tokio::time::sleep(StdDuration::from_millis(next_allowed - now)).await;
-        }
-    }
-}
-
 pub(crate) async fn call_ai(
     prompt: String,
     system: &str,
 ) -> Result<(String, String), (StatusCode, String)> {
     let retries = env_u64("DAILY_SUMMARY_AI_RETRIES", 2);
     let adapter = HttpAiAdapter::from_env().map_err(|failure| (failure.status, failure.message))?;
-    throttle_ai_requests().await;
     let response = complete_with_retry(&adapter, &prompt, system, retries, true)
         .await
         .map_err(|failure| (failure.status, failure.message))?;
@@ -429,22 +394,17 @@ pub(crate) async fn generate_review(
     let from = format_date(period_start);
     let to = format_date(period_end);
 
-    let (source, source_article_ids, source_review_ids, version) = {
+    let (source, source_article_ids, source_review_ids) = {
         let mut db = db
             .lock()
             .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-        let version = db
-            .reviews()
-            .next_version(kind, &from, &to)
-            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-
         if kind == "weekly" {
             let (source, ids) = load_weekly_review_source(&mut db, &from, &to)?;
-            (source, ids, Vec::new(), version)
+            (source, ids, Vec::new())
         } else {
             let (source, article_ids, review_ids) =
                 load_monthly_review_source(&mut db, &from, &to)?;
-            (source, article_ids, review_ids, version)
+            (source, article_ids, review_ids)
         }
     };
 
@@ -552,7 +512,6 @@ pub(crate) async fn generate_review(
             kind: kind.into(),
             period_start: from,
             period_end: to,
-            version,
             title,
             content,
             source_article_ids,

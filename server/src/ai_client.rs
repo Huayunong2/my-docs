@@ -2,7 +2,11 @@ use crate::models::ChatCompletionResponse;
 use async_trait::async_trait;
 use axum::http::StatusCode;
 use serde_json::Value;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
+use std::time::{SystemTime, UNIX_EPOCH};
+
+static LAST_HTTP_AI_REQUEST_MS: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Debug, Clone)]
 pub(crate) struct AiResponse {
@@ -65,6 +69,7 @@ impl HttpAiAdapter {
 #[async_trait]
 impl AiAdapter for HttpAiAdapter {
     async fn complete_once(&self, prompt: &str, system: &str) -> Result<AiResponse, AiFailure> {
+        throttle_http_requests().await;
         let mut body = serde_json::json!({
             "model": self.model,
             "messages": [
@@ -140,7 +145,20 @@ pub(crate) async fn complete_with_retry(
 ) -> Result<AiResponse, AiFailure> {
     for attempt in 0..=retries {
         match adapter.complete_once(prompt, system).await {
-            Ok(response) => return Ok(response),
+            Ok(response) if !response.content.trim().is_empty() => return Ok(response),
+            Ok(_) if attempt < retries => {
+                if backoff {
+                    tokio::time::sleep(Duration::from_millis(600 * (attempt + 1))).await;
+                }
+            }
+            Ok(_) => {
+                return Err(AiFailure {
+                    status: StatusCode::BAD_GATEWAY,
+                    message: "AI 返回了空内容，请重试；如果反复出现，请检查模型是否支持当前接口。"
+                        .into(),
+                    retryable: true,
+                })
+            }
             Err(failure) if failure.retryable && attempt < retries => {
                 if backoff {
                     tokio::time::sleep(Duration::from_millis(600 * (attempt + 1))).await;
@@ -164,6 +182,35 @@ fn env_f32(key: &str, default: f32) -> f32 {
         .ok()
         .and_then(|value| value.parse().ok())
         .unwrap_or(default)
+}
+
+async fn throttle_http_requests() {
+    let min_interval = env_u64("DAILY_SUMMARY_AI_MIN_INTERVAL_MS", 1200);
+    if min_interval == 0 {
+        return;
+    }
+    loop {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as u64;
+        let previous = LAST_HTTP_AI_REQUEST_MS.load(Ordering::SeqCst);
+        let wait = throttle_wait_ms(previous, now, min_interval);
+        if wait == 0 {
+            if LAST_HTTP_AI_REQUEST_MS
+                .compare_exchange(previous, now, Ordering::SeqCst, Ordering::SeqCst)
+                .is_ok()
+            {
+                return;
+            }
+        } else {
+            tokio::time::sleep(Duration::from_millis(wait)).await;
+        }
+    }
+}
+
+fn throttle_wait_ms(previous: u64, now: u64, min_interval: u64) -> u64 {
+    previous.saturating_add(min_interval).saturating_sub(now)
 }
 
 #[cfg(test)]
@@ -229,5 +276,25 @@ mod tests {
             .unwrap_err();
         assert_eq!(failure.message, "invalid");
         assert_eq!(adapter.responses.lock().unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn rejects_empty_model_output_through_the_shared_workflow() {
+        let adapter = MockAiAdapter {
+            responses: Mutex::new(VecDeque::from([Ok(AiResponse {
+                content: "  ".into(),
+                model: "mock".into(),
+            })])),
+        };
+        let failure = complete_with_retry(&adapter, "prompt", "system", 0, false)
+            .await
+            .unwrap_err();
+        assert!(failure.message.contains("空内容"));
+    }
+
+    #[test]
+    fn limiter_calculates_the_remaining_interval() {
+        assert_eq!(throttle_wait_ms(1_000, 1_500, 1_200), 700);
+        assert_eq!(throttle_wait_ms(1_000, 2_200, 1_200), 0);
     }
 }
