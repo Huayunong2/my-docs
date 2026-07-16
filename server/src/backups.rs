@@ -1,3 +1,4 @@
+use crate::backup_policy;
 use crate::db::Database;
 use crate::helpers::*;
 use crate::models::*;
@@ -56,6 +57,10 @@ pub(crate) async fn create_backup(
 ) -> Result<Json<BackupMeta>, (StatusCode, String)> {
     let dir = backups_dir();
     fs::create_dir_all(&dir).map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    backup_policy::maintain_backups(&app_data_dir())
+        .map_err(|error| (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()))?;
+    backup_policy::ensure_backup_capacity(&dir)
+        .map_err(|error| (StatusCode::INSUFFICIENT_STORAGE, error.to_string()))?;
     let suffix = Uuid::new_v4()
         .to_string()
         .chars()
@@ -97,33 +102,8 @@ pub(crate) async fn create_backup(
     let _ = std::fs::remove_file(&latest);
     let _ = std::fs::copy(&path, &latest);
 
-    // Retention: keep last N
-    let keep: usize = std::env::var("DAILY_SUMMARY_BACKUP_KEEP")
-        .ok()
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(10);
-    if let Ok(entries) = std::fs::read_dir(&dir) {
-        let mut files: Vec<_> = entries
-            .filter_map(|e| e.ok())
-            .filter(|e| {
-                e.path().is_file()
-                    && e.file_name()
-                        .to_str()
-                        .is_some_and(|n| valid_backup_name(n) && n != "daily-summary-latest.db")
-            })
-            .collect();
-        files.sort_by_key(|e| {
-            std::fs::metadata(e.path())
-                .ok()
-                .and_then(|m| m.modified().ok())
-                .unwrap_or(std::time::SystemTime::UNIX_EPOCH)
-        });
-        if files.len() > keep {
-            for entry in &files[..files.len() - keep] {
-                let _ = std::fs::remove_file(entry.path());
-            }
-        }
-    }
+    backup_policy::maintain_backups(&app_data_dir())
+        .map_err(|error| (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()))?;
 
     backup_meta(path).map(Json)
 }

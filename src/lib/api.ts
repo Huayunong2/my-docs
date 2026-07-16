@@ -452,6 +452,8 @@ export function healthCheck() {
     monitoring?: {
       database_integrity: string;
       database_integrity_last_check_unix?: number | null;
+      disk_usage_percent?: number | null;
+      disk_usage_warning?: boolean;
       last_backup_unix?: number;
       offsite_last_success_unix?: number;
       offsite_verify_last_success_unix?: number;

@@ -2,6 +2,7 @@ use crate::ai;
 use crate::ai_client::ai_health;
 use crate::archive;
 use crate::articles;
+use crate::backup_policy;
 use crate::backups;
 use crate::day_exemptions;
 use crate::db::{ArchiveImportError, ArticleDraft, Database};
@@ -73,6 +74,10 @@ async fn health_check() -> Json<serde_json::Value> {
         .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
         .map(|duration| duration.as_secs());
     let (database_integrity, database_integrity_last_check_unix) = database_integrity_status();
+    let disk_usage_percent = backup_policy::disk_usage_percent(&app_data_dir()).ok();
+    let disk_usage_warning = disk_usage_percent
+        .map(backup_policy::disk_usage_requires_warning)
+        .unwrap_or(false);
     let ai_health = ai_health();
     let offsite_last_success_unix = maintenance_timestamp("offsite-last-success");
     let offsite_verify_last_success_unix = maintenance_timestamp("offsite-verify-last-success");
@@ -96,6 +101,8 @@ async fn health_check() -> Json<serde_json::Value> {
         "monitoring": {
             "database_integrity": database_integrity,
             "database_integrity_last_check_unix": database_integrity_last_check_unix,
+            "disk_usage_percent": disk_usage_percent,
+            "disk_usage_warning": disk_usage_warning,
             "last_backup_unix": last_backup_unix,
             "offsite_last_success_unix": offsite_last_success_unix,
             "offsite_verify_last_success_unix": offsite_verify_last_success_unix,

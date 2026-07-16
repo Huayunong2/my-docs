@@ -421,7 +421,17 @@ create_pre_upgrade_backup() {
   if [ "$NO_BACKUP" = "1" ]; then
     info "Skipping pre-upgrade backup because --no-backup was used"
     record_step "backup skipped"
+    if [ -x "$STAGED_BIN" ]; then
+      "$STAGED_BIN" --maintain-backups >/dev/null \
+        || fail "Could not apply backup retention and stale-file cleanup"
+      record_step "backup retention applied"
+    fi
     return
+  fi
+
+  if [ -x "$STAGED_BIN" ]; then
+    "$STAGED_BIN" --maintain-backups >/dev/null \
+      || fail "Could not apply backup retention and stale-file cleanup"
   fi
 
   local data_home="${XDG_DATA_HOME:-$HOME/.local/share}"
@@ -430,6 +440,12 @@ create_pre_upgrade_backup() {
 
   if [ -f "$db_path" ]; then
     mkdir -p "$backup_dir"
+    local disk_usage
+    disk_usage="$(df -Pk "$backup_dir" 2>/dev/null | awk 'NR == 2 { value=$5; gsub(/%/, "", value); print value }' || true)"
+    [[ "$disk_usage" =~ ^[0-9]+$ ]] || fail "Could not determine disk usage before the pre-upgrade backup"
+    if [ "$disk_usage" -ge 90 ]; then
+      fail "Disk usage is ${disk_usage}%; refusing to create a pre-upgrade backup at or above 90%"
+    fi
     local backup="$backup_dir/pre-upgrade-$(date +%Y%m%d-%H%M%S).db"
     local paused_service=0
     if has_cmd systemctl && $SUDO systemctl is-active --quiet "$SERVICE_NAME"; then
@@ -453,6 +469,12 @@ create_pre_upgrade_backup() {
     record_step "backup created"
   else
     record_step "backup skipped: no database yet"
+  fi
+
+  if [ -x "$STAGED_BIN" ]; then
+    "$STAGED_BIN" --maintain-backups >/dev/null \
+      || fail "Could not apply backup retention and stale-file cleanup"
+    record_step "backup retention applied"
   fi
 }
 
@@ -1128,6 +1150,7 @@ Useful commands:
   journalctl -u $SERVICE_NAME -f
   systemctl list-timers '$SERVICE_NAME-*'
   $OPS_SCRIPT backup-bundle
+  $OPS_SCRIPT maintain-backups
   $OPS_SCRIPT monitor
   curl $PUBLIC_URL/api/articles?page=1\\&page_size=1
 EOF
@@ -1161,10 +1184,10 @@ recover_maintenance_units
 recover_interrupted_restore
 install_system_deps
 install_rust
-create_pre_upgrade_backup
 prepare_deploy_stage
 write_env_file
 build_app
+create_pre_upgrade_backup
 activate_build
 if ! ensure_systemd_service; then
   rollback_activation

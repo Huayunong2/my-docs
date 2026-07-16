@@ -74,6 +74,7 @@ usage() {
 Usage:
   ./ops.sh local-backup
   ./ops.sh backup-bundle [output.tar.gz]
+  ./ops.sh maintain-backups
   ./ops.sh verify-bundle <bundle.tar.gz>
   ./ops.sh restore <bundle.tar.gz>
   ./ops.sh init-offsite
@@ -109,28 +110,54 @@ acquire_lock() {
     fail "Deployment or maintenance is already running"
   fi
   LOCK_ACQUIRED=1
+  cleanup_stale_external_temp_files
 }
 
 require_server_bin() {
   [ -x "$SERVER_BIN" ] || fail "Server binary not found. Run ./setup.sh first: $SERVER_BIN"
 }
 
-prune_local_backups() {
-  local keep="${DAILY_SUMMARY_LOCAL_BACKUP_KEEP:-14}"
-  [[ "$keep" =~ ^[0-9]+$ ]] || fail "DAILY_SUMMARY_LOCAL_BACKUP_KEEP must be an integer"
-  local -a backups=()
-  mapfile -t backups < <(find "$BACKUP_DIR" -maxdepth 1 -type f -name 'daily-summary-auto-*.db' -print | sort)
-  if [ "${#backups[@]}" -gt "$keep" ]; then
-    local remove_count=$((${#backups[@]} - keep))
-    local index
-    for ((index = 0; index < remove_count; index++)); do
-      rm -f "${backups[$index]}"
-    done
+disk_usage_percent() {
+  mkdir -p "$DATA_DIR"
+  df -Pk "$DATA_DIR" 2>/dev/null \
+    | awk 'NR == 2 { value=$5; gsub(/%/, "", value); print value }'
+}
+
+ensure_backup_capacity() {
+  local usage
+  usage="$(disk_usage_percent || true)"
+  [[ "$usage" =~ ^[0-9]+$ ]] || fail "Could not determine disk usage before creating a backup"
+  if [ "$usage" -ge 90 ]; then
+    fail "Disk usage is ${usage}%; refusing to create a new backup at or above 90%"
   fi
 }
 
-create_snapshot() {
+prepare_backup_storage() {
   require_server_bin
+  "$SERVER_BIN" --maintain-backups >/dev/null
+  ensure_backup_capacity
+}
+
+cleanup_stale_external_temp_files() {
+  local temp_root="${TMPDIR:-/tmp}"
+  [ -d "$temp_root" ] || return 0
+  find "$temp_root" -maxdepth 1 -mindepth 1 -uid "$(id -u)" \
+    \( -name 'daily-summary-ops.*' -o -name '.daily-summary-ops.*' \) \
+    -mmin +1440 -exec rm -rf -- {} + 2>/dev/null || true
+  if [ -d "$APP_DIR/server" ]; then
+    find "$APP_DIR/server" -maxdepth 1 -type f -uid "$(id -u)" \
+      -name '.env.restore-*' -mmin +1440 -delete 2>/dev/null || true
+  fi
+}
+
+cleanup_stale_bundle_temp_files() {
+  local output_dir="$1"
+  find "$output_dir" -maxdepth 1 -type f -uid "$(id -u)" \
+    -name '.daily-summary-ops.bundle.*.next' -mmin +1440 -delete 2>/dev/null || true
+}
+
+create_snapshot() {
+  prepare_backup_storage
   mkdir -p "$BACKUP_DIR"
   chmod 700 "$DATA_DIR" "$BACKUP_DIR" 2>/dev/null || true
   local timestamp destination temporary latest_next
@@ -147,7 +174,7 @@ create_snapshot() {
   chmod 600 "$latest_next"
   mv -f "$latest_next" "$BACKUP_DIR/daily-summary-latest.db"
   LAST_SNAPSHOT="$destination"
-  prune_local_backups
+  "$SERVER_BIN" --maintain-backups >/dev/null
   info "Created verified SQLite snapshot: $destination"
 }
 
@@ -160,10 +187,11 @@ package_bundle() {
   mkdir -p "$output_dir"
   output_dir="$(cd "$output_dir" && pwd -P)"
   output="$output_dir/$output_name"
+  cleanup_stale_bundle_temp_files "$output_dir"
   [ ! -e "$output" ] || fail "Bundle already exists: $output"
   local stage archive_next
-  stage="$(mktemp -d)"
-  archive_next="$output.next.$$"
+  stage="$(mktemp -d "${TMPDIR:-/tmp}/daily-summary-ops.XXXXXX")"
+  archive_next="$output_dir/.daily-summary-ops.bundle.$$.next"
   TEMP_PATHS+=("$stage" "$archive_next")
   install -m 0600 "$database" "$stage/database.db"
   if [ -f "$ENV_FILE" ]; then
@@ -192,8 +220,9 @@ EOF
 
 create_bundle() {
   local output="$1"
+  prepare_backup_storage
   local snapshot_dir snapshot
-  snapshot_dir="$(mktemp -d)"
+  snapshot_dir="$(mktemp -d "${TMPDIR:-/tmp}/daily-summary-ops.XXXXXX")"
   TEMP_PATHS+=("$snapshot_dir")
   snapshot="$snapshot_dir/database.db"
   require_server_bin
@@ -243,7 +272,7 @@ verify_bundle() {
   [[ "$temp_available_kb" =~ ^[0-9]+$ ]] || fail "Could not determine free space for bundle extraction: $temp_root"
   ((extracted_bytes + min_free_mb * 1024 * 1024 <= temp_available_kb * 1024)) \
     || fail "Bundle extraction would leave less than ${min_free_mb}MB free in $temp_root"
-  stage="$(mktemp -d)"
+  stage="$(mktemp -d "${TMPDIR:-/tmp}/daily-summary-ops.XXXXXX")"
   TEMP_PATHS+=("$stage")
   tar -xzf "$bundle" -C "$stage" --no-same-owner --no-same-permissions
   [ -f "$stage/manifest" ] && [ ! -L "$stage/manifest" ] || fail "Bundle manifest is missing or unsafe"
@@ -448,6 +477,9 @@ restore_bundle() {
   local bundle="$1"
   has_cmd systemctl || fail "Restore requires systemd service coordination"
   acquire_lock
+  require_server_bin
+  "$SERVER_BIN" --maintain-backups >/dev/null
+  ensure_backup_capacity
   recover_pending_restore
   verify_bundle "$bundle"
   mkdir -p "$DATA_DIR" "$BACKUP_DIR"
@@ -482,6 +514,7 @@ restore_bundle() {
     fi
     touch "$journal_next/had-db"
     install -m 0600 "$DB_PATH" "$previous_db"
+    "$SERVER_BIN" --maintain-backups >/dev/null
   fi
   if [ "$had_env" = "1" ]; then
     install -m 0600 "$ENV_FILE" "$journal_next/server.env"
@@ -561,7 +594,7 @@ offsite_backup() {
   require_restic_config
   restic snapshots >/dev/null 2>&1 || fail "Restic repository is unavailable or not initialized; run ./ops.sh init-offsite"
   local stage bundle
-  stage="$(mktemp -d)"
+  stage="$(mktemp -d "${TMPDIR:-/tmp}/daily-summary-ops.XXXXXX")"
   TEMP_PATHS+=("$stage")
   bundle="$stage/daily-summary-bundle-$(date +%Y%m%d-%H%M%S).tar.gz"
   package_bundle "$LAST_SNAPSHOT" "$bundle"
@@ -579,10 +612,11 @@ offsite_backup() {
 
 verify_offsite() {
   acquire_lock
+  prepare_backup_storage
   require_restic_config
   restic check
   local target bundle
-  target="$(mktemp -d)"
+  target="$(mktemp -d "${TMPDIR:-/tmp}/daily-summary-ops.XXXXXX")"
   TEMP_PATHS+=("$target")
   restic restore latest --tag daily-summary --target "$target"
   bundle="$(find "$target" -type f -name 'daily-summary-bundle-*.tar.gz' -print -quit)"
@@ -596,9 +630,10 @@ verify_offsite() {
 
 restore_offsite() {
   acquire_lock
+  prepare_backup_storage
   require_restic_config
   local target bundle
-  target="$(mktemp -d)"
+  target="$(mktemp -d "${TMPDIR:-/tmp}/daily-summary-ops.XXXXXX")"
   TEMP_PATHS+=("$target")
   restic restore latest --tag daily-summary --target "$target"
   bundle="$(find "$target" -type f -name 'daily-summary-bundle-*.tar.gz' -print -quit)"
@@ -628,7 +663,7 @@ monitor() {
   LOCK_MODE="skip"
   acquire_lock
   local -a failures=()
-  local response integrity backup_unix ai_failures available_kb now max_age max_verify_age max_ai min_disk db_check_interval
+  local response integrity backup_unix ai_failures available_kb disk_percent now max_age max_verify_age max_ai min_disk db_check_interval
   now="$(date +%s)"
   max_age="${DAILY_SUMMARY_MONITOR_MAX_BACKUP_AGE_HOURS:-48}"
   max_verify_age="${DAILY_SUMMARY_MONITOR_MAX_VERIFY_AGE_HOURS:-192}"
@@ -670,6 +705,12 @@ monitor() {
     fi
   fi
   [ "$integrity" = "ok" ] || failures+=("SQLite integrity check is ${integrity:-unknown}")
+  disk_percent="$(disk_usage_percent || true)"
+  if ! [[ "$disk_percent" =~ ^[0-9]+$ ]]; then
+    failures+=("disk usage could not be determined")
+  elif ((disk_percent >= 80)); then
+    failures+=("disk usage is ${disk_percent}% (warning threshold 80%)")
+  fi
   available_kb="$(df -Pk "$DATA_DIR" 2>/dev/null | awk 'NR == 2 {print $4}' || true)"
   if [ -z "$available_kb" ] || ((available_kb < min_disk * 1024)); then
     failures+=("free disk space is below ${min_disk}MB")
@@ -707,6 +748,11 @@ case "$COMMAND" in
     acquire_lock
     output="${2:-$PWD/daily-summary-migration-$(date +%Y%m%d-%H%M%S).tar.gz}"
     create_bundle "$output"
+    ;;
+  maintain-backups)
+    acquire_lock
+    require_server_bin
+    "$SERVER_BIN" --maintain-backups
     ;;
   verify-bundle)
     [ "$#" -eq 2 ] || fail "verify-bundle requires a bundle path"
