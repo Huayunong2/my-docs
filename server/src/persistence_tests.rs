@@ -110,6 +110,34 @@ fn portable_archive_round_trip_preserves_daily_records_as_domain_values() {
 }
 
 #[test]
+fn sqlite_snapshot_can_be_verified_before_restore() {
+    let mut db = Database::new_in_memory().unwrap();
+    db.articles()
+        .save(ArticleDraft {
+            date: "2026-07-16".into(),
+            title: "迁移验证".into(),
+            content: "快照必须能够独立打开。".into(),
+            mood: "平静".into(),
+            tags: vec!["backup".into()],
+        })
+        .unwrap();
+    let path = std::env::temp_dir().join(format!("daily-summary-{}.db", uuid::Uuid::new_v4()));
+    db.snapshot_to(path.to_str().unwrap()).unwrap();
+
+    Database::verify_file(&path).unwrap();
+    std::fs::remove_file(path).unwrap();
+}
+
+#[test]
+fn corrupted_file_is_rejected_before_restore() {
+    let path = std::env::temp_dir().join(format!("daily-summary-{}.db", uuid::Uuid::new_v4()));
+    std::fs::write(&path, b"not a sqlite database").unwrap();
+
+    assert!(Database::verify_file(&path).is_err());
+    std::fs::remove_file(path).unwrap();
+}
+
+#[test]
 fn daily_record_http_shape_uses_tag_values() {
     let record = Article {
         id: "article-1".into(),

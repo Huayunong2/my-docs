@@ -16,7 +16,9 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 APP_DIR="${APP_DIR:-$SCRIPT_DIR}"
 SERVICE_NAME="${SERVICE_NAME:-daily-summary}"
 ENV_FILE="$APP_DIR/server/.env"
+BACKUP_ENV_FILE="${BACKUP_ENV_FILE:-$APP_DIR/server/.env.backup}"
 SERVER_BIN="$APP_DIR/server/target/release/daily-summary"
+OPS_SCRIPT="$APP_DIR/ops.sh"
 DEPLOY_TARGET_DIR="${DEPLOY_TARGET_DIR:-$APP_DIR/server/target/deploy-build}"
 BOOTSTRAP=0
 FORCE_DEPS=0
@@ -73,6 +75,12 @@ has_cmd() {
   command -v "$1" >/dev/null 2>&1
 }
 
+backup_configured() {
+  [ -f "$BACKUP_ENV_FILE" ] \
+    && grep -q '^RESTIC_REPOSITORY=.' "$BACKUP_ENV_FILE" \
+    && grep -Eq '^RESTIC_PASSWORD(_FILE)?=.' "$BACKUP_ENV_FILE"
+}
+
 usage() {
   cat <<EOF
 Usage:
@@ -96,6 +104,7 @@ Options:
 
 Environment overrides:
   APP_DIR=/path/to/project
+  BACKUP_ENV_FILE=/path/to/backup-env
   DEPLOY_TARGET_DIR=/path/to/cargo-target
   SERVICE_NAME=daily-summary
   FORCE_NEW_TOKEN=1
@@ -291,7 +300,9 @@ install_system_deps() {
     fi
   done
 
-  if [ "$BOOTSTRAP" = "0" ] && [ "$FORCE_DEPS" = "0" ] && [ "${#missing_base[@]}" -eq 0 ] && node_is_supported && { [ "$MODE" = "ip" ] || has_cmd caddy; }; then
+  if [ "$BOOTSTRAP" = "0" ] && [ "$FORCE_DEPS" = "0" ] && [ "${#missing_base[@]}" -eq 0 ] && node_is_supported \
+    && { [ "$MODE" = "ip" ] || has_cmd caddy; } \
+    && { ! backup_configured || has_cmd restic; }; then
     info "System dependencies unchanged"
     record_step "deps skipped"
     return
@@ -344,6 +355,15 @@ install_system_deps() {
     record_step "caddy installed"
   elif [ "$MODE" = "domain" ]; then
     record_step "caddy unchanged"
+  fi
+
+  if backup_configured && ! has_cmd restic; then
+    apt_update_once
+    info "Installing Restic for encrypted offsite backups"
+    $SUDO apt-get install -y restic
+    record_step "restic installed"
+  elif backup_configured; then
+    record_step "restic unchanged"
   fi
 }
 
@@ -660,8 +680,164 @@ WantedBy=multi-user.target
 EOF
 }
 
+render_backup_service_file() {
+  cat <<EOF
+[Unit]
+Description=daily-summary verified local and encrypted offsite backup
+After=network-online.target $SERVICE_NAME.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=$(id -un)
+WorkingDirectory=$APP_DIR
+Environment=HOME=$HOME
+ExecStart=$OPS_SCRIPT offsite-backup
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+EOF
+}
+
+render_backup_timer_file() {
+  cat <<EOF
+[Unit]
+Description=Run daily-summary backup every day
+
+[Timer]
+OnActiveSec=5min
+OnCalendar=*-*-* 03:15:00
+RandomizedDelaySec=30min
+Persistent=true
+Unit=$SERVICE_NAME-backup.service
+
+[Install]
+WantedBy=timers.target
+EOF
+}
+
+render_verify_service_file() {
+  cat <<EOF
+[Unit]
+Description=Verify daily-summary offsite backup by restoring it
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=$(id -un)
+WorkingDirectory=$APP_DIR
+Environment=HOME=$HOME
+ExecStart=$OPS_SCRIPT verify-offsite
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+EOF
+}
+
+render_verify_timer_file() {
+  cat <<EOF
+[Unit]
+Description=Run weekly daily-summary offsite restore drill
+
+[Timer]
+OnActiveSec=30min
+OnCalendar=Sun *-*-* 04:15:00
+RandomizedDelaySec=30min
+Persistent=true
+Unit=$SERVICE_NAME-verify-backup.service
+
+[Install]
+WantedBy=timers.target
+EOF
+}
+
+render_monitor_service_file() {
+  cat <<EOF
+[Unit]
+Description=Monitor daily-summary health, backups, disk, SQLite and AI failures
+After=$SERVICE_NAME.service
+
+[Service]
+Type=oneshot
+User=$(id -un)
+WorkingDirectory=$APP_DIR
+Environment=HOME=$HOME
+ExecStart=$OPS_SCRIPT monitor
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+EOF
+}
+
+render_monitor_timer_file() {
+  cat <<EOF
+[Unit]
+Description=Run daily-summary monitoring every five minutes
+
+[Timer]
+OnActiveSec=15min
+OnUnitActiveSec=5min
+Unit=$SERVICE_NAME-monitor.service
+
+[Install]
+WantedBy=timers.target
+EOF
+}
+
 systemd_unit_path() {
   echo "/etc/systemd/system/$SERVICE_NAME.service"
+}
+
+write_managed_unit() {
+  local name="$1"
+  local renderer="$2"
+  local path="/etc/systemd/system/$name"
+  local desired current
+  desired="$(mktemp)"
+  current="$(mktemp)"
+  "$renderer" >"$desired"
+  if $SUDO test -f "$path"; then
+    $SUDO cat "$path" >"$current"
+  fi
+  if ! cmp -s "$desired" "$current"; then
+    $SUDO tee "$path" <"$desired" >/dev/null
+    MAINTENANCE_UNITS_CHANGED=1
+  fi
+  rm -f "$desired" "$current"
+}
+
+configure_maintenance_units() {
+  [ -x "$OPS_SCRIPT" ] || fail "Operations script is missing or not executable: $OPS_SCRIPT"
+  if [ -f "$BACKUP_ENV_FILE" ]; then
+    chmod 600 "$BACKUP_ENV_FILE" || true
+  fi
+  if backup_configured && ! has_cmd restic; then
+    fail "Offsite backup is configured but restic is missing. Re-run with --bootstrap or --force-deps."
+  fi
+
+  MAINTENANCE_UNITS_CHANGED=0
+  write_managed_unit "$SERVICE_NAME-backup.service" render_backup_service_file
+  write_managed_unit "$SERVICE_NAME-backup.timer" render_backup_timer_file
+  write_managed_unit "$SERVICE_NAME-verify-backup.service" render_verify_service_file
+  write_managed_unit "$SERVICE_NAME-verify-backup.timer" render_verify_timer_file
+  write_managed_unit "$SERVICE_NAME-monitor.service" render_monitor_service_file
+  write_managed_unit "$SERVICE_NAME-monitor.timer" render_monitor_timer_file
+  if [ "$MAINTENANCE_UNITS_CHANGED" = "1" ]; then
+    $SUDO systemctl daemon-reload
+  fi
+  $SUDO systemctl enable --now "$SERVICE_NAME-backup.timer" "$SERVICE_NAME-monitor.timer"
+  if backup_configured; then
+    $SUDO systemctl enable --now "$SERVICE_NAME-verify-backup.timer"
+    record_step "offsite backup verification timer enabled"
+  else
+    $SUDO systemctl disable --now "$SERVICE_NAME-verify-backup.timer" >/dev/null 2>&1 || true
+    record_step "offsite backup awaiting configuration"
+  fi
+  record_step "backup and monitoring timers enabled"
 }
 
 service_file_needs_write() {
@@ -806,6 +982,9 @@ Next steps:
 Useful commands:
   systemctl status $SERVICE_NAME
   journalctl -u $SERVICE_NAME -f
+  systemctl list-timers '$SERVICE_NAME-*'
+  $OPS_SCRIPT backup-bundle
+  $OPS_SCRIPT monitor
   curl $PUBLIC_URL/api/articles?page=1\\&page_size=1
 EOF
 
@@ -853,5 +1032,6 @@ fi
 record_step "health check passed"
 configure_caddy_if_needed
 ACTIVATED=0
+configure_maintenance_units
 configure_firewall_if_needed
 print_result

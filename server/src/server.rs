@@ -1,25 +1,55 @@
 use crate::ai;
+use crate::ai_client::ai_health;
 use crate::archive;
 use crate::articles;
 use crate::backups;
 use crate::day_exemptions;
 use crate::db::{ArchiveImportError, ArticleDraft, Database};
 use crate::exports;
-use crate::helpers::backups_dir;
+use crate::helpers::{app_data_dir, backups_dir};
 use crate::knowledge;
 use crate::middleware::{add_security_headers, configured_cors, require_api_token};
 use crate::models::*;
 use crate::stats;
 
 use axum::{extract::State, http::StatusCode, middleware, response::Json, Router};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 use tower_http::services::ServeDir;
 
 type AppState = Arc<Mutex<Database>>;
 
 const BUILD_TIME: &str = env!("BUILD_TIMESTAMP");
+static DATABASE_HEALTH_CACHE: OnceLock<Mutex<(u64, String)>> = OnceLock::new();
 
-async fn health_check() -> Json<serde_json::Value> {
+fn maintenance_timestamp(name: &str) -> Option<u64> {
+    std::fs::read_to_string(app_data_dir().join("status").join(name))
+        .ok()
+        .and_then(|value| value.trim().parse().ok())
+}
+
+fn cached_database_integrity(db: &AppState) -> String {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    let cache = DATABASE_HEALTH_CACHE.get_or_init(|| Mutex::new((0, "unavailable".into())));
+    let mut cached = match cache.lock() {
+        Ok(cached) => cached,
+        Err(_) => return "unavailable".into(),
+    };
+    if now.saturating_sub(cached.0) < 300 {
+        return cached.1.clone();
+    }
+    let result = db
+        .lock()
+        .ok()
+        .and_then(|database| database.quick_check().ok())
+        .unwrap_or_else(|| "unavailable".into());
+    *cached = (now, result.clone());
+    result
+}
+
+async fn health_check(State(db): State<AppState>) -> Json<serde_json::Value> {
     let ai = std::env::var("DAILY_SUMMARY_AI_API_KEY")
         .map(|k| !k.is_empty())
         .unwrap_or(false);
@@ -43,18 +73,23 @@ async fn health_check() -> Json<serde_json::Value> {
         .flatten()
         .unwrap_or(0);
     let last_backup = backups_dir().join("daily-summary-latest.db");
-    let last_backup_time = last_backup
-        .exists()
-        .then(|| {
-            std::fs::metadata(&last_backup)
-                .ok()
-                .and_then(|m| m.modified().ok())
-                .map(|t| {
-                    let dt: chrono::DateTime<chrono::Utc> = t.into();
-                    dt.format("%Y-%m-%d %H:%M:%S").to_string()
-                })
-        })
-        .flatten();
+    let last_backup_metadata = std::fs::metadata(&last_backup).ok();
+    let last_backup_time = last_backup_metadata
+        .as_ref()
+        .and_then(|metadata| metadata.modified().ok())
+        .map(|time| {
+            let dt: chrono::DateTime<chrono::Utc> = time.into();
+            dt.format("%Y-%m-%d %H:%M:%S").to_string()
+        });
+    let last_backup_unix = last_backup_metadata
+        .and_then(|metadata| metadata.modified().ok())
+        .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|duration| duration.as_secs());
+    let database_integrity = cached_database_integrity(&db);
+    let ai_health = ai_health();
+    let offsite_last_success_unix = maintenance_timestamp("offsite-last-success");
+    let offsite_verify_last_success_unix =
+        maintenance_timestamp("offsite-verify-last-success");
     Json(serde_json::json!({
         "version": env!("CARGO_PKG_VERSION"),
         "build": BUILD_TIME,
@@ -71,7 +106,16 @@ async fn health_check() -> Json<serde_json::Value> {
         },
         "db_path": db_path.to_string_lossy(),
         "db_size": db_size,
-        "last_backup": last_backup_time
+        "last_backup": last_backup_time,
+        "monitoring": {
+            "database_integrity": database_integrity,
+            "last_backup_unix": last_backup_unix,
+            "offsite_last_success_unix": offsite_last_success_unix,
+            "offsite_verify_last_success_unix": offsite_verify_last_success_unix,
+            "ai_consecutive_failures": ai_health.consecutive_failures,
+            "ai_last_failure_unix": ai_health.last_failure_unix,
+            "ai_last_success_unix": ai_health.last_success_unix
+        }
     }))
 }
 
@@ -232,7 +276,6 @@ fn build_router(db: Database) -> Router {
         .route("/articles/import", axum::routing::post(import_articles))
         .route("/articles/import-full", axum::routing::post(import_full))
         .route("/export/full", axum::routing::post(export_full))
-        .with_state(state)
         .route_layer(middleware::from_fn(require_api_token));
 
     Router::new()
@@ -241,14 +284,37 @@ fn build_router(db: Database) -> Router {
         .layer(configured_cors())
         .layer(middleware::from_fn(add_security_headers))
         .fallback_service(ServeDir::new("../dist"))
+        .with_state(state)
+}
+
+fn bind_address(configured: Option<String>) -> String {
+    configured
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| "0.0.0.0:8080".into())
 }
 
 pub async fn run() {
     let db = Database::new().expect("Failed to initialize database");
     let router = build_router(db);
-    let listener = tokio::net::TcpListener::bind("0.0.0.0:8080")
+    let bind = bind_address(std::env::var("DAILY_SUMMARY_BIND").ok());
+    let listener = tokio::net::TcpListener::bind(&bind)
         .await
-        .expect("Failed to bind port 8080");
-    println!("📓 每日总结服务端已启动 → http://0.0.0.0:8080");
+        .unwrap_or_else(|error| panic!("Failed to bind {bind}: {error}"));
+    println!("📓 每日总结服务端已启动 → http://{bind}");
     axum::serve(listener, router).await.expect("Server error");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn configured_bind_address_preserves_legacy_default_and_accepts_loopback() {
+        assert_eq!(bind_address(None), "0.0.0.0:8080");
+        assert_eq!(
+            bind_address(Some("127.0.0.1:8080".into())),
+            "127.0.0.1:8080"
+        );
+    }
 }
