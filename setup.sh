@@ -33,6 +33,13 @@ ACTIVATED=0
 DIST_SWAPPED=0
 BIN_SWAPPED=0
 ENV_SWAPPED=0
+UNIT_SWAPPED=0
+UNIT_HAD_PREVIOUS=0
+CADDY_SWAPPED=0
+CADDY_HAD_PREVIOUS=0
+LOCK_DIR=""
+LOCK_DIR_HELD=0
+BUILD_ID=""
 
 if [ "$(id -u)" -eq 0 ]; then
   SUDO=""
@@ -433,7 +440,7 @@ EOF
 }
 
 prepare_deploy_stage() {
-  STAGE_DIR="$APP_DIR/.deploy-stage-$$"
+  STAGE_DIR="$(mktemp -d "$APP_DIR/.deploy-stage.XXXXXX")"
   STAGED_DIST="$STAGE_DIR/dist"
   STAGED_BIN="$STAGE_DIR/daily-summary"
   STAGED_ENV="$STAGE_DIR/server.env"
@@ -442,6 +449,28 @@ prepare_deploy_stage() {
   if [ -x "$SERVER_BIN" ]; then
     cp "$SERVER_BIN" "$STAGE_DIR/previous-server"
   fi
+}
+
+acquire_deploy_lock() {
+  local lock_root="$APP_DIR/server/target"
+  mkdir -p "$lock_root"
+  if has_cmd flock; then
+    exec 9>"$lock_root/deploy.lock"
+    flock -n 9 || fail "Another deployment is already running for $APP_DIR"
+    record_step "deployment lock acquired"
+    return
+  fi
+
+  LOCK_DIR="$lock_root/deploy.lock.d"
+  if ! mkdir "$LOCK_DIR" 2>/dev/null; then
+    fail "Another deployment may be running. If not, remove stale lock: $LOCK_DIR"
+  fi
+  LOCK_DIR_HELD=1
+  record_step "deployment lock acquired"
+}
+
+require_systemd() {
+  has_cmd systemctl || fail "Safe automatic activation requires systemd. Stop any manual server and deploy artifacts manually on this host."
 }
 
 build_app() {
@@ -462,11 +491,15 @@ build_app() {
 
   info "Building Rust server"
   cd "$APP_DIR/server"
-  cargo build --release --target-dir "$DEPLOY_TARGET_DIR"
+  BUILD_ID="$(date +%s)"
+  DAILY_SUMMARY_BUILD_ID="$BUILD_ID" cargo build --release --target-dir "$DEPLOY_TARGET_DIR"
   local built_server="$DEPLOY_TARGET_DIR/release/daily-summary"
   [ -x "$built_server" ] || fail "Server binary was not built: $built_server"
   cp "$built_server" "$STAGED_BIN"
   chmod 755 "$STAGED_BIN"
+  local embedded_build_id
+  embedded_build_id="$("$STAGED_BIN" --build-id)"
+  [ "$embedded_build_id" = "$BUILD_ID" ] || fail "Staged server build identity does not match this deployment"
   record_step "server staged"
 }
 
@@ -478,6 +511,9 @@ cleanup_stage() {
   if [ -n "$STAGE_DIR" ] && [ -d "$STAGE_DIR" ]; then
     rm -rf "$STAGE_DIR"
   fi
+  if [ "$LOCK_DIR_HELD" = "1" ] && [ -n "$LOCK_DIR" ]; then
+    rmdir "$LOCK_DIR" 2>/dev/null || true
+  fi
   trap - EXIT
   exit "$status"
 }
@@ -485,13 +521,12 @@ cleanup_stage() {
 activate_build() {
   [ -f "$STAGED_DIST/index.html" ] || fail "Staged frontend is missing"
   [ -x "$STAGED_BIN" ] || fail "Staged server binary is missing"
+  [ -f "$STAGED_ENV" ] || fail "Staged server environment is missing"
 
-  if has_cmd systemctl && $SUDO systemctl is-active --quiet "$SERVICE_NAME"; then
+  if $SUDO systemctl is-active --quiet "$SERVICE_NAME"; then
     SERVICE_WAS_ACTIVE=1
     info "Stopping $SERVICE_NAME for coordinated frontend/server activation"
     $SUDO systemctl stop "$SERVICE_NAME"
-  elif ! has_cmd systemctl; then
-    info "systemd is unavailable; ensure any manually started server is stopped before activation"
   fi
 
   ACTIVATED=1
@@ -508,8 +543,8 @@ activate_build() {
     ENV_SWAPPED=1
   fi
   mv "$STAGED_ENV" "$ENV_FILE"
-  chmod 600 "$ENV_FILE"
   ENV_SWAPPED=1
+  chmod 600 "$ENV_FILE"
 
   install -m 0755 "$STAGED_BIN" "$SERVER_BIN.next"
   mv -f "$SERVER_BIN.next" "$SERVER_BIN"
@@ -540,24 +575,48 @@ rollback_activation() {
       mv "$STAGE_DIR/previous-env" "$ENV_FILE"
     fi
   fi
+  if [ "$UNIT_SWAPPED" = "1" ]; then
+    if [ "$UNIT_HAD_PREVIOUS" = "1" ] && [ -f "$STAGE_DIR/previous-service" ]; then
+      $SUDO install -m 0644 "$STAGE_DIR/previous-service" "$(systemd_unit_path)" || true
+    else
+      $SUDO rm -f "$(systemd_unit_path)" || true
+    fi
+    $SUDO systemctl daemon-reload || true
+  fi
   if [ "$SERVICE_WAS_ACTIVE" = "1" ] && has_cmd systemctl; then
     $SUDO systemctl start "$SERVICE_NAME" || true
+  fi
+  if [ "$CADDY_SWAPPED" = "1" ]; then
+    if [ "$CADDY_HAD_PREVIOUS" = "1" ] && [ -f "$STAGE_DIR/previous-caddy" ]; then
+      $SUDO install -m 0644 "$STAGE_DIR/previous-caddy" /etc/caddy/Caddyfile || true
+    else
+      $SUDO rm -f /etc/caddy/Caddyfile || true
+    fi
+    $SUDO systemctl reload caddy >/dev/null 2>&1 || $SUDO systemctl restart caddy >/dev/null 2>&1 || true
   fi
   ACTIVATED=0
   DIST_SWAPPED=0
   BIN_SWAPPED=0
   ENV_SWAPPED=0
+  UNIT_SWAPPED=0
+  CADDY_SWAPPED=0
   record_step "artifacts rolled back"
 }
 
 wait_for_health() {
-  local attempt
+  local attempt response reported_build
   for ((attempt = 1; attempt <= 20; attempt++)); do
-    if has_cmd curl && curl -fsS --max-time 2 http://127.0.0.1:8080/health >/dev/null 2>&1; then
-      return 0
-    fi
-    if has_cmd wget && wget -qO- --timeout=2 http://127.0.0.1:8080/health >/dev/null 2>&1; then
-      return 0
+    response=""
+    if $SUDO systemctl is-active --quiet "$SERVICE_NAME"; then
+      if has_cmd curl; then
+        response="$(curl -fsS --max-time 2 http://127.0.0.1:8080/health 2>/dev/null || true)"
+      elif has_cmd wget; then
+        response="$(wget -qO- --timeout=2 http://127.0.0.1:8080/health 2>/dev/null || true)"
+      fi
+      reported_build="$(printf '%s\n' "$response" | sed -n 's/.*"build"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')"
+      if [ -n "$BUILD_ID" ] && [ "$reported_build" = "$BUILD_ID" ]; then
+        return 0
+      fi
     fi
     sleep 1
   done
@@ -616,15 +675,13 @@ service_file_needs_write() {
 }
 
 ensure_systemd_service() {
-  if ! has_cmd systemctl; then
-    record_step "systemd unavailable"
-    echo "systemctl not found; run the server manually with:"
-    echo "  DAILY_SUMMARY_BIND=$BIND_ADDR $SERVER_BIN"
-    return
-  fi
-
   if service_file_needs_write; then
     info "Writing systemd service: $SERVICE_NAME"
+    if $SUDO test -f "$(systemd_unit_path)"; then
+      $SUDO cat "$(systemd_unit_path)" >"$STAGE_DIR/previous-service" || return 1
+      UNIT_HAD_PREVIOUS=1
+    fi
+    UNIT_SWAPPED=1
     render_service_file | $SUDO tee "$(systemd_unit_path)" >/dev/null || return 1
     $SUDO systemctl daemon-reload || return 1
     $SUDO systemctl enable "$SERVICE_NAME" || return 1
@@ -641,9 +698,7 @@ ensure_systemd_service() {
 configure_caddy_if_needed() {
   [ "$MODE" = "domain" ] || return
   if ! has_cmd caddy; then
-    record_step "caddy skipped: not installed"
-    echo "Caddy is not installed. Re-run with --bootstrap or --force-deps to install it."
-    return
+    fail "Caddy is not installed. Re-run with --bootstrap or --force-deps to install it."
   fi
 
   local desired current
@@ -654,12 +709,18 @@ $HOST {
   reverse_proxy $BIND_ADDR
 }
 EOF
+  caddy validate --config "$desired" --adapter caddyfile >/dev/null || fail "Generated Caddy configuration is invalid"
   if $SUDO test -f /etc/caddy/Caddyfile; then
     $SUDO cat /etc/caddy/Caddyfile >"$current"
   fi
 
   if [ "$BOOTSTRAP" = "1" ] || ! cmp -s "$desired" "$current"; then
     info "Configuring Caddy reverse proxy"
+    if $SUDO test -f /etc/caddy/Caddyfile; then
+      $SUDO cat /etc/caddy/Caddyfile >"$STAGE_DIR/previous-caddy"
+      CADDY_HAD_PREVIOUS=1
+    fi
+    CADDY_SWAPPED=1
     $SUDO tee /etc/caddy/Caddyfile <"$desired" >/dev/null
     $SUDO systemctl enable caddy
     $SUDO systemctl reload caddy || $SUDO systemctl restart caddy
@@ -751,6 +812,8 @@ fi
 
 trap cleanup_stage EXIT
 
+acquire_deploy_lock
+require_systemd
 install_system_deps
 install_rust
 create_pre_upgrade_backup
@@ -762,15 +825,13 @@ if ! ensure_systemd_service; then
   rollback_activation
   fail "Service activation failed; previous artifacts were restored"
 fi
-if has_cmd systemctl; then
-  info "Waiting for the new service health check"
-  if ! wait_for_health; then
-    rollback_activation
-    fail "New service did not become healthy; previous artifacts were restored"
-  fi
-  record_step "health check passed"
+info "Waiting for the new service health check"
+if ! wait_for_health; then
+  rollback_activation
+  fail "New service did not become healthy; previous artifacts were restored"
 fi
-ACTIVATED=0
+record_step "health check passed"
 configure_caddy_if_needed
+ACTIVATED=0
 configure_firewall_if_needed
 print_result
