@@ -7,6 +7,49 @@ use std::time::Duration;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 static LAST_HTTP_AI_REQUEST_MS: AtomicU64 = AtomicU64::new(0);
+static CONSECUTIVE_AI_FAILURES: AtomicU64 = AtomicU64::new(0);
+static LAST_AI_FAILURE_UNIX: AtomicU64 = AtomicU64::new(0);
+static LAST_AI_SUCCESS_UNIX: AtomicU64 = AtomicU64::new(0);
+
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct AiHealth {
+    pub(crate) consecutive_failures: u64,
+    pub(crate) last_failure_unix: Option<u64>,
+    pub(crate) last_success_unix: Option<u64>,
+}
+
+fn unix_seconds() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
+}
+
+pub(crate) fn record_ai_failure() {
+    CONSECUTIVE_AI_FAILURES.fetch_add(1, Ordering::Relaxed);
+    LAST_AI_FAILURE_UNIX.store(unix_seconds(), Ordering::Relaxed);
+}
+
+pub(crate) fn record_ai_success() {
+    CONSECUTIVE_AI_FAILURES.store(0, Ordering::Relaxed);
+    LAST_AI_SUCCESS_UNIX.store(unix_seconds(), Ordering::Relaxed);
+}
+
+pub(crate) fn ai_health() -> AiHealth {
+    let optional_timestamp = |value| (value != 0).then_some(value);
+    AiHealth {
+        consecutive_failures: CONSECUTIVE_AI_FAILURES.load(Ordering::Relaxed),
+        last_failure_unix: optional_timestamp(LAST_AI_FAILURE_UNIX.load(Ordering::Relaxed)),
+        last_success_unix: optional_timestamp(LAST_AI_SUCCESS_UNIX.load(Ordering::Relaxed)),
+    }
+}
+
+#[cfg(test)]
+fn reset_ai_health_for_test() {
+    CONSECUTIVE_AI_FAILURES.store(0, Ordering::Relaxed);
+    LAST_AI_FAILURE_UNIX.store(0, Ordering::Relaxed);
+    LAST_AI_SUCCESS_UNIX.store(0, Ordering::Relaxed);
+}
 
 #[derive(Debug, Clone)]
 pub(crate) struct AiResponse {
@@ -276,6 +319,19 @@ mod tests {
             .unwrap_err();
         assert_eq!(failure.message, "invalid");
         assert_eq!(adapter.responses.lock().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn ai_health_resets_consecutive_failures_after_success() {
+        reset_ai_health_for_test();
+        record_ai_failure();
+        record_ai_failure();
+        assert_eq!(ai_health().consecutive_failures, 2);
+        assert!(ai_health().last_failure_unix.is_some());
+
+        record_ai_success();
+        assert_eq!(ai_health().consecutive_failures, 0);
+        assert!(ai_health().last_success_unix.is_some());
     }
 
     #[tokio::test]

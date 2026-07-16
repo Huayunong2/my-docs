@@ -1,7 +1,7 @@
 use crate::models::{ArchiveMonth, Article, ArticleSummary, DayExemption, KnowledgeCard, Review};
 use chrono::{Local, NaiveDate};
 use rusqlite::types::Type;
-use rusqlite::{params, Connection, OptionalExtension, Result};
+use rusqlite::{params, Connection, OpenFlags, OptionalExtension, Result};
 use serde::Deserialize;
 use serde_json::Value;
 use std::collections::BTreeMap;
@@ -247,6 +247,33 @@ impl Database {
 
     pub(crate) fn snapshot_to(&mut self, path: &str) -> Result<()> {
         self.conn.execute("VACUUM INTO ?1", params![path])?;
+        Ok(())
+    }
+
+    pub(crate) fn quick_check(&self) -> Result<String> {
+        self.conn
+            .query_row("PRAGMA quick_check", [], |row| row.get(0))
+    }
+
+    pub(crate) fn verify_file(path: &std::path::Path) -> std::result::Result<(), String> {
+        let conn = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_WRITE)
+            .map_err(|error| error.to_string())?;
+        let integrity: String = conn
+            .query_row("PRAGMA integrity_check", [], |row| row.get(0))
+            .map_err(|error| error.to_string())?;
+        if integrity != "ok" {
+            return Err(format!("SQLite integrity check failed: {integrity}"));
+        }
+        let has_articles: bool = conn
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='articles')",
+                [],
+                |row| row.get(0),
+            )
+            .map_err(|error| error.to_string())?;
+        if !has_articles {
+            return Err("Not a daily-summary database: articles table is missing".into());
+        }
         Ok(())
     }
 

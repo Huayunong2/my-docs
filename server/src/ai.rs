@@ -1,4 +1,6 @@
-use crate::ai_client::{complete_with_retry, HttpAiAdapter};
+use crate::ai_client::{
+    complete_with_retry, record_ai_failure, record_ai_success, HttpAiAdapter,
+};
 use crate::db::{Database, ReviewDraft};
 use crate::helpers::*;
 use crate::models::*;
@@ -27,11 +29,21 @@ pub(crate) async fn call_ai(
     system: &str,
 ) -> Result<(String, String), (StatusCode, String)> {
     let retries = env_u64("DAILY_SUMMARY_AI_RETRIES", 2);
-    let adapter = HttpAiAdapter::from_env().map_err(|failure| (failure.status, failure.message))?;
-    let response = complete_with_retry(&adapter, &prompt, system, retries, true)
-        .await
-        .map_err(|failure| (failure.status, failure.message))?;
-    Ok((response.content, response.model))
+    let result = async {
+        let adapter =
+            HttpAiAdapter::from_env().map_err(|failure| (failure.status, failure.message))?;
+        let response = complete_with_retry(&adapter, &prompt, system, retries, true)
+            .await
+            .map_err(|failure| (failure.status, failure.message))?;
+        Ok((response.content, response.model))
+    }
+    .await;
+    if result.is_ok() {
+        record_ai_success();
+    } else {
+        record_ai_failure();
+    }
+    result
 }
 pub(crate) async fn list_reviews(
     State(db): State<AppState>,

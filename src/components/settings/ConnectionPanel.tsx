@@ -11,7 +11,7 @@ export default function ConnectionPanel() {
   const [msg, setMsg] = useState("");
   const [tone, setTone] = useState<Tone>("neutral");
   const [testing, setTesting] = useState(false);
-  const [health, setHealth] = useState<{ version: string; build: string; features: Record<string, boolean>; db_path?: string; db_size?: number; last_backup?: string } | null>(null);
+  const [health, setHealth] = useState<Awaited<ReturnType<typeof api.healthCheck>> | null>(null);
   const [healthError, setHealthError] = useState("");
   const { confirm, dialog } = useConfirmDialog();
 
@@ -125,6 +125,34 @@ export default function ConnectionPanel() {
             <InfoTile label="复盘功能" value={health.features.reviews ? "可用" : "不可用"} good={health.features.reviews} />
             <InfoTile label="知识库" value={health.features.knowledge ? "可用" : "不可用"} good={health.features.knowledge} />
             <InfoTile label="导出功能" value={health.features.exports ? "可用" : "不可用"} good={health.features.exports} />
+            {health.monitoring && (
+              <>
+                <InfoTile
+                  label="SQLite 检查"
+                  value={health.monitoring.database_integrity === "ok" ? "正常" : health.monitoring.database_integrity}
+                  good={health.monitoring.database_integrity === "ok"}
+                />
+                <InfoTile
+                  label="AI 连续失败"
+                  value={`${health.monitoring.ai_consecutive_failures} 次`}
+                  good={health.monitoring.ai_consecutive_failures === 0}
+                />
+                {health.monitoring.offsite_last_success_unix && (
+                  <InfoTile
+                    label="最近异地备份"
+                    value={new Date(health.monitoring.offsite_last_success_unix * 1000).toLocaleString()}
+                    good
+                  />
+                )}
+                {health.monitoring.offsite_verify_last_success_unix && (
+                  <InfoTile
+                    label="最近恢复演练"
+                    value={new Date(health.monitoring.offsite_verify_last_success_unix * 1000).toLocaleString()}
+                    good
+                  />
+                )}
+              </>
+            )}
             {health.db_path && (
               <InfoTile
                 label="数据库路径"

@@ -449,6 +449,15 @@ export function healthCheck() {
     db_path?: string;
     db_size?: number;
     last_backup?: string;
+    monitoring?: {
+      database_integrity: string;
+      last_backup_unix?: number;
+      offsite_last_success_unix?: number;
+      offsite_verify_last_success_unix?: number;
+      ai_consecutive_failures: number;
+      ai_last_failure_unix?: number;
+      ai_last_success_unix?: number;
+    };
   }>;
 }
 

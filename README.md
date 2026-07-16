@@ -264,7 +264,7 @@ AI 行为：
 
 ## 备份和恢复
 
-设置页「备份」可以创建、下载、删除 SQLite 快照。
+设置页「备份」可以创建、下载、删除 SQLite 快照。`setup.sh` 还会安装每日备份和五分钟健康监控 timer；这些功能不要求对象存储，旧版本数据库和现有 `server/.env` 可以继续使用。
 
 服务器默认数据目录：
 
@@ -284,14 +284,84 @@ AI 行为：
 ~/.local/share/.daily-summary/backups
 ```
 
-手动恢复流程：
+### 本地快照与迁移包
+
+立即创建经过 SQLite 完整性验证的本地快照：
 
 ```bash
-sudo systemctl stop daily-summary
-cp ~/.local/share/.daily-summary/data.db ~/.local/share/.daily-summary/data.db.before-restore
-cp /path/to/backup.db ~/.local/share/.daily-summary/data.db
-sudo systemctl start daily-summary
+./ops.sh local-backup
 ```
+
+生成用于换服务器的迁移包：
+
+```bash
+./ops.sh backup-bundle
+```
+
+迁移包包含 SQLite 快照、校验和，以及存在时的 `server/.env`。它包含访问令牌和 AI Key，文件权限会设置为 `600`，但文件本身没有额外加密；只能通过可信通道传输和保存。
+
+在新服务器上先完成一次部署，再恢复：
+
+```bash
+git clone <你的仓库地址> daily-summary
+cd daily-summary
+./setup.sh --bootstrap --cur
+./ops.sh restore /path/to/daily-summary-migration-时间.tar.gz
+```
+
+恢复会验证 archive 路径、SHA-256 和 SQLite `integrity_check`，短暂停止服务并保留 `pre-restore-时间.db`。如果新数据库启动失败，会恢复原数据库和环境配置。迁移包中的 token/AI 配置会恢复，但新服务器当前的监听地址和 CORS 地址会保留，避免重新写回老服务器 IP。
+
+### Restic 加密异地备份
+
+异地备份使用 Restic，因此对象存储端只会看到加密数据。支持 S3-compatible、SFTP、Backblaze B2 等 Restic repository。
+
+1. 创建配置和独立密码文件：
+
+```bash
+cp server/backup.env.example server/.env.backup
+mkdir -p ~/.config/daily-summary
+openssl rand -base64 48 > ~/.config/daily-summary/restic-password
+chmod 600 server/.env.backup ~/.config/daily-summary/restic-password
+```
+
+2. 编辑 `server/.env.backup`，至少设置：
+
+```text
+RESTIC_REPOSITORY=s3:https://对象存储地址/bucket/daily-summary
+RESTIC_PASSWORD_FILE=/home/部署用户/.config/daily-summary/restic-password
+AWS_ACCESS_KEY_ID=...
+AWS_SECRET_ACCESS_KEY=...
+```
+
+3. 安装 Restic、初始化 repository，并执行第一次备份和恢复演练：
+
+```bash
+./setup.sh --bootstrap --cur
+./ops.sh init-offsite
+./ops.sh offsite-backup
+./ops.sh verify-offsite
+```
+
+每日 timer 会生成本地快照并上传加密迁移包，默认保留最近 7 个日备份、4 个周备份和 12 个月备份。每周 timer 会从对象存储真实下载最新备份、校验并打开 SQLite，而不是只检查远端文件是否存在。
+
+灾难恢复时，在新服务器配置同一个 Restic repository 和密码，然后执行：
+
+```bash
+./setup.sh --bootstrap --cur
+./ops.sh restore-offsite
+```
+
+丢失 Restic 密码后无法解密远端备份，因此密码文件必须另存一份，不能只放在业务服务器上。
+
+### 故障监控
+
+```bash
+./ops.sh monitor
+systemctl list-timers 'daily-summary-*'
+journalctl -u daily-summary-monitor.service
+```
+
+监控项包括 systemd 服务、`/health`、本地/异地备份新鲜度、磁盘剩余空间、SQLite quick-check 和 AI 连续失败次数。默认阈值在 `server/backup.env.example` 中；配置 `DAILY_SUMMARY_ALERT_WEBHOOK_URL` 后，失败会向兼容 `{ "text": "..." }` 的 webhook 发送通知。
 
 不提供网页恢复按钮，是为了避免误点覆盖数据库。
 
