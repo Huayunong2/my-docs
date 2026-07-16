@@ -5,7 +5,6 @@ import * as api from "../lib/api";
 import type { Article, ArticleSummary } from "../lib/api";
 import ArticleDetail from "./ArticleDetail";
 import { EmptyState, InlineError, LoadingState, useConfirmDialog } from "./ui/Feedback";
-import { parseTags } from "../lib/tags";
 
 const PAGE_SIZE = 20;
 
@@ -292,7 +291,7 @@ function HistoryCard({
         </p>
         <div className="mt-auto flex flex-wrap items-center justify-between gap-2 border-t border-gray-100 pt-3 dark:border-white/10">
           <div className="flex min-w-0 flex-wrap gap-1.5">
-            {parseTags(article.tags).slice(0, 4).map((tag) => (
+            {article.tags.slice(0, 4).map((tag) => (
               <span key={tag} className="rounded-full bg-gray-100 px-2 py-0.5 text-[11px] text-gray-500 dark:bg-white/[0.06] dark:text-gray-300">
                 #{tag}
               </span>

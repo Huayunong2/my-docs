@@ -1,7 +1,6 @@
 import { useRef, useState } from "react";
 import { CalendarDays, Check, Copy, Edit3, Trash2, X } from "lucide-react";
 import type { Article } from "../lib/api";
-import { parseTags } from "../lib/tags";
 import MarkdownContent from "./MarkdownContent";
 
 export default function ArticleDetail({
@@ -18,7 +17,7 @@ export default function ArticleDetail({
   onDelete?: (article: Article) => void;
 }) {
   const [copied, setCopied] = useState(false);
-  const tags = parseTags(article.tags);
+  const tags = article.tags;
 
   const copyContent = async () => {
     try {

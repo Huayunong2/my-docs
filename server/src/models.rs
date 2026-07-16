@@ -8,7 +8,7 @@ pub(crate) struct Article {
     pub(crate) title: String,
     pub(crate) content: String,
     pub(crate) mood: String,
-    pub(crate) tags: String,
+    pub(crate) tags: Vec<String>,
     pub(crate) word_count: i64,
     pub(crate) created_at: String,
     pub(crate) updated_at: String,
@@ -20,7 +20,7 @@ pub(crate) struct ArticleSummary {
     pub(crate) date: String,
     pub(crate) title: String,
     pub(crate) mood: String,
-    pub(crate) tags: String,
+    pub(crate) tags: Vec<String>,
     pub(crate) word_count: i64,
     pub(crate) preview: String,
 }
@@ -109,8 +109,8 @@ pub(crate) struct Review {
     pub(crate) status: String,
     pub(crate) title: String,
     pub(crate) content: String,
-    pub(crate) source_article_ids: String,
-    pub(crate) source_review_ids: String,
+    pub(crate) source_article_ids: Vec<String>,
+    pub(crate) source_review_ids: Vec<String>,
     pub(crate) model: String,
     pub(crate) generated_at: String,
     pub(crate) updated_at: String,
@@ -123,7 +123,7 @@ pub(crate) struct KnowledgeCard {
     pub(crate) status: String,
     pub(crate) title: String,
     pub(crate) content: String,
-    pub(crate) tags: String,
+    pub(crate) tags: Vec<String>,
     pub(crate) source_article_id: String,
     pub(crate) source_review_id: String,
     pub(crate) source_date: String,
@@ -145,7 +145,7 @@ pub(crate) struct CreateArticlePayload {
     pub(crate) title: String,
     pub(crate) content: String,
     pub(crate) mood: String,
-    pub(crate) tags: Option<String>,
+    pub(crate) tags: Option<Vec<String>>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -153,7 +153,7 @@ pub(crate) struct UpdateArticlePayload {
     pub(crate) title: String,
     pub(crate) content: String,
     pub(crate) mood: String,
-    pub(crate) tags: Option<String>,
+    pub(crate) tags: Option<Vec<String>>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -209,7 +209,7 @@ pub(crate) struct CreateKnowledgeCardPayload {
     pub(crate) status: Option<String>,
     pub(crate) title: String,
     pub(crate) content: String,
-    pub(crate) tags: Option<String>,
+    pub(crate) tags: Option<Vec<String>>,
     pub(crate) source_article_id: Option<String>,
     pub(crate) source_review_id: Option<String>,
     pub(crate) source_date: Option<String>,
@@ -222,7 +222,7 @@ pub(crate) struct UpdateKnowledgeCardPayload {
     pub(crate) status: Option<String>,
     pub(crate) title: Option<String>,
     pub(crate) content: Option<String>,
-    pub(crate) tags: Option<String>,
+    pub(crate) tags: Option<Vec<String>>,
     pub(crate) source_article_id: Option<String>,
     pub(crate) source_review_id: Option<String>,
     pub(crate) source_date: Option<String>,

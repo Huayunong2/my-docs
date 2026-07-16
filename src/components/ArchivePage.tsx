@@ -5,7 +5,6 @@ import * as api from "../lib/api";
 import type { Article, ArticleSummary } from "../lib/api";
 import ArticleDetail from "./ArticleDetail";
 import { useConfirmDialog } from "./ui/Feedback";
-import { parseTags } from "../lib/tags";
 
 interface MonthGroup {
   year: number;
@@ -165,9 +164,9 @@ export default function ArchivePage({ onEditDate }: { onEditDate: (date: string)
                     </div>
                     <h4 className="font-medium text-sm text-gray-700 dark:text-gray-200 mt-0.5">{a.title || "(无标题)"}</h4>
                     <p className="text-xs text-gray-400 dark:text-gray-400 mt-0.5 line-clamp-2">{a.preview}</p>
-                    {parseTags(a.tags).length > 0 && (
+                    {a.tags.length > 0 && (
                       <div className="mt-2 flex flex-wrap gap-1">
-                        {parseTags(a.tags).map((tag) => (
+                        {a.tags.map((tag) => (
                           <span key={tag} className="rounded-full bg-gray-100 px-2 py-0.5 text-[11px] text-gray-500 dark:bg-gray-800 dark:text-gray-300">
                             #{tag}
                           </span>

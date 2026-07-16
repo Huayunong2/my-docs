@@ -1,4 +1,5 @@
 // API layer — 桌面端和浏览器统一走服务器 HTTP，同源部署默认使用 /api。
+import { normalizeTags, parseTags } from "./tags";
 
 function normalizeBaseUrl(url: string): string {
   const trimmed = url.trim().replace(/\/+$/, "");
@@ -154,22 +155,42 @@ export function setApiToken(token: string) {
 
 export interface Article {
   id: string; date: string; title: string; content: string;
-  mood: string; tags: string; word_count: number; created_at: string; updated_at: string;
+  mood: string; tags: string[]; word_count: number; created_at: string; updated_at: string;
 }
 
 export interface ArticleSummary {
-  id: string; date: string; title: string; mood: string; tags: string; word_count: number; preview: string;
+  id: string; date: string; title: string; mood: string; tags: string[]; word_count: number; preview: string;
 }
 
-export function createArticle(payload: { date: string; title: string; content: string; mood: string; tags?: string }) {
-  return httpRequest<Article>("/articles", { method: "POST", body: JSON.stringify(payload) });
+function readTagList(value: unknown): string[] {
+  if (Array.isArray(value)) return normalizeTags(value.filter((item): item is string => typeof item === "string"));
+  return typeof value === "string" ? parseTags(value) : [];
 }
 
-export function updateArticle(id: string, payload: { title: string; content: string; mood: string; tags?: string }) {
-  return httpRequest<Article>(`/articles/${id}`, { method: "PUT", body: JSON.stringify(payload) });
+function readStringList(value: unknown): string[] {
+  if (Array.isArray(value)) return value.filter((item): item is string => typeof item === "string");
+  if (typeof value !== "string") return [];
+  try {
+    const parsed: unknown = JSON.parse(value);
+    return Array.isArray(parsed) ? parsed.filter((item): item is string => typeof item === "string") : [];
+  } catch {
+    return [];
+  }
 }
 
-export function importArticles(articles: Array<{ date: string; title: string; content: string; mood: string; tags?: string }>) {
+function mapArticle<T extends Article | ArticleSummary>(value: T): T {
+  return { ...value, tags: readTagList(value.tags) };
+}
+
+export function createArticle(payload: { date: string; title: string; content: string; mood: string; tags?: string[] }) {
+  return httpRequest<Article>("/articles", { method: "POST", body: JSON.stringify(payload) }).then(mapArticle);
+}
+
+export function updateArticle(id: string, payload: { title: string; content: string; mood: string; tags?: string[] }) {
+  return httpRequest<Article>(`/articles/${id}`, { method: "PUT", body: JSON.stringify(payload) }).then(mapArticle);
+}
+
+export function importArticles(articles: Array<{ date: string; title: string; content: string; mood: string; tags?: string[] }>) {
   return httpRequest<{ imported: number; skipped: number }>("/articles/import", { method: "POST", body: JSON.stringify(articles) });
 }
 
@@ -186,19 +207,19 @@ export function deleteArticle(id: string) {
 }
 
 export function getArticle(id: string) {
-  return httpRequest<Article>(`/articles/${id}`);
+  return httpRequest<Article>(`/articles/${id}`).then(mapArticle);
 }
 
 export function getTodayArticle(date: string) {
-  return httpRequest<Article | null>(`/articles/today?date=${encodeURIComponent(date)}`);
+  return httpRequest<Article | null>(`/articles/today?date=${encodeURIComponent(date)}`).then((article) => article ? mapArticle(article) : null);
 }
 
 export function listArticles(page: number, pageSize: number) {
-  return httpRequest<ArticleSummary[]>(`/articles?page=${page}&page_size=${pageSize}`);
+  return httpRequest<ArticleSummary[]>(`/articles?page=${page}&page_size=${pageSize}`).then((items) => items.map(mapArticle));
 }
 
 export function searchArticles(query: string) {
-  return httpRequest<ArticleSummary[]>(`/articles/search?q=${encodeURIComponent(query)}`);
+  return httpRequest<ArticleSummary[]>(`/articles/search?q=${encodeURIComponent(query)}`).then((items) => items.map(mapArticle));
 }
 
 // ── Knowledge cards ─────────────────────────────────
@@ -212,7 +233,7 @@ export interface KnowledgeCard {
   status: KnowledgeCardStatus;
   title: string;
   content: string;
-  tags: string;
+  tags: string[];
   source_article_id: string;
   source_review_id: string;
   source_date: string;
@@ -221,13 +242,17 @@ export interface KnowledgeCard {
   updated_at: string;
 }
 
+function mapKnowledgeCard(card: KnowledgeCard): KnowledgeCard {
+  return { ...card, tags: readTagList(card.tags) };
+}
+
 export function listKnowledgeCards(filters: { card_type?: string; status?: string; q?: string } = {}) {
   const params = new URLSearchParams();
   if (filters.card_type) params.set("card_type", filters.card_type);
   if (filters.status) params.set("status", filters.status);
   if (filters.q) params.set("q", filters.q);
   const query = params.toString();
-  return httpRequest<KnowledgeCard[]>(`/knowledge-cards${query ? `?${query}` : ""}`);
+  return httpRequest<KnowledgeCard[]>(`/knowledge-cards${query ? `?${query}` : ""}`).then((items) => items.map(mapKnowledgeCard));
 }
 
 export function createKnowledgeCard(payload: {
@@ -235,13 +260,13 @@ export function createKnowledgeCard(payload: {
   status?: KnowledgeCardStatus;
   title: string;
   content: string;
-  tags?: string;
+  tags?: string[];
   source_article_id?: string;
   source_review_id?: string;
   source_date?: string;
   source_excerpt?: string;
 }) {
-  return httpRequest<KnowledgeCard>("/knowledge-cards", { method: "POST", body: JSON.stringify(payload) });
+  return httpRequest<KnowledgeCard>("/knowledge-cards", { method: "POST", body: JSON.stringify(payload) }).then(mapKnowledgeCard);
 }
 
 export function extractKnowledgeCards(payload: {
@@ -251,7 +276,7 @@ export function extractKnowledgeCards(payload: {
   source_date?: string;
   max_cards?: number;
 }) {
-  return httpRequest<KnowledgeCard[]>("/knowledge-cards/extract", { method: "POST", body: JSON.stringify(payload) });
+  return httpRequest<KnowledgeCard[]>("/knowledge-cards/extract", { method: "POST", body: JSON.stringify(payload) }).then((items) => items.map(mapKnowledgeCard));
 }
 
 export function updateKnowledgeCard(id: string, payload: Partial<{
@@ -259,13 +284,13 @@ export function updateKnowledgeCard(id: string, payload: Partial<{
   status: KnowledgeCardStatus;
   title: string;
   content: string;
-  tags: string;
+  tags: string[];
   source_article_id: string;
   source_review_id: string;
   source_date: string;
   source_excerpt: string;
 }>) {
-  return httpRequest<KnowledgeCard>(`/knowledge-cards/${encodeURIComponent(id)}`, { method: "PUT", body: JSON.stringify(payload) });
+  return httpRequest<KnowledgeCard>(`/knowledge-cards/${encodeURIComponent(id)}`, { method: "PUT", body: JSON.stringify(payload) }).then(mapKnowledgeCard);
 }
 
 export function deleteKnowledgeCard(id: string) {
@@ -281,7 +306,7 @@ export function getArchiveMonths() {
 }
 
 export function getArticlesByMonth(year: number, month: number) {
-  return httpRequest<ArticleSummary[]>(`/archive/${year}/${month}`);
+  return httpRequest<ArticleSummary[]>(`/archive/${year}/${month}`).then((items) => items.map(mapArticle));
 }
 
 // ── Stats ───────────────────────────────────────────
@@ -336,7 +361,10 @@ export function getMonthStats(year: number, month: number) {
 }
 
 export function getWeekReview(date: string) {
-  return httpRequest<WeekReview>(`/stats/week?date=${encodeURIComponent(date)}`);
+  return httpRequest<WeekReview>(`/stats/week?date=${encodeURIComponent(date)}`).then((review) => ({
+    ...review,
+    longest_article: review.longest_article ? mapArticle(review.longest_article) : null,
+  }));
 }
 
 // ── AI reviews ──────────────────────────────────────
@@ -353,40 +381,48 @@ export interface Review {
   status: ReviewStatus;
   title: string;
   content: string;
-  source_article_ids: string;
-  source_review_ids: string;
+  source_article_ids: string[];
+  source_review_ids: string[];
   model: string;
   generated_at: string;
   updated_at: string;
 }
 
+function mapReview(review: Review): Review {
+  return {
+    ...review,
+    source_article_ids: readStringList(review.source_article_ids),
+    source_review_ids: readStringList(review.source_review_ids),
+  };
+}
+
 export function listReviews(kind: ReviewKind, periodStart: string, periodEnd: string) {
   return httpRequest<Review[]>(
     `/reviews?kind=${encodeURIComponent(kind)}&period_start=${encodeURIComponent(periodStart)}&period_end=${encodeURIComponent(periodEnd)}`
-  );
+  ).then((items) => items.map(mapReview));
 }
 
 export function listAllReviews(kind?: ReviewKind) {
   const query = kind ? `?kind=${encodeURIComponent(kind)}` : "";
-  return httpRequest<Review[]>(`/reviews${query}`);
+  return httpRequest<Review[]>(`/reviews${query}`).then((items) => items.map(mapReview));
 }
 
 export function getReview(id: string) {
-  return httpRequest<Review>(`/reviews/${encodeURIComponent(id)}`);
+  return httpRequest<Review>(`/reviews/${encodeURIComponent(id)}`).then(mapReview);
 }
 
 export function generateReview(payload: { kind: ReviewKind; date: string }) {
   return httpRequest<Review>("/reviews/generate", {
     method: "POST",
     body: JSON.stringify(payload),
-  });
+  }).then(mapReview);
 }
 
 export function updateReview(id: string, payload: { title?: string; content?: string; status?: ReviewStatus }) {
   return httpRequest<Review>(`/reviews/${encodeURIComponent(id)}`, {
     method: "PUT",
     body: JSON.stringify(payload),
-  });
+  }).then(mapReview);
 }
 
 export function deleteReview(id: string) {

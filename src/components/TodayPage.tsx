@@ -24,7 +24,8 @@ import {
 } from "lucide-react";
 import * as api from "../lib/api";
 import type { Article } from "../lib/api";
-import { parseTags, stringifyTags, normalizeTag } from "../lib/tags";
+import { normalizeTag } from "../lib/tags";
+import { DailyRecordSession } from "../lib/dailyRecordSession";
 import MarkdownContent from "./MarkdownContent";
 import { Toast, useConfirmDialog } from "./ui/Feedback";
 
@@ -140,6 +141,10 @@ export default function TodayPage({
   const [cardExtractCount, setCardExtractCount] = useState(0);
   const saveTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
   const articleRef = useRef<Article | null>(null);
+  const recordSession = useRef(new DailyRecordSession({
+    create: api.createArticle,
+    update: api.updateArticle,
+  }));
   const externalNonceRef = useRef(targetNonce);
   const undoStack = useRef<string[]>([]);
   const undoIndex = useRef(-1);
@@ -149,13 +154,6 @@ export default function TodayPage({
     () => tagSuggestions.filter((tag) => !tags.includes(tag)).slice(0, 10),
     [tagSuggestions, tags]
   );
-
-  useEffect(() => {
-    if (targetDate && targetNonce !== externalNonceRef.current) {
-      externalNonceRef.current = targetNonce;
-      setSelectedDate(targetDate);
-    }
-  }, [targetDate, targetNonce]);
 
   // Load article for selected date
   useEffect(() => {
@@ -171,15 +169,18 @@ export default function TodayPage({
     setSaveStatus("idle");
     setSaveError("");
 
+    const generation = recordSession.current.begin(date, null);
+    articleRef.current = null;
     api.getTodayArticle(date)
       .then((a) => {
-        if (cancelled) return;
+        if (cancelled || !recordSession.current.acceptLoaded(generation, a)) return;
         if (a) {
           setArticle(a);
+          articleRef.current = a;
           setTitle(a.title);
           setContent(a.content);
           setMood(a.mood);
-          setTags(parseTags(a.tags));
+          setTags(a.tags);
           setDirty(false);
         }
       })
@@ -205,7 +206,7 @@ export default function TodayPage({
         if (cancelled) return;
         const counts = new Map<string, number>();
         for (const item of items) {
-          for (const tag of parseTags(item.tags)) {
+          for (const tag of item.tags) {
             counts.set(tag, (counts.get(tag) || 0) + 1);
           }
         }
@@ -228,25 +229,16 @@ export default function TodayPage({
       setSaveStatus("saving");
       setSaveError("");
       try {
-        const current = articleRef.current;
-        if (current) {
-          const updated = await api.updateArticle(current.id, {
-            title: newTitle || "(无标题)",
-            content: newContent,
-            mood: newMood,
-            tags: stringifyTags(newTags),
-          });
-          setArticle(updated);
-        } else {
-          const created = await api.createArticle({
-            date,
-            title: newTitle || "(无标题)",
-            content: newContent,
-            mood: newMood,
-            tags: stringifyTags(newTags),
-          });
-          setArticle(created);
-        }
+        const result = await recordSession.current.save({
+          date,
+          title: newTitle || "(无标题)",
+          content: newContent,
+          mood: newMood,
+          tags: newTags,
+        });
+        if (!result.applied) return false;
+        setArticle(result.article);
+        articleRef.current = result.article;
         setDirty(false);
         setSaveStatus("saved");
         setTimeout(() => setSaveStatus((s) => (s === "saved" ? "idle" : s)), 2000);
@@ -263,6 +255,7 @@ export default function TodayPage({
   // Auto-save with debounce
   const autoSave = useCallback(
     (newTitle: string, newContent: string, newMood: string, newTags = tags) => {
+      recordSession.current.markEdited();
       setDirty(true);
       if (saveTimer.current) clearTimeout(saveTimer.current);
       saveTimer.current = setTimeout(() => {
@@ -278,7 +271,7 @@ export default function TodayPage({
     doSave(title, content, mood, tags);
   };
 
-  const requestDateChange = async (nextDate: string) => {
+  const requestDateChange = useCallback(async (nextDate: string) => {
     if (!nextDate || nextDate === date) return;
     if (dirty || saveTimer.current) {
       const shouldSave = await confirm({
@@ -299,7 +292,14 @@ export default function TodayPage({
       }
     }
     setSelectedDate(nextDate);
-  };
+  }, [confirm, content, date, dirty, doSave, mood, tags, title]);
+
+  useEffect(() => {
+    if (targetDate && targetNonce !== externalNonceRef.current) {
+      externalNonceRef.current = targetNonce;
+      void requestDateChange(targetDate);
+    }
+  }, [requestDateChange, targetDate, targetNonce]);
 
   const handleTitleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     setTitle(e.target.value);
