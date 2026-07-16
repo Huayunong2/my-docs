@@ -35,8 +35,10 @@ BIN_SWAPPED=0
 ENV_SWAPPED=0
 UNIT_SWAPPED=0
 UNIT_HAD_PREVIOUS=0
+UNIT_WAS_ENABLED=0
 CADDY_SWAPPED=0
 CADDY_HAD_PREVIOUS=0
+CADDY_WAS_ENABLED=0
 LOCK_DIR=""
 LOCK_DIR_HELD=0
 BUILD_ID=""
@@ -582,6 +584,11 @@ rollback_activation() {
       $SUDO rm -f "$(systemd_unit_path)" || true
     fi
     $SUDO systemctl daemon-reload || true
+    if [ "$UNIT_WAS_ENABLED" = "1" ]; then
+      $SUDO systemctl enable "$SERVICE_NAME" >/dev/null 2>&1 || true
+    else
+      $SUDO systemctl disable "$SERVICE_NAME" >/dev/null 2>&1 || true
+    fi
   fi
   if [ "$SERVICE_WAS_ACTIVE" = "1" ] && has_cmd systemctl; then
     $SUDO systemctl start "$SERVICE_NAME" || true
@@ -592,6 +599,11 @@ rollback_activation() {
     else
       $SUDO rm -f /etc/caddy/Caddyfile || true
     fi
+    if [ "$CADDY_WAS_ENABLED" = "1" ]; then
+      $SUDO systemctl enable caddy >/dev/null 2>&1 || true
+    else
+      $SUDO systemctl disable caddy >/dev/null 2>&1 || true
+    fi
     $SUDO systemctl reload caddy >/dev/null 2>&1 || $SUDO systemctl restart caddy >/dev/null 2>&1 || true
   fi
   ACTIVATED=0
@@ -599,7 +611,9 @@ rollback_activation() {
   BIN_SWAPPED=0
   ENV_SWAPPED=0
   UNIT_SWAPPED=0
+  UNIT_WAS_ENABLED=0
   CADDY_SWAPPED=0
+  CADDY_WAS_ENABLED=0
   record_step "artifacts rolled back"
 }
 
@@ -681,6 +695,9 @@ ensure_systemd_service() {
       $SUDO cat "$(systemd_unit_path)" >"$STAGE_DIR/previous-service" || return 1
       UNIT_HAD_PREVIOUS=1
     fi
+    if $SUDO systemctl is-enabled --quiet "$SERVICE_NAME"; then
+      UNIT_WAS_ENABLED=1
+    fi
     UNIT_SWAPPED=1
     render_service_file | $SUDO tee "$(systemd_unit_path)" >/dev/null || return 1
     $SUDO systemctl daemon-reload || return 1
@@ -716,6 +733,9 @@ EOF
 
   if [ "$BOOTSTRAP" = "1" ] || ! cmp -s "$desired" "$current"; then
     info "Configuring Caddy reverse proxy"
+    if $SUDO systemctl is-enabled --quiet caddy; then
+      CADDY_WAS_ENABLED=1
+    fi
     if $SUDO test -f /etc/caddy/Caddyfile; then
       $SUDO cat /etc/caddy/Caddyfile >"$STAGE_DIR/previous-caddy"
       CADDY_HAD_PREVIOUS=1
