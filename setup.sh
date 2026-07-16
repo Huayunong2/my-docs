@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # daily-summary one-command deploy / upgrade script.
 #
-# Fast incremental deploy:
-#   ./setup.sh 1.2.3.4
+# Fast incremental deploy using the current public address:
+#   ./setup.sh --cur
 #
 # First install / repair system integration:
 #   ./setup.sh --bootstrap 1.2.3.4
@@ -17,11 +17,22 @@ APP_DIR="${APP_DIR:-$SCRIPT_DIR}"
 SERVICE_NAME="${SERVICE_NAME:-daily-summary}"
 ENV_FILE="$APP_DIR/server/.env"
 SERVER_BIN="$APP_DIR/server/target/release/daily-summary"
+DEPLOY_TARGET_DIR="${DEPLOY_TARGET_DIR:-$APP_DIR/server/target/deploy-build}"
 BOOTSTRAP=0
 FORCE_DEPS=0
 FORCE_SYSTEMD=0
 NO_BACKUP=0
+USE_CURRENT_HOST=0
 HOST=""
+STAGE_DIR=""
+STAGED_DIST=""
+STAGED_BIN=""
+STAGED_ENV=""
+SERVICE_WAS_ACTIVE=0
+ACTIVATED=0
+DIST_SWAPPED=0
+BIN_SWAPPED=0
+ENV_SWAPPED=0
 
 if [ "$(id -u)" -eq 0 ]; then
   SUDO=""
@@ -57,11 +68,13 @@ usage() {
   cat <<EOF
 Usage:
   ./setup.sh [options] <public-ip-or-domain>
+  ./setup.sh --cur
 
 Examples:
   ./setup.sh 1.2.3.4
   ./setup.sh --bootstrap 1.2.3.4
   ./setup.sh your.domain.com
+  ./setup.sh --cur
   APP_DIR=/root/MyDocs/daily-summary ./setup.sh 1.2.3.4
 
 Options:
@@ -69,10 +82,12 @@ Options:
   --force-deps      Force dependency checks and apt-get update
   --force-systemd   Force rewrite systemd service
   --no-backup       Skip pre-upgrade SQLite snapshot
+  --cur             Reuse the configured domain, or detect the current public IPv4
   -h, --help        Show this help
 
 Environment overrides:
   APP_DIR=/path/to/project
+  DEPLOY_TARGET_DIR=/path/to/cargo-target
   SERVICE_NAME=daily-summary
   FORCE_NEW_TOKEN=1
   SKIP_DEP_INSTALL=1
@@ -93,6 +108,9 @@ while [ "$#" -gt 0 ]; do
     --no-backup)
       NO_BACKUP=1
       ;;
+    --cur)
+      USE_CURRENT_HOST=1
+      ;;
     -h|--help)
       usage
       exit 0
@@ -110,20 +128,111 @@ while [ "$#" -gt 0 ]; do
   shift
 done
 
-if [ -z "$HOST" ]; then
-  usage
-  exit 1
-fi
-
 [ -d "$APP_DIR" ] || fail "Project directory not found: $APP_DIR"
 [ -f "$APP_DIR/package.json" ] || fail "package.json not found in $APP_DIR"
 [ -f "$APP_DIR/server/Cargo.toml" ] || fail "server/Cargo.toml not found in $APP_DIR"
+
+read_env_value() {
+  local key="$1"
+  if [ -f "$ENV_FILE" ]; then
+    grep -E "^${key}=" "$ENV_FILE" | tail -n 1 | cut -d= -f2- || true
+  fi
+}
+
+valid_ipv4() {
+  local address="$1"
+  local octet
+  local -a octets
+  [[ "$address" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] || return 1
+  IFS=. read -r -a octets <<<"$address"
+  for octet in "${octets[@]}"; do
+    ((10#$octet <= 255)) || return 1
+  done
+}
+
+valid_host() {
+  if [[ "$1" =~ ^[0-9.]+$ ]]; then
+    valid_ipv4 "$1"
+  else
+    [[ "$1" =~ ^[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?$ ]]
+  fi
+}
+
+configured_host() {
+  local origin authority
+  origin="$(read_env_value DAILY_SUMMARY_ALLOWED_ORIGINS)"
+  [ -n "$origin" ] || return 1
+  authority="${origin#*://}"
+  authority="${authority%%/*}"
+  authority="${authority%%:*}"
+  valid_host "$authority" || return 1
+  printf '%s\n' "$authority"
+}
+
+probe_public_ipv4() {
+  local endpoint candidate
+  if ! has_cmd curl && ! has_cmd wget; then
+    if has_cmd apt-get; then
+      info "Installing curl for public IPv4 detection" >&2
+      $SUDO apt-get update >&2
+      APT_UPDATED=1
+      $SUDO apt-get install -y curl >&2
+    else
+      return 1
+    fi
+  fi
+  for endpoint in https://api.ipify.org https://ifconfig.me/ip; do
+    candidate=""
+    if has_cmd curl; then
+      candidate="$(curl -4 -fsS --max-time 5 "$endpoint" 2>/dev/null || true)"
+    elif has_cmd wget; then
+      candidate="$(wget -qO- --timeout=5 "$endpoint" 2>/dev/null || true)"
+    fi
+    candidate="${candidate//$'\n'/}"
+    candidate="${candidate//$'\r'/}"
+    if valid_ipv4 "$candidate"; then
+      printf '%s\n' "$candidate"
+      return 0
+    fi
+  done
+  return 1
+}
+
+resolve_current_host() {
+  local configured detected
+  configured="$(configured_host || true)"
+  if [ -n "$configured" ] && ! valid_ipv4 "$configured"; then
+    info "Reusing configured public domain: $configured"
+    HOST="$configured"
+    return
+  fi
+  detected="$(probe_public_ipv4 || true)"
+  if [ -n "$detected" ]; then
+    if [ -n "$configured" ] && [ "$configured" != "$detected" ]; then
+      info "Public IPv4 changed: $configured -> $detected"
+    fi
+    info "Detected current public IPv4: $detected"
+    HOST="$detected"
+    return
+  fi
+  fail "Could not detect the current public IPv4. Pass the IP/domain explicitly or ensure curl/wget can reach api.ipify.org."
+}
+
+if [ "$USE_CURRENT_HOST" = "1" ]; then
+  [ -z "$HOST" ] || fail "Use either --cur or an explicit IP/domain, not both"
+  resolve_current_host
+elif [ -z "$HOST" ]; then
+  usage
+  exit 1
+fi
 
 if [[ "$HOST" =~ ^https?:// ]]; then
   fail "Pass only the host, not a URL. Example: ./setup.sh 1.2.3.4"
 fi
 
-if [[ "$HOST" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+valid_host "$HOST" || fail "Invalid public IP or domain: $HOST"
+
+if valid_ipv4 "$HOST"; then
   MODE="ip"
   PUBLIC_URL="http://$HOST:8080"
   API_URL="$PUBLIC_URL/api"
@@ -134,13 +243,6 @@ else
   API_URL="$PUBLIC_URL/api"
   BIND_ADDR="127.0.0.1:8080"
 fi
-
-read_env_value() {
-  local key="$1"
-  if [ -f "$ENV_FILE" ]; then
-    grep -E "^${key}=" "$ENV_FILE" | tail -n 1 | cut -d= -f2- || true
-  fi
-}
 
 random_token() {
   if has_cmd openssl; then
@@ -263,7 +365,23 @@ create_pre_upgrade_backup() {
   if [ -f "$db_path" ]; then
     mkdir -p "$backup_dir"
     local backup="$backup_dir/pre-upgrade-$(date +%Y%m%d-%H%M%S).db"
-    cp "$db_path" "$backup"
+    local paused_service=0
+    if has_cmd systemctl && $SUDO systemctl is-active --quiet "$SERVICE_NAME"; then
+      info "Pausing $SERVICE_NAME for a consistent SQLite snapshot"
+      $SUDO systemctl stop "$SERVICE_NAME"
+      paused_service=1
+    fi
+    if ! cp "$db_path" "$backup"; then
+      if [ "$paused_service" = "1" ]; then
+        $SUDO systemctl start "$SERVICE_NAME" || true
+      fi
+      fail "Could not create pre-upgrade database backup"
+    fi
+    if [ "$paused_service" = "1" ]; then
+      $SUDO systemctl start "$SERVICE_NAME"
+    elif ! has_cmd systemctl; then
+      info "Service state could not be managed; ensure no writes occur during this file copy"
+    fi
     chmod 600 "$backup" || true
     info "Created pre-upgrade database backup: $backup"
     record_step "backup created"
@@ -273,7 +391,7 @@ create_pre_upgrade_backup() {
 }
 
 write_env_file() {
-  mkdir -p "$APP_DIR/server"
+  [ -n "$STAGED_ENV" ] || fail "Deployment staging directory is not ready"
 
   local token
   token="$(read_env_value DAILY_SUMMARY_TOKEN)"
@@ -291,9 +409,7 @@ write_env_file() {
   ai_retries="$(read_env_value DAILY_SUMMARY_AI_RETRIES)"
   ai_min_interval_ms="$(read_env_value DAILY_SUMMARY_AI_MIN_INTERVAL_MS)"
 
-  local next_env
-  next_env="$(mktemp)"
-  cat >"$next_env" <<EOF
+  cat >"$STAGED_ENV" <<EOF
 DAILY_SUMMARY_TOKEN=$token
 DAILY_SUMMARY_BIND=$BIND_ADDR
 DAILY_SUMMARY_ALLOWED_ORIGINS=$PUBLIC_URL
@@ -306,17 +422,26 @@ DAILY_SUMMARY_AI_TIMEOUT_SECS=${ai_timeout_secs:-45}
 DAILY_SUMMARY_AI_RETRIES=${ai_retries:-2}
 DAILY_SUMMARY_AI_MIN_INTERVAL_MS=${ai_min_interval_ms:-1200}
 EOF
+  chmod 600 "$STAGED_ENV"
 
-  if [ -f "$ENV_FILE" ] && cmp -s "$next_env" "$ENV_FILE"; then
-    rm -f "$next_env"
+  if [ -f "$ENV_FILE" ] && cmp -s "$STAGED_ENV" "$ENV_FILE"; then
     record_step "env unchanged"
   else
-    umask 077
-    mv "$next_env" "$ENV_FILE"
-    chmod 600 "$ENV_FILE"
-    record_step "env written"
+    record_step "env staged"
   fi
   TOKEN="$token"
+}
+
+prepare_deploy_stage() {
+  STAGE_DIR="$APP_DIR/.deploy-stage-$$"
+  STAGED_DIST="$STAGE_DIR/dist"
+  STAGED_BIN="$STAGE_DIR/daily-summary"
+  STAGED_ENV="$STAGE_DIR/server.env"
+  mkdir -p "$STAGE_DIR"
+  chmod 700 "$STAGE_DIR"
+  if [ -x "$SERVER_BIN" ]; then
+    cp "$SERVER_BIN" "$STAGE_DIR/previous-server"
+  fi
 }
 
 build_app() {
@@ -330,15 +455,113 @@ build_app() {
   fi
   record_step "frontend deps installed"
 
-  info "Building frontend for $API_URL"
-  VITE_API_BASE_URL="$API_URL" npm run build
-  record_step "frontend built"
+  info "Building frontend for $API_URL into staging"
+  VITE_API_BASE_URL="$API_URL" npm run build -- --outDir "$STAGED_DIST"
+  [ -f "$STAGED_DIST/index.html" ] || fail "Staged frontend was not built: $STAGED_DIST/index.html"
+  record_step "frontend staged"
 
   info "Building Rust server"
   cd "$APP_DIR/server"
-  cargo build --release
-  [ -x "$SERVER_BIN" ] || fail "Server binary was not built: $SERVER_BIN"
-  record_step "server built"
+  cargo build --release --target-dir "$DEPLOY_TARGET_DIR"
+  local built_server="$DEPLOY_TARGET_DIR/release/daily-summary"
+  [ -x "$built_server" ] || fail "Server binary was not built: $built_server"
+  cp "$built_server" "$STAGED_BIN"
+  chmod 755 "$STAGED_BIN"
+  record_step "server staged"
+}
+
+cleanup_stage() {
+  local status=$?
+  if [ "$ACTIVATED" = "1" ]; then
+    rollback_activation || true
+  fi
+  if [ -n "$STAGE_DIR" ] && [ -d "$STAGE_DIR" ]; then
+    rm -rf "$STAGE_DIR"
+  fi
+  trap - EXIT
+  exit "$status"
+}
+
+activate_build() {
+  [ -f "$STAGED_DIST/index.html" ] || fail "Staged frontend is missing"
+  [ -x "$STAGED_BIN" ] || fail "Staged server binary is missing"
+
+  if has_cmd systemctl && $SUDO systemctl is-active --quiet "$SERVICE_NAME"; then
+    SERVICE_WAS_ACTIVE=1
+    info "Stopping $SERVICE_NAME for coordinated frontend/server activation"
+    $SUDO systemctl stop "$SERVICE_NAME"
+  elif ! has_cmd systemctl; then
+    info "systemd is unavailable; ensure any manually started server is stopped before activation"
+  fi
+
+  ACTIVATED=1
+  if [ -d "$APP_DIR/dist" ]; then
+    mv "$APP_DIR/dist" "$STAGE_DIR/previous-dist"
+    DIST_SWAPPED=1
+  fi
+  mv "$STAGED_DIST" "$APP_DIR/dist"
+  DIST_SWAPPED=1
+
+  mkdir -p "$APP_DIR/server" "$(dirname "$SERVER_BIN")"
+  if [ -f "$ENV_FILE" ]; then
+    mv "$ENV_FILE" "$STAGE_DIR/previous-env"
+    ENV_SWAPPED=1
+  fi
+  mv "$STAGED_ENV" "$ENV_FILE"
+  chmod 600 "$ENV_FILE"
+  ENV_SWAPPED=1
+
+  install -m 0755 "$STAGED_BIN" "$SERVER_BIN.next"
+  mv -f "$SERVER_BIN.next" "$SERVER_BIN"
+  BIN_SWAPPED=1
+  record_step "frontend, server and env activated together"
+}
+
+rollback_activation() {
+  [ "$ACTIVATED" = "1" ] || return 0
+  info "Rolling back frontend, server and environment"
+  if has_cmd systemctl; then
+    $SUDO systemctl stop "$SERVICE_NAME" >/dev/null 2>&1 || true
+  fi
+  if [ "$DIST_SWAPPED" = "1" ]; then
+    rm -rf "$APP_DIR/dist"
+    if [ -d "$STAGE_DIR/previous-dist" ]; then
+      mv "$STAGE_DIR/previous-dist" "$APP_DIR/dist"
+    fi
+  fi
+  if [ "$BIN_SWAPPED" = "1" ] && [ -f "$STAGE_DIR/previous-server" ]; then
+    install -m 0755 "$STAGE_DIR/previous-server" "$SERVER_BIN"
+  elif [ "$BIN_SWAPPED" = "1" ]; then
+    rm -f "$SERVER_BIN"
+  fi
+  if [ "$ENV_SWAPPED" = "1" ]; then
+    rm -f "$ENV_FILE"
+    if [ -f "$STAGE_DIR/previous-env" ]; then
+      mv "$STAGE_DIR/previous-env" "$ENV_FILE"
+    fi
+  fi
+  if [ "$SERVICE_WAS_ACTIVE" = "1" ] && has_cmd systemctl; then
+    $SUDO systemctl start "$SERVICE_NAME" || true
+  fi
+  ACTIVATED=0
+  DIST_SWAPPED=0
+  BIN_SWAPPED=0
+  ENV_SWAPPED=0
+  record_step "artifacts rolled back"
+}
+
+wait_for_health() {
+  local attempt
+  for ((attempt = 1; attempt <= 20; attempt++)); do
+    if has_cmd curl && curl -fsS --max-time 2 http://127.0.0.1:8080/health >/dev/null 2>&1; then
+      return 0
+    fi
+    if has_cmd wget && wget -qO- --timeout=2 http://127.0.0.1:8080/health >/dev/null 2>&1; then
+      return 0
+    fi
+    sleep 1
+  done
+  return 1
 }
 
 render_service_file() {
@@ -402,16 +625,16 @@ ensure_systemd_service() {
 
   if service_file_needs_write; then
     info "Writing systemd service: $SERVICE_NAME"
-    render_service_file | $SUDO tee "$(systemd_unit_path)" >/dev/null
-    $SUDO systemctl daemon-reload
-    $SUDO systemctl enable "$SERVICE_NAME"
+    render_service_file | $SUDO tee "$(systemd_unit_path)" >/dev/null || return 1
+    $SUDO systemctl daemon-reload || return 1
+    $SUDO systemctl enable "$SERVICE_NAME" || return 1
     record_step "systemd written"
   else
     record_step "systemd unchanged"
   fi
 
   info "Restarting service: $SERVICE_NAME"
-  $SUDO systemctl restart "$SERVICE_NAME"
+  $SUDO systemctl restart "$SERVICE_NAME" || return 1
   record_step "service restarted"
 }
 
@@ -526,12 +749,28 @@ else
   echo "Deploy:     incremental"
 fi
 
+trap cleanup_stage EXIT
+
 install_system_deps
 install_rust
 create_pre_upgrade_backup
+prepare_deploy_stage
 write_env_file
 build_app
-ensure_systemd_service
+activate_build
+if ! ensure_systemd_service; then
+  rollback_activation
+  fail "Service activation failed; previous artifacts were restored"
+fi
+if has_cmd systemctl; then
+  info "Waiting for the new service health check"
+  if ! wait_for_health; then
+    rollback_activation
+    fail "New service did not become healthy; previous artifacts were restored"
+  fi
+  record_step "health check passed"
+fi
+ACTIVATED=0
 configure_caddy_if_needed
 configure_firewall_if_needed
 print_result

@@ -113,8 +113,12 @@ APP_DIR=/root/MyDocs/daily-summary ./setup.sh 你的公网IP
 日常增量更新：
 
 ```bash
-./setup.sh 你的公网IP
+./setup.sh --cur
 ```
+
+`--cur` 会优先复用 `server/.env` 中已配置的域名；IP 模式下会探测服务器当前公网 IPv4。首次部署还没有配置时，也可以使用 `./setup.sh --bootstrap --cur` 自动探测公网 IPv4。公网探测会访问 `api.ipify.org`，失败后尝试 `ifconfig.me`；两者都失败时脚本会停止，不会静默复用可能已经过期的旧 IP。
+
+自动探测只能确定服务器的出口 IPv4，不能保证外部设备能够连入。家庭网络仍需配置路由器端口转发，云服务器仍需在安全组中放行 `8080/tcp`。
 
 首次安装或修复系统环境：
 
@@ -128,6 +132,7 @@ APP_DIR=/root/MyDocs/daily-summary ./setup.sh 你的公网IP
 - `--force-deps`：强制检查依赖并运行必要的 `apt-get update`。
 - `--force-systemd`：强制重写 systemd service。
 - `--no-backup`：跳过升级前 SQLite 快照。
+- `--cur`：复用已配置域名，或自动探测当前公网 IPv4，无需手工输入地址。
 
 默认增量模式不会反复执行 `apt-get update`，也不会在 service 文件未变化时重复 `daemon-reload`。
 
@@ -137,18 +142,19 @@ APP_DIR=/root/MyDocs/daily-summary ./setup.sh 你的公网IP
 
 ```bash
 chmod +x setup.sh
-./setup.sh 你的公网IP
+./setup.sh --cur
 ```
 
 脚本会：
 
 - 复用已有 `server/.env` 里的 `DAILY_SUMMARY_TOKEN`。
 - 复用已有 AI 配置。
-- 构建最新前端和服务端。
-- 重启 systemd 服务。
+- 在 staging 目录构建最新前端、服务端和运行配置，构建期间继续运行旧版本。
+- systemd 部署下会短暂停止服务，同时切换前端、服务端和运行配置，避免新旧 HTTP 接口混用。
+- 启动后检查 `/health`；启动失败时恢复上一版前端、服务端和运行配置。
 - systemd 配置未变化时不重复初始化。
 - 依赖已满足时不执行 `apt-get update`。
-- 如果发现旧数据库，会先复制一份 `pre-upgrade-时间.db` 到备份目录。
+- 如果发现旧数据库，会短暂停止服务并复制一份 `pre-upgrade-时间.db`，确保 SQLite 快照一致。
 
 强制更换访问令牌：
 
