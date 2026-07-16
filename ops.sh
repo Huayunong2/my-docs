@@ -118,14 +118,15 @@ require_server_bin() {
 }
 
 disk_usage_percent() {
-  mkdir -p "$DATA_DIR"
-  df -Pk "$DATA_DIR" 2>/dev/null \
+  local path="${1:-$DATA_DIR}"
+  df -Pk "$path" 2>/dev/null \
     | awk 'NR == 2 { value=$5; gsub(/%/, "", value); print value }'
 }
 
 ensure_backup_capacity() {
+  local path="${1:-$DATA_DIR}"
   local usage
-  usage="$(disk_usage_percent || true)"
+  usage="$(disk_usage_percent "$path" || true)"
   [[ "$usage" =~ ^[0-9]+$ ]] || fail "Could not determine disk usage before creating a backup"
   if [ "$usage" -ge 90 ]; then
     fail "Disk usage is ${usage}%; refusing to create a new backup at or above 90%"
@@ -135,7 +136,7 @@ ensure_backup_capacity() {
 prepare_backup_storage() {
   require_server_bin
   "$SERVER_BIN" --maintain-backups >/dev/null
-  ensure_backup_capacity
+  ensure_backup_capacity "$DATA_DIR"
 }
 
 cleanup_stale_external_temp_files() {
@@ -148,6 +149,8 @@ cleanup_stale_external_temp_files() {
     find "$APP_DIR/server" -maxdepth 1 -type f -uid "$(id -u)" \
       -name '.env.restore-*' -mmin +1440 -delete 2>/dev/null || true
   fi
+  find "$APP_DIR" -maxdepth 1 -type d -uid "$(id -u)" \
+    -name '.deploy-stage.*' -mmin +1440 -exec rm -rf -- {} + 2>/dev/null || true
 }
 
 cleanup_stale_bundle_temp_files() {
@@ -188,6 +191,8 @@ package_bundle() {
   output_dir="$(cd "$output_dir" && pwd -P)"
   output="$output_dir/$output_name"
   cleanup_stale_bundle_temp_files "$output_dir"
+  ensure_backup_capacity "${TMPDIR:-/tmp}"
+  ensure_backup_capacity "$output_dir"
   [ ! -e "$output" ] || fail "Bundle already exists: $output"
   local stage archive_next
   stage="$(mktemp -d "${TMPDIR:-/tmp}/daily-summary-ops.XXXXXX")"
@@ -221,6 +226,12 @@ EOF
 create_bundle() {
   local output="$1"
   prepare_backup_storage
+  local output_dir
+  output_dir="$(dirname "$output")"
+  mkdir -p "$output_dir"
+  output_dir="$(cd "$output_dir" && pwd -P)"
+  ensure_backup_capacity "${TMPDIR:-/tmp}"
+  ensure_backup_capacity "$output_dir"
   local snapshot_dir snapshot
   snapshot_dir="$(mktemp -d "${TMPDIR:-/tmp}/daily-summary-ops.XXXXXX")"
   TEMP_PATHS+=("$snapshot_dir")
@@ -705,7 +716,7 @@ monitor() {
     fi
   fi
   [ "$integrity" = "ok" ] || failures+=("SQLite integrity check is ${integrity:-unknown}")
-  disk_percent="$(disk_usage_percent || true)"
+  disk_percent="$(disk_usage_percent "$DATA_DIR" || true)"
   if ! [[ "$disk_percent" =~ ^[0-9]+$ ]]; then
     failures+=("disk usage could not be determined")
   elif ((disk_percent >= 80)); then

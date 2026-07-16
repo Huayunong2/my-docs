@@ -417,22 +417,22 @@ install_rust() {
   record_step "rust installed"
 }
 
+apply_backup_maintenance() {
+  [ -x "$STAGED_BIN" ] || return 0
+  "$STAGED_BIN" --maintain-backups >/dev/null \
+    || fail "Could not apply backup retention and stale-file cleanup"
+}
+
 create_pre_upgrade_backup() {
   if [ "$NO_BACKUP" = "1" ]; then
     info "Skipping pre-upgrade backup because --no-backup was used"
     record_step "backup skipped"
-    if [ -x "$STAGED_BIN" ]; then
-      "$STAGED_BIN" --maintain-backups >/dev/null \
-        || fail "Could not apply backup retention and stale-file cleanup"
-      record_step "backup retention applied"
-    fi
+    apply_backup_maintenance
+    record_step "backup retention applied"
     return
   fi
 
-  if [ -x "$STAGED_BIN" ]; then
-    "$STAGED_BIN" --maintain-backups >/dev/null \
-      || fail "Could not apply backup retention and stale-file cleanup"
-  fi
+  apply_backup_maintenance
 
   local data_home="${XDG_DATA_HOME:-$HOME/.local/share}"
   local db_path="$data_home/.daily-summary/data.db"
@@ -471,11 +471,8 @@ create_pre_upgrade_backup() {
     record_step "backup skipped: no database yet"
   fi
 
-  if [ -x "$STAGED_BIN" ]; then
-    "$STAGED_BIN" --maintain-backups >/dev/null \
-      || fail "Could not apply backup retention and stale-file cleanup"
-    record_step "backup retention applied"
-  fi
+  apply_backup_maintenance
+  record_step "backup retention applied"
 }
 
 write_env_file() {
@@ -532,12 +529,18 @@ prepare_deploy_stage() {
   fi
 }
 
+cleanup_stale_deploy_stages() {
+  find "$APP_DIR" -maxdepth 1 -type d -uid "$(id -u)" \
+    -name '.deploy-stage.*' -mmin +1440 -exec rm -rf -- {} + 2>/dev/null || true
+}
+
 acquire_deploy_lock() {
   local lock_root="$APP_DIR/server/target"
   mkdir -p "$lock_root"
   if has_cmd flock; then
     exec 9>"$lock_root/deploy.lock"
     flock -n 9 || fail "Another deployment is already running for $APP_DIR"
+    cleanup_stale_deploy_stages
     record_step "deployment lock acquired"
     return
   fi
@@ -547,6 +550,7 @@ acquire_deploy_lock() {
     fail "Another deployment may be running. If not, remove stale lock: $LOCK_DIR"
   fi
   LOCK_DIR_HELD=1
+  cleanup_stale_deploy_stages
   record_step "deployment lock acquired"
 }
 
