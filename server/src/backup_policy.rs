@@ -193,6 +193,47 @@ pub(crate) fn ensure_backup_capacity(path: &Path) -> io::Result<u8> {
     }
 }
 
+pub(crate) fn publish_latest_snapshot(snapshot: &Path, latest: &Path) -> io::Result<()> {
+    let parent = latest.parent().ok_or_else(|| {
+        io::Error::new(io::ErrorKind::InvalidInput, "latest snapshot has no parent")
+    })?;
+    let next = parent.join(format!(".daily-summary-latest-{}.db", uuid::Uuid::new_v4()));
+
+    let result = (|| {
+        fs::copy(snapshot, &next)?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(&next, fs::Permissions::from_mode(0o600))?;
+            fs::rename(&next, latest)?;
+        }
+        #[cfg(not(unix))]
+        {
+            let previous = parent.join(format!(
+                ".daily-summary-latest-previous-{}.db",
+                uuid::Uuid::new_v4()
+            ));
+            if latest.exists() {
+                fs::rename(latest, &previous)?;
+            }
+            if let Err(error) = fs::rename(&next, latest) {
+                if previous.exists() {
+                    let _ = fs::rename(&previous, latest);
+                }
+                return Err(error);
+            }
+            if previous.exists() {
+                fs::remove_file(previous)?;
+            }
+        }
+        Ok(())
+    })();
+    if result.is_err() {
+        let _ = fs::remove_file(next);
+    }
+    result
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -359,6 +400,23 @@ mod tests {
         fs::remove_dir_all(dir).unwrap();
     }
 
+    #[test]
+    fn publishing_latest_snapshot_does_not_clobber_the_previous_copy_on_failure() {
+        let dir = test_dir();
+        let latest = dir.join("daily-summary-latest.db");
+        fs::write(&latest, b"previous snapshot").unwrap();
+
+        assert!(publish_latest_snapshot(&dir.join("missing.db"), &latest).is_err());
+        assert_eq!(fs::read(&latest).unwrap(), b"previous snapshot");
+
+        let snapshot = dir.join("snapshot.db");
+        fs::write(&snapshot, b"new snapshot").unwrap();
+        publish_latest_snapshot(&snapshot, &latest).unwrap();
+        assert_eq!(fs::read(&latest).unwrap(), b"new snapshot");
+
+        fs::remove_dir_all(dir).unwrap();
+    }
+
     #[cfg(unix)]
     #[test]
     fn operations_refuse_to_create_a_backup_when_disk_usage_reaches_ninety_percent() {
@@ -478,6 +536,12 @@ mod tests {
         fs::create_dir_all(&bin_dir).unwrap();
         fs::create_dir_all(&temp_dir).unwrap();
         fs::create_dir_all(&status_dir).unwrap();
+        fs::create_dir_all(app_dir.join("server")).unwrap();
+        fs::write(
+            app_dir.join("server/.env"),
+            "DAILY_SUMMARY_TOKEN=monitor-test-token\n",
+        )
+        .unwrap();
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
@@ -489,10 +553,12 @@ mod tests {
         )
         .unwrap();
         fs::write(bin_dir.join("systemctl"), "#!/bin/sh\nexit 0\n").unwrap();
+        let health_marker = dir.join("health-request-authenticated");
         fs::write(
             bin_dir.join("curl"),
             format!(
-                "#!/bin/sh\nprintf '%s\\n' '{{\"monitoring\":{{\"last_backup_unix\":{now},\"ai_consecutive_failures\":0}}}}'\n"
+                "#!/bin/sh\ncase \"$*\" in *'Authorization: Bearer monitor-test-token'*'/api/health'*) touch \"{}\" ;; esac\nprintf '%s\\n' '{{\"monitoring\":{{\"last_backup_unix\":{now},\"ai_consecutive_failures\":0}}}}'\n",
+                health_marker.display()
             ),
         )
         .unwrap();
@@ -518,6 +584,7 @@ mod tests {
             String::from_utf8_lossy(&output.stdout),
             String::from_utf8_lossy(&output.stderr)
         );
+        assert!(health_marker.exists());
         fs::remove_dir_all(dir).unwrap();
     }
 

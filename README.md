@@ -375,7 +375,7 @@ systemctl list-timers 'daily-summary-*'
 journalctl -u daily-summary-monitor.service
 ```
 
-监控项包括 systemd 服务、按实际 `DAILY_SUMMARY_BIND` 探测的 `/health`、本地/异地备份新鲜度、磁盘剩余空间与使用率、SQLite 完整性和 AI 连续失败次数。SQLite 检查由独立进程默认每 24 小时执行，HTTP 健康接口只读取结果，不会占用业务数据库的全局锁。磁盘使用率达到 80% 会告警，达到 90% 会停止生成新备份。默认阈值在 `server/backup.env.example` 中；配置 `DAILY_SUMMARY_ALERT_WEBHOOK_URL` 后，失败会向兼容 `{ "text": "..." }` 的 webhook 发送通知。
+监控项包括 systemd 服务、按实际 `DAILY_SUMMARY_BIND` 探测的 `/health`、本地/异地备份新鲜度、磁盘剩余空间与使用率、SQLite 完整性和 AI 连续失败次数。公开 `/health` 只返回存活状态、版本和构建标识；包含数据库、备份、磁盘和 AI 状态的 `/api/health` 必须携带访问令牌。SQLite 检查由独立进程默认每 24 小时执行，HTTP 健康接口只读取结果，不会占用业务数据库的全局锁。磁盘使用率达到 80% 会告警，达到 90% 会停止生成新备份。默认阈值在 `server/backup.env.example` 中；配置 `DAILY_SUMMARY_ALERT_WEBHOOK_URL` 后，失败会向兼容 `{ "text": "..." }` 的 webhook 发送通知。
 
 不提供网页恢复按钮，是为了避免误点覆盖数据库。
 

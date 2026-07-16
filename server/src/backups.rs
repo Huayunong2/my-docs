@@ -97,10 +97,9 @@ pub(crate) async fn create_backup(
         ));
     }
 
-    // Copy as latest
     let latest = dir.join("daily-summary-latest.db");
-    let _ = std::fs::remove_file(&latest);
-    let _ = std::fs::copy(&path, &latest);
+    backup_policy::publish_latest_snapshot(&path, &latest)
+        .map_err(|error| (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()))?;
 
     backup_policy::maintain_backups(&app_data_dir())
         .map_err(|error| (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()))?;

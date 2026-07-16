@@ -370,6 +370,17 @@ health_url() {
   printf 'http://%s/health\n' "$bind"
 }
 
+detailed_health_url() {
+  local public_url
+  public_url="$(health_url)"
+  printf '%s/api/health\n' "${public_url%/health}"
+}
+
+server_token() {
+  [ -f "$ENV_FILE" ] || return 0
+  grep -E '^DAILY_SUMMARY_TOKEN=' "$ENV_FILE" | tail -n 1 | cut -d= -f2- || true
+}
+
 current_boot_id() {
   if [ -r /proc/sys/kernel/random/boot_id ]; then
     tr -d '\n' </proc/sys/kernel/random/boot_id
@@ -689,7 +700,14 @@ monitor() {
   if ! systemctl is-active --quiet "$SERVICE_NAME"; then
     failures+=("service is not active")
   fi
-  response="$(curl -fsS --max-time 5 "$(health_url)" 2>/dev/null || true)"
+  local token
+  token="$(server_token)"
+  if [ -z "$token" ]; then
+    failures+=("server token is unavailable for detailed health monitoring")
+    response=""
+  else
+    response="$(curl -fsS --max-time 5 -H "Authorization: Bearer $token" "$(detailed_health_url)" 2>/dev/null || true)"
+  fi
   if [ -z "$response" ]; then
     failures+=("health endpoint is unreachable")
   else

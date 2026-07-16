@@ -1,0 +1,47 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+  schedule:
+    - cron: "17 3 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy,rustfmt
+
+      - run: npm ci
+      - run: npm audit --omit=dev --audit-level=moderate
+      - run: npm test
+      - run: npm run check:bundle
+      - run: cargo fmt --manifest-path server/Cargo.toml --check
+      - run: cargo test --manifest-path server/Cargo.toml --locked
+      - run: cargo clippy --manifest-path server/Cargo.toml --all-targets --locked -- -D warnings
+      - run: bash -n setup.sh ops.sh
+
+  rust-security-audit:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      checks: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: rustsec/audit-check@69366f33c96575abad1ee0dba8212993eecbe998 # v2.0.0
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          working-directory: server

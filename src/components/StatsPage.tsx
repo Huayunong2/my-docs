@@ -1,12 +1,14 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { MouseEvent } from "react";
 import { motion } from "framer-motion";
-import { Activity, BarChart3, BookOpenText, CalendarCheck, CalendarDays, CalendarRange, CheckCircle2, CircleHelp, Clock, Coffee, FileText, Heart, HeartPulse, LineChart, LoaderCircle, PencilLine, Plane, ShieldCheck, Sparkles, Target, TrendingUp, Trophy, Umbrella } from "lucide-react";
+import { Activity, BarChart3, BookOpenText, CalendarCheck, CalendarDays, CalendarRange, CircleHelp, Clock, Coffee, FileText, Heart, HeartPulse, LineChart, LoaderCircle, PencilLine, Plane, ShieldCheck, Sparkles, Target, TrendingUp, Trophy, Umbrella } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import * as api from "../lib/api";
 import type { MonthDayStats, Review, ReviewKind, StatsOverview, WeekReview } from "../lib/api";
 import type { Page } from "../App";
 import { normalizeReviewContent } from "../lib/reviewContent";
+import { generateReviewVersion, upsertReviewVersion } from "../lib/reviewGeneration";
+import type { ReviewGenerationStep } from "../lib/reviewGeneration";
 import { loadStatsSnapshot } from "../lib/statsSnapshot";
 import { ReviewStatusPill } from "./reviews/ReviewShared";
 
@@ -44,10 +46,9 @@ function todayDate(): string {
 
 const weekdays = ["日", "一", "二", "三", "四", "五", "六"];
 const exemptionReasons = ["休息", "请假", "生病", "出差"];
-type GenerationStep = "idle" | "collecting" | "requesting" | "saving";
 type StatTone = "accent" | "green" | "amber" | "gray" | "rose" | "sky";
 
-const STEP_LABELS: Record<Exclude<GenerationStep, "idle">, string> = {
+const STEP_LABELS: Record<Exclude<ReviewGenerationStep, "idle">, string> = {
   collecting: "收集本周记录",
   requesting: "请求 AI",
   saving: "生成草稿",
@@ -79,7 +80,7 @@ export default function StatsPage({
   const [reviewWeekDate, setReviewWeekDate] = useState(() => todayDate());
   const [reviewError, setReviewError] = useState("");
   const [generatingKind, setGeneratingKind] = useState<ReviewKind | null>(null);
-  const [generationStep, setGenerationStep] = useState<GenerationStep>("idle");
+  const [generationStep, setGenerationStep] = useState<ReviewGenerationStep>("idle");
   const [expandedMissingDays, setExpandedMissingDays] = useState(false);
   const [activeMissingDay, setActiveMissingDay] = useState<string | null>(null);
   const [exemptionTarget, setExemptionTarget] = useState<MonthDayStats | null>(null);
@@ -89,9 +90,12 @@ export default function StatsPage({
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const loadRevision = useRef(0);
+  const generationInFlight = useRef(false);
 
   const bounds = useMemo(() => monthBounds(year, month), [year, month]);
   const selectedWeekBounds = useMemo(() => weekBounds(reviewWeekDate), [reviewWeekDate]);
+  const generationAnchors = useRef({ weekly: reviewWeekDate, monthly: bounds.first });
+  generationAnchors.current = { weekly: reviewWeekDate, monthly: bounds.first };
   const maxMoodCount = Math.max(1, ...Object.values(overview?.mood_counts || {}));
   const writtenDays = overview?.days_written || 0;
   const exemptedDays = overview?.exempted_days || 0;
@@ -267,25 +271,38 @@ export default function StatsPage({
   };
 
   const mountedRef = useRef(true);
-  useEffect(() => () => { mountedRef.current = false; }, []);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => { mountedRef.current = false; };
+  }, []);
 
   const generateAiReview = async (kind: ReviewKind) => {
-    if (!mountedRef.current) return;
+    if (!mountedRef.current || generationInFlight.current) return;
+    generationInFlight.current = true;
+    const anchorDate = kind === "weekly" ? reviewWeekDate : bounds.first;
     setGeneratingKind(kind);
-    setGenerationStep("collecting");
     setReviewError("");
     try {
-      await new Promise(r => setTimeout(r, 600));
-      if (!mountedRef.current) return;
-      setGenerationStep("requesting");
-      await api.generateReview({ kind, date: kind === "weekly" ? reviewWeekDate : bounds.first });
-      if (!mountedRef.current) return;
-      setGenerationStep("saving");
-      await loadStats(false);
+      const generated = await generateReviewVersion(
+        api,
+        { kind, date: anchorDate },
+        () => mountedRef.current && generationAnchors.current[kind] === anchorDate,
+        setGenerationStep,
+      );
+      if (!generated) return;
+      if (kind === "weekly") {
+        setWeeklyReviews((reviews) => upsertReviewVersion(reviews, generated));
+      } else {
+        setMonthlyReviews((reviews) => upsertReviewVersion(reviews, generated));
+      }
     } catch (e) {
       setReviewError(api.getErrorMessage(e));
     } finally {
-      if (mountedRef.current) { setGeneratingKind(null); setGenerationStep("idle"); }
+      generationInFlight.current = false;
+      if (mountedRef.current) {
+        setGeneratingKind(null);
+        setGenerationStep("idle");
+      }
     }
   };
 
@@ -688,6 +705,7 @@ export default function StatsPage({
               reviews={weeklyReviews}
               selectedReview={selectedWeeklyReview}
               generating={generatingKind === "weekly"}
+              generationDisabled={generatingKind !== null}
               generationStep={generationStep}
               estimateLabel={`${weekReview?.total_words || 0} 字材料 · 服务端模型`}
               onGenerate={() => generateAiReview("weekly")}
@@ -702,6 +720,7 @@ export default function StatsPage({
               reviews={monthlyReviews}
               selectedReview={selectedMonthlyReview}
               generating={generatingKind === "monthly"}
+              generationDisabled={generatingKind !== null}
               generationStep={generationStep}
               estimateLabel={`${overview?.total_words || 0} 字记录规模 · 服务端模型`}
               onGenerate={() => generateAiReview("monthly")}
@@ -957,6 +976,7 @@ function ReviewPanel({
   reviews,
   selectedReview,
   generating,
+  generationDisabled,
   generationStep = "collecting",
   estimateLabel,
   onGenerate,
@@ -972,7 +992,8 @@ function ReviewPanel({
   reviews: Review[];
   selectedReview: Review | null;
   generating: boolean;
-  generationStep?: string;
+  generationDisabled: boolean;
+  generationStep?: ReviewGenerationStep;
   estimateLabel?: string;
   onGenerate: () => void;
   onOpenLibrary: () => void;
@@ -1033,33 +1054,19 @@ function ReviewPanel({
         <p className="mb-4 text-xs text-gray-400 dark:text-gray-500">还没有 AI 复盘版本</p>
       )}
 
-      {estimateLabel && (
-        <div className="mb-3 rounded-lg border border-gray-100 bg-gray-50 px-3 py-2 text-xs leading-5 text-gray-500 dark:border-white/10 dark:bg-white/[0.035] dark:text-gray-400">
-          {estimateLabel}
-        </div>
-      )}
-
-      {generating && (
-        <div className="mb-3 rounded-lg border border-accent/15 bg-accent-light/40 px-3 py-3 dark:bg-accent-light/10">
-          <div className="flex items-center justify-between gap-2 mb-2">
-            {(["collecting","requesting","saving"] as const).map((step, i) => {
-              const currentIdx = generationStep === "collecting" ? 0 : generationStep === "requesting" ? 1 : generationStep === "saving" ? 2 : 0;
-              const done = i <= currentIdx;
-              return (
-                <div key={step} className="flex items-center gap-1.5 flex-1">
-                  <span className={`flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-[10px] font-bold transition-colors ${done ? "bg-accent text-white" : "bg-gray-200 text-gray-400 dark:bg-gray-700 dark:text-gray-500"}`}>
-                    {done ? <CheckCircle2 size={12} /> : i + 1}
-                  </span>
-                  <span className={`truncate text-[11px] transition-colors ${done ? "text-gray-700 dark:text-gray-200 font-medium" : "text-gray-400 dark:text-gray-500"}`}>
-                    {STEP_LABELS[step]}
-                  </span>
-                </div>
-              );
-            })}
-          </div>
-          <div className="h-1.5 rounded-full bg-gray-200 dark:bg-gray-700 overflow-hidden">
-            <div className="h-full rounded-full bg-accent transition-all duration-500" style={{ width: `${(generationStep === "collecting" ? 33 : generationStep === "requesting" ? 66 : generationStep === "saving" ? 100 : 0)}%` }} />
-          </div>
+      {(estimateLabel || generating) && (
+        <div className={`mb-3 min-h-[52px] rounded-lg border px-3 py-2 text-xs leading-5 ${generating ? "border-accent/15 bg-accent-light/40 text-gray-600 dark:bg-accent-light/10 dark:text-gray-300" : "border-gray-100 bg-gray-50 text-gray-500 dark:border-white/10 dark:bg-white/[0.035] dark:text-gray-400"}`}>
+          {generating ? (
+            <>
+              <div className="mb-1.5 flex items-center gap-2 font-medium">
+                <LoaderCircle size={13} className="animate-spin text-accent" />
+                {generationStep === "idle" ? "准备生成" : STEP_LABELS[generationStep]}
+              </div>
+              <div className="h-1.5 overflow-hidden rounded-full bg-gray-200 dark:bg-gray-700">
+                <div className="h-full rounded-full bg-accent transition-all duration-300" style={{ width: generationStep === "saving" ? "100%" : generationStep === "requesting" ? "66%" : "33%" }} />
+              </div>
+            </>
+          ) : estimateLabel}
         </div>
       )}
 
@@ -1068,7 +1075,7 @@ function ReviewPanel({
         <button
           type="button"
           onClick={onGenerate}
-          disabled={generating}
+          disabled={generationDisabled}
           className="ui-button-primary w-full sm:w-auto"
         >
           {generating ? (
