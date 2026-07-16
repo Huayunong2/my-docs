@@ -165,6 +165,9 @@ pub(crate) fn cleanup_stale_temp_files(
     remove_stale_matching(&app_dir.join("backups"), max_age, now, |name| {
         (name.starts_with(".snapshot-") || name.starts_with(".daily-summary-latest-"))
             && name.ends_with(".db")
+    })?;
+    remove_stale_matching(&app_dir.join("status"), max_age, now, |name| {
+        name.starts_with(".database-integrity.")
     })
 }
 
@@ -303,13 +306,16 @@ mod tests {
     fn stale_cleanup_only_removes_known_temporary_paths() {
         let app_dir = test_dir();
         let backups = app_dir.join("backups");
+        let status = app_dir.join("status");
         fs::create_dir_all(&backups).unwrap();
+        fs::create_dir_all(&status).unwrap();
         fs::create_dir(app_dir.join(".integrity-check.dead")).unwrap();
         fs::write(app_dir.join(".data.db.restore-dead"), b"temp").unwrap();
         fs::create_dir(app_dir.join(".restore-rollback.next.dead")).unwrap();
         fs::create_dir(app_dir.join(".restore-rollback")).unwrap();
         fs::write(backups.join(".snapshot-dead.db"), b"temp").unwrap();
         fs::write(backups.join(".daily-summary-latest-dead.db"), b"temp").unwrap();
+        fs::write(status.join(".database-integrity.dead"), b"temp").unwrap();
         fs::write(
             backups.join("daily-summary-auto-20260716-010101-1.db"),
             b"keep",
@@ -328,6 +334,7 @@ mod tests {
         assert!(!app_dir.join(".restore-rollback.next.dead").exists());
         assert!(!backups.join(".snapshot-dead.db").exists());
         assert!(!backups.join(".daily-summary-latest-dead.db").exists());
+        assert!(!status.join(".database-integrity.dead").exists());
         assert!(app_dir.join(".restore-rollback").exists());
         assert!(backups
             .join("daily-summary-auto-20260716-010101-1.db")
@@ -406,6 +413,59 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    fn migration_bundle_refuses_a_full_output_filesystem_before_snapshotting() {
+        use std::os::unix::fs::PermissionsExt;
+        use std::process::Command;
+
+        let dir = test_dir();
+        let bin_dir = dir.join("bin");
+        let app_dir = dir.join("app");
+        let temp_dir = dir.join("tmp");
+        let output_dir = dir.join("full-output");
+        let marker = dir.join("snapshot-was-called");
+        fs::create_dir_all(&bin_dir).unwrap();
+        fs::create_dir_all(&temp_dir).unwrap();
+        fs::create_dir_all(&output_dir).unwrap();
+        fs::write(
+            bin_dir.join("df"),
+            "#!/bin/sh\ncase \"${2:-}\" in *full-output*) used=90 ;; *) used=50 ;; esac\nprintf 'Filesystem 1024-blocks Used Available Capacity Mounted on\\n/dev/fake 100 %s %s %s%%%% /\\n' \"$used\" \"$((100-used))\" \"$used\"\n",
+        )
+        .unwrap();
+        fs::write(
+            bin_dir.join("fake-server"),
+            "#!/bin/sh\nif [ \"${1:-}\" = '--snapshot' ]; then touch \"$BACKUP_TEST_MARKER\" \"$2\"; fi\nexit 0\n",
+        )
+        .unwrap();
+        for name in ["df", "fake-server"] {
+            fs::set_permissions(bin_dir.join(name), fs::Permissions::from_mode(0o755)).unwrap();
+        }
+
+        let output = Command::new(env!("CARGO_MANIFEST_DIR").to_string() + "/../ops.sh")
+            .args([
+                "backup-bundle",
+                output_dir.join("migration.tar.gz").to_str().unwrap(),
+            ])
+            .env("APP_DIR", &app_dir)
+            .env("SERVER_BIN", bin_dir.join("fake-server"))
+            .env("BACKUP_ENV_FILE", dir.join("missing-backup-env"))
+            .env("XDG_DATA_HOME", dir.join("data"))
+            .env("TMPDIR", &temp_dir)
+            .env("BACKUP_TEST_MARKER", &marker)
+            .env("PATH", format!("{}:/usr/bin:/bin", bin_dir.display()))
+            .output()
+            .unwrap();
+
+        assert!(!output.status.success());
+        assert!(
+            !marker.exists(),
+            "snapshot must not start for a full output filesystem"
+        );
+        assert!(String::from_utf8_lossy(&output.stderr).contains("90%"));
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn monitor_reports_disk_usage_at_eighty_percent() {
         use std::os::unix::fs::PermissionsExt;
         use std::process::Command;
@@ -474,9 +534,13 @@ mod tests {
         let old_temp = temp_dir.join("daily-summary-ops.old");
         let new_temp = temp_dir.join("daily-summary-ops.new");
         let old_env = app_dir.join("server/.env.restore-old");
+        let old_deploy_stage = app_dir.join(".deploy-stage.old");
+        let new_deploy_stage = app_dir.join(".deploy-stage.new");
         fs::create_dir_all(&bin_dir).unwrap();
         fs::create_dir_all(&old_temp).unwrap();
         fs::create_dir_all(&new_temp).unwrap();
+        fs::create_dir_all(&old_deploy_stage).unwrap();
+        fs::create_dir_all(&new_deploy_stage).unwrap();
         fs::create_dir_all(app_dir.join("server")).unwrap();
         fs::write(&old_env, b"temporary env").unwrap();
         fs::write(bin_dir.join("fake-server"), "#!/bin/sh\nexit 0\n").unwrap();
@@ -487,7 +551,7 @@ mod tests {
         .unwrap();
         assert!(Command::new("touch")
             .args(["-d", "25 hours ago"])
-            .args([&old_temp, &old_env])
+            .args([&old_temp, &old_env, &old_deploy_stage])
             .status()
             .unwrap()
             .success());
@@ -506,7 +570,9 @@ mod tests {
         assert!(output.status.success());
         assert!(!old_temp.exists());
         assert!(!old_env.exists());
+        assert!(!old_deploy_stage.exists());
         assert!(new_temp.exists());
+        assert!(new_deploy_stage.exists());
         fs::remove_dir_all(dir).unwrap();
     }
 }
