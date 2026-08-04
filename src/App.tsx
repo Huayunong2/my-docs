@@ -151,7 +151,7 @@ function PageContent({
     case "reviews":
       return <ReviewsPage />;
     case "review":
-      return <ReviewPage onEditDate={onEditDate} onNavigate={onNavigate} />;
+      return <ReviewPage onEditDate={onEditDate} onNavigate={onNavigate} onOpenKnowledgeCard={onOpenKnowledgeCard} />;
     case "knowledge":
       return <KnowledgePage onEditDate={onEditDate} onNavigate={onNavigate} initialCardId={knowledgeTarget?.cardId} initialNonce={knowledgeTarget?.nonce} />;
     case "settings":

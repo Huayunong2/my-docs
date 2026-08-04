@@ -248,6 +248,9 @@ export interface KnowledgeCard {
   next_review_at?: string;
   usage_count?: number;
   last_used_at?: string;
+  related_ids?: string[];
+  stability?: number;
+  difficulty?: number;
 }
 
 function mapKnowledgeCard(card: KnowledgeCard): KnowledgeCard {
@@ -274,6 +277,7 @@ export function createKnowledgeCard(payload: {
   source_review_id?: string;
   source_date?: string;
   source_excerpt?: string;
+  related_ids?: string[];
 }) {
   return httpRequest<KnowledgeCard>("/knowledge-cards", { method: "POST", body: JSON.stringify(payload) }).then(mapKnowledgeCard);
 }
@@ -301,6 +305,7 @@ export function updateKnowledgeCard(id: string, payload: Partial<{
   source_review_id: string;
   source_date: string;
   source_excerpt: string;
+  related_ids: string[];
 }>) {
   return httpRequest<KnowledgeCard>(`/knowledge-cards/${encodeURIComponent(id)}`, { method: "PUT", body: JSON.stringify(payload) }).then(mapKnowledgeCard);
 }
@@ -337,11 +342,29 @@ export interface ReviewStatsResponse {
   total_confirmed: number;
   learning: number;
   mature: number;
+  new_cards: number;
+  upcoming: DailyReviewCount[];
   daily: DailyReviewCount[];
+}
+
+export interface ReviewHistoryEntry {
+  grade: string;
+  interval_days: number;
+  ease: number;
+  next_review_at: string;
+  reviewed_at: string;
 }
 
 export function getReviewStats() {
   return httpRequest<ReviewStatsResponse>("/review/stats");
+}
+
+export function getReviewHistory(cardId: string) {
+  return httpRequest<ReviewHistoryEntry[]>(`/review/history/${encodeURIComponent(cardId)}`);
+}
+
+export function getReviewHeatmap(days = 365) {
+  return httpRequest<DailyReviewCount[]>(`/review/heatmap?days=${days}`);
 }
 
 export function getDueReviewCards(limit = 20) {
