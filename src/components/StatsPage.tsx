@@ -75,6 +75,7 @@ export default function StatsPage({
   const [overview, setOverview] = useState<StatsOverview | null>(null);
   const [days, setDays] = useState<MonthDayStats[]>([]);
   const [reviewStats, setReviewStats] = useState<api.ReviewStatsResponse | null>(null);
+  const [heatmap, setHeatmap] = useState<api.DailyReviewCount[]>([]);
   const [weekReview, setWeekReview] = useState<WeekReview | null>(null);
   const [weeklyReviews, setWeeklyReviews] = useState<Review[]>([]);
   const [monthlyReviews, setMonthlyReviews] = useState<Review[]>([]);
@@ -277,11 +278,14 @@ export default function StatsPage({
     return () => { mountedRef.current = false; };
   }, []);
 
-  // 复习统计（静默失败，不影响页面主体）
+  // 复习统计 + 热力图（静默失败，不影响页面主体）
   useEffect(() => {
     api.getReviewStats()
       .then((stats) => { if (mountedRef.current) setReviewStats(stats); })
       .catch(() => { if (mountedRef.current) setReviewStats(null); });
+    api.getReviewHeatmap(365)
+      .then((data) => { if (mountedRef.current) setHeatmap(data); })
+      .catch(() => { if (mountedRef.current) setHeatmap([]); });
   }, []);
 
   const generateAiReview = async (kind: ReviewKind) => {
@@ -442,6 +446,67 @@ export default function StatsPage({
               </p>
             )}
           </div>
+          <div className="mt-4">
+            <div className="mb-1.5 flex items-center justify-between">
+              <span className="text-[11px] font-semibold uppercase tracking-wide text-gray-400 dark:text-gray-500">
+                未来 7 天到期
+              </span>
+              <span className="text-[11px] text-gray-400 dark:text-gray-500">
+                {reviewStats.upcoming.reduce((sum, day) => sum + day.count, 0)} 张
+              </span>
+            </div>
+            <div className="flex items-end gap-1.5">
+              {reviewStats.upcoming.map((day) => (
+                <div key={day.date} className="flex flex-1 flex-col items-center gap-1" title={`${day.date} · ${day.count} 张`}>
+                  <span className={`font-mono text-[11px] leading-none ${day.count > 0 ? "text-accent" : "text-gray-300 dark:text-gray-600"}`}>
+                    {day.count || ""}
+                  </span>
+                  <div className={`h-2 w-full rounded-full ${day.count > 0 ? "bg-accent/50" : "bg-gray-100 dark:bg-white/[0.04]"}`} />
+                </div>
+              ))}
+            </div>
+          </div>
+          {heatmap.length > 0 && (
+            <div className="mt-4">
+              <div className="mb-1.5 flex items-center justify-between">
+                <span className="text-[11px] font-semibold uppercase tracking-wide text-gray-400 dark:text-gray-500">
+                  一年复习热力图
+                </span>
+                <span className="flex items-center gap-1 text-[11px] text-gray-400 dark:text-gray-500">
+                  少
+                  {[0, 1, 2, 4, 7].map((level) => (
+                    <span
+                      key={level}
+                      className={`inline-block h-2.5 w-2.5 rounded-[3px] ${level === 0 ? "bg-gray-100 dark:bg-white/[0.06]" : level <= 1 ? "bg-accent/20" : level <= 2 ? "bg-accent/40" : level <= 4 ? "bg-accent/70" : "bg-accent"}`}
+                    />
+                  ))}
+                  多
+                </span>
+              </div>
+              <div className="overflow-x-auto pb-1">
+                <div className="grid min-w-[560px] grid-flow-col grid-rows-7 gap-[3px]">
+                  {heatmap.map((day) => (
+                    <span
+                      key={day.date}
+                      title={`${day.date} · 复习 ${day.count} 次`}
+                      className={[
+                        "h-[11px] w-[11px] rounded-[3px]",
+                        day.count === 0
+                          ? "bg-gray-100 dark:bg-white/[0.06]"
+                          : day.count === 1
+                            ? "bg-accent/20"
+                            : day.count <= 2
+                              ? "bg-accent/40"
+                              : day.count <= 4
+                                ? "bg-accent/70"
+                                : "bg-accent",
+                      ].join(" ")}
+                    />
+                  ))}
+                </div>
+              </div>
+            </div>
+          )}
         </section>
       )}
 

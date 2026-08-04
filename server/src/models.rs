@@ -146,6 +146,12 @@ pub(crate) struct KnowledgeCard {
     pub(crate) usage_count: i64,
     #[serde(default)]
     pub(crate) last_used_at: String,
+    #[serde(default)]
+    pub(crate) related_ids: Vec<String>,
+    #[serde(default)]
+    pub(crate) stability: f64,
+    #[serde(default)]
+    pub(crate) difficulty: f64,
 }
 
 fn default_review_ease() -> f64 {
@@ -180,7 +186,18 @@ pub(crate) struct ReviewStatsResponse {
     pub(crate) total_confirmed: i64,
     pub(crate) learning: i64,
     pub(crate) mature: i64,
+    pub(crate) new_cards: i64,
+    pub(crate) upcoming: Vec<DailyReviewCount>,
     pub(crate) daily: Vec<DailyReviewCount>,
+}
+
+#[derive(Debug, Serialize)]
+pub(crate) struct ReviewHistoryEntry {
+    pub(crate) grade: String,
+    pub(crate) interval_days: f64,
+    pub(crate) ease: f64,
+    pub(crate) next_review_at: String,
+    pub(crate) reviewed_at: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -322,6 +339,11 @@ pub(crate) struct DueQuery {
 }
 
 #[derive(Debug, Deserialize)]
+pub(crate) struct HeatmapQuery {
+    pub(crate) days: Option<i64>,
+}
+
+#[derive(Debug, Deserialize)]
 pub(crate) struct GradeCardPayload {
     pub(crate) grade: String,
 }
@@ -337,6 +359,7 @@ pub(crate) struct CreateKnowledgeCardPayload {
     pub(crate) source_review_id: Option<String>,
     pub(crate) source_date: Option<String>,
     pub(crate) source_excerpt: Option<String>,
+    pub(crate) related_ids: Option<Vec<String>>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -350,6 +373,7 @@ pub(crate) struct UpdateKnowledgeCardPayload {
     pub(crate) source_review_id: Option<String>,
     pub(crate) source_date: Option<String>,
     pub(crate) source_excerpt: Option<String>,
+    pub(crate) related_ids: Option<Vec<String>>,
 }
 
 #[derive(Debug, Deserialize)]

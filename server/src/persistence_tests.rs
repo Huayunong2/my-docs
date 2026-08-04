@@ -193,6 +193,9 @@ fn review_and_knowledge_http_shapes_hide_storage_serialization() {
         next_review_at: "".into(),
         usage_count: 0,
         last_used_at: "".into(),
+        related_ids: vec![],
+        stability: 0.0,
+        difficulty: 0.0,
     };
 
     let review_json = serde_json::to_value(review).expect("serialize review");
@@ -234,6 +237,7 @@ fn invalid_knowledge_batch_persists_nothing() {
         source_review_id: String::new(),
         source_date: "2026-07-16".into(),
         source_excerpt: "evidence".into(),
+        related_ids: vec![],
     };
 
     assert!(db
@@ -254,6 +258,7 @@ fn card_draft(status: &str) -> KnowledgeCardDraft {
         source_review_id: String::new(),
         source_date: "2026-07-16".into(),
         source_excerpt: "evidence".into(),
+        related_ids: vec![],
     }
 }
 
@@ -697,4 +702,117 @@ fn review_stats_streak_starts_from_yesterday_when_today_has_no_review() {
         .expect("review stats");
     assert_eq!(stats.streak_days, 1, "今天未复习则从昨天起算");
     assert_eq!(stats.reviewed_today, 0);
+}
+
+#[test]
+fn due_queue_limits_new_cards_to_daily_cap() {
+    let mut db = Database::new_in_memory().expect("in-memory database");
+    // 25 张未评分确认卡 + 1 张到期卡
+    for index in 0..25 {
+        let mut draft = card_draft("confirmed");
+        draft.title = format!("新卡 {index}");
+        db.knowledge().save(draft).expect("save new card");
+    }
+    let mut due_card = card_draft("confirmed");
+    due_card.title = "到期卡".into();
+    let due_card = db.knowledge().save(due_card).expect("save due card");
+    db.knowledge()
+        .apply_grade(&due_card.id, "good", 3.0, 2.5, "2026-07-01", "2026-07-01")
+        .expect("grade due card");
+
+    let due = db.knowledge().due(100, "2026-07-16").expect("due cards");
+    // 新卡最多 20 张 + 到期卡 1 张
+    assert_eq!(due.len(), 21);
+    assert_eq!(
+        due.iter().filter(|c| c.next_review_at.is_empty()).count(),
+        20
+    );
+    assert!(due.iter().any(|c| c.id == due_card.id));
+}
+
+#[test]
+fn review_stats_reports_new_card_cap_and_upcoming_days() {
+    let mut db = Database::new_in_memory().expect("in-memory database");
+    let card = db
+        .knowledge()
+        .save(card_draft("confirmed"))
+        .expect("save card");
+    // 明天到期
+    db.knowledge()
+        .apply_grade(&card.id, "good", 3.0, 2.5, "2026-07-17", "2026-07-14")
+        .expect("grade");
+
+    let stats = db.knowledge().review_stats("2026-07-16").expect("stats");
+    assert_eq!(stats.new_cards, 0, "没有未评分新卡");
+    assert_eq!(stats.upcoming.len(), 7);
+    let tomorrow = stats
+        .upcoming
+        .iter()
+        .find(|d| d.date == "2026-07-17")
+        .unwrap();
+    assert_eq!(tomorrow.count, 1);
+}
+
+#[test]
+fn review_history_and_heatmap_track_per_day_counts() {
+    let mut db = Database::new_in_memory().expect("in-memory database");
+    let card = db
+        .knowledge()
+        .save(card_draft("confirmed"))
+        .expect("save card");
+    db.knowledge()
+        .apply_grade(&card.id, "good", 3.0, 2.5, "2026-07-19", "2026-07-16")
+        .expect("grade");
+    db.knowledge()
+        .apply_grade(&card.id, "again", 0.0, 2.3, "2026-07-16", "2026-07-16")
+        .expect("grade again");
+
+    let history = db.knowledge().review_history(&card.id).expect("history");
+    assert_eq!(history.len(), 2);
+    assert_eq!(history[0].grade, "good");
+    assert_eq!(history[1].grade, "again");
+    assert_eq!(history[0].reviewed_at, "2026-07-16");
+
+    let heatmap = db
+        .knowledge()
+        .review_heatmap(7, "2026-07-16")
+        .expect("heatmap");
+    assert_eq!(heatmap.len(), 7);
+    let today = heatmap.iter().find(|d| d.date == "2026-07-16").unwrap();
+    assert_eq!(today.count, 2, "同一天评两次记 2 次");
+}
+
+#[test]
+fn related_ids_are_persisted_and_round_trip() {
+    let mut db = Database::new_in_memory().expect("in-memory database");
+    let first = db
+        .knowledge()
+        .save(card_draft("confirmed"))
+        .expect("save first");
+    let mut second = card_draft("confirmed");
+    second.title = "关联卡".into();
+    let second = db.knowledge().save(second).expect("save second");
+
+    let mut update = card_draft("confirmed");
+    update.title = "第一张".into();
+    update.related_ids = vec![second.id.clone()];
+    let updated = db
+        .knowledge()
+        .update(&first.id, update)
+        .expect("update with related")
+        .expect("card exists");
+    assert_eq!(updated.related_ids, vec![second.id.clone()]);
+
+    let archive = db.portable_archive().export_json().expect("export");
+    let mut target = Database::new_in_memory().expect("target db");
+    target
+        .portable_archive()
+        .import_json(archive)
+        .expect("import");
+    let restored = target
+        .knowledge()
+        .find(&first.id)
+        .expect("find")
+        .expect("exists");
+    assert_eq!(restored.related_ids, vec![second.id]);
 }

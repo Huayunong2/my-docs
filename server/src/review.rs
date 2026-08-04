@@ -1,7 +1,8 @@
 use crate::db::Database;
 use crate::helpers::format_date;
 use crate::models::{
-    DueQuery, DueReviewResponse, GradeCardPayload, KnowledgeCard, ReviewStatsResponse,
+    DueQuery, DueReviewResponse, GradeCardPayload, HeatmapQuery, KnowledgeCard, ReviewHistoryEntry,
+    ReviewStatsResponse,
 };
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
@@ -153,6 +154,34 @@ pub(crate) async fn review_stats(
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     db.knowledge()
         .review_stats(&today)
+        .map(Json)
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))
+}
+
+pub(crate) async fn review_history(
+    State(db): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<Vec<ReviewHistoryEntry>>, (StatusCode, String)> {
+    let mut db = db
+        .lock()
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    db.knowledge()
+        .review_history(&id)
+        .map(Json)
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))
+}
+
+pub(crate) async fn review_heatmap(
+    State(db): State<AppState>,
+    Query(query): Query<HeatmapQuery>,
+) -> Result<Json<Vec<crate::models::DailyReviewCount>>, (StatusCode, String)> {
+    let days = query.days.unwrap_or(365).clamp(7, 730);
+    let today = Local::now().format("%Y-%m-%d").to_string();
+    let mut db = db
+        .lock()
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    db.knowledge()
+        .review_heatmap(days, &today)
         .map(Json)
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))
 }

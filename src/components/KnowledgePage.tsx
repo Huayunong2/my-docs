@@ -97,6 +97,8 @@ export default function KnowledgePage({ onEditDate, onNavigate, initialCardId, i
   const [notice, setNotice] = useState("");
   const [sourceArticle, setSourceArticle] = useState<Article | null>(null);
   const [sourceLoading, setSourceLoading] = useState(false);
+  const [relatedText, setRelatedText] = useState("");
+  const [reviewHistory, setReviewHistory] = useState<api.ReviewHistoryEntry[]>([]);
   const autoSaveTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
   const lastSavedSignature = useRef("");
   const touchedCardIds = useRef<Set<string>>(new Set());
@@ -196,6 +198,10 @@ export default function KnowledgePage({ onEditDate, onNavigate, initialCardId, i
   const openCard = (card: KnowledgeCard) => {
     setSelectedId(card.id);
     setDraft(toDraft(card));
+    setRelatedText((card.related_ids || [])
+      .map((id) => allCards.find((item) => item.id === id)?.title || "")
+      .filter(Boolean)
+      .join(", "));
     setDirty(false);
     setNotice("");
     setSaveState("idle");
@@ -226,12 +232,41 @@ export default function KnowledgePage({ onEditDate, onNavigate, initialCardId, i
     openCard(target);
   }, [initialCardId, initialNonce, allCards]);
 
+  // 单卡复习历史（间隔趋势折线）
+  useEffect(() => {
+    setReviewHistory([]);
+    if (!selectedId) return;
+    let cancelled = false;
+    api.getReviewHistory(selectedId)
+      .then((history) => { if (!cancelled) setReviewHistory(history); })
+      .catch(() => { if (!cancelled) setReviewHistory([]); });
+    return () => { cancelled = true; };
+  }, [selectedId]);
+
+  const relatedChips = useMemo(
+    () => (selectedCard?.related_ids || [])
+      .map((id) => allCards.find((card) => card.id === id))
+      .filter((card): card is KnowledgeCard => !!card),
+    [allCards, selectedCard]
+  );
+
   const startNew = () => {
     setSelectedId(null);
     setDraft({ ...emptyDraft, status: activeStatus });
     setDirty(false);
     setNotice("");
     setSaveState("idle");
+  };
+
+  // 关联卡标题 → id 解析
+  const resolveRelatedIds = (text: string): string[] => {
+    const titles = text.split(",").map((title) => title.trim()).filter(Boolean);
+    const ids: string[] = [];
+    for (const title of titles) {
+      const matched = allCards.find((card) => card.id !== selectedId && card.title === title);
+      if (matched && !ids.includes(matched.id)) ids.push(matched.id);
+    }
+    return ids;
   };
 
   const saveNewCard = async () => {
@@ -242,7 +277,9 @@ export default function KnowledgePage({ onEditDate, onNavigate, initialCardId, i
     }
     setSaving(true);
     try {
-      const saved = selectedId ? await api.updateKnowledgeCard(selectedId, payload) : await api.createKnowledgeCard(payload);
+      const saved = selectedId
+        ? await api.updateKnowledgeCard(selectedId, { ...payload, related_ids: resolveRelatedIds(relatedText) })
+        : await api.createKnowledgeCard({ ...payload, related_ids: resolveRelatedIds(relatedText) });
       await loadCards(true);
       setSelectedId(saved.id);
       setDraft(toDraft(saved));
@@ -555,7 +592,39 @@ export default function KnowledgePage({ onEditDate, onNavigate, initialCardId, i
               className="ui-textarea min-h-[150px] font-mono text-sm leading-7"
             />
             <input value={draft.tagsText} onChange={(e) => updateDraft({ tagsText: e.target.value })} placeholder="标签，用逗号分隔" className="ui-field h-10" />
+            {selectedId && (
+              <input value={relatedText} onChange={(e) => { setRelatedText(e.target.value); setDirty(true); setSaveState("idle"); }} placeholder="关联卡片（逗号分隔的标题）" className="ui-field h-10" />
+            )}
           </div>
+
+          {selectedCard && (relatedChips.length > 0 || reviewHistory.length > 1) && (
+            <div className="mt-4 grid gap-3">
+              {relatedChips.length > 0 && (
+                <div className="flex flex-wrap items-center gap-1.5">
+                  <span className="text-[11px] font-semibold uppercase tracking-wide text-gray-400 dark:text-gray-500">关联</span>
+                  {relatedChips.map((chip) => (
+                    <button
+                      key={chip.id}
+                      type="button"
+                      onClick={() => openCard(chip)}
+                      className="max-w-[180px] truncate rounded-md bg-accent-light px-2 py-0.5 text-[11px] font-medium text-accent transition-colors hover:bg-accent-light/70 dark:bg-accent-light/20"
+                    >
+                      {chip.title}
+                    </button>
+                  ))}
+                </div>
+              )}
+              {reviewHistory.length > 1 && (
+                <div>
+                  <div className="mb-1 flex items-center justify-between">
+                    <span className="text-[11px] font-semibold uppercase tracking-wide text-gray-400 dark:text-gray-500">复习间隔趋势</span>
+                    <span className="text-[11px] text-gray-400 dark:text-gray-500">最近 {reviewHistory[reviewHistory.length - 1].interval_days.toFixed(0)} 天</span>
+                  </div>
+                  <IntervalChart history={reviewHistory} />
+                </div>
+              )}
+            </div>
+          )}
 
           {(duplicateHint || notice) && (
             <div className="mt-3 rounded-lg border border-amber-200/70 bg-amber-50 px-3 py-2 text-xs text-amber-700 dark:border-amber-500/20 dark:bg-amber-500/10 dark:text-amber-200">
@@ -716,5 +785,35 @@ function Picker<T extends string>({
         ))}
       </div>
     </div>
+  );
+}
+
+function IntervalChart({ history }: { history: api.ReviewHistoryEntry[] }) {
+  if (history.length < 2) return null;
+  const max = Math.max(1, ...history.map((entry) => entry.interval_days));
+  const points = history
+    .map((entry, index) => {
+      const x = (index / (history.length - 1)) * 100;
+      const y = 26 - (entry.interval_days / max) * 24;
+      return `${x.toFixed(1)},${y.toFixed(1)}`;
+    })
+    .join(" ");
+  const last = history[history.length - 1];
+  const lastX = 100;
+  const lastY = 26 - (last.interval_days / max) * 24;
+  return (
+    <svg viewBox="0 0 100 30" preserveAspectRatio="none" className="h-9 w-full">
+      <polyline
+        points={points}
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.2"
+        strokeLinejoin="round"
+        strokeLinecap="round"
+        className="text-accent/70"
+      />
+      <circle cx={lastX} cy={lastY} r="1.6" className="fill-accent" />
+      <line x1="0" y1="30" x2="100" y2="30" stroke="currentColor" strokeWidth="0.4" className="text-gray-200 dark:text-white/10" />
+    </svg>
   );
 }

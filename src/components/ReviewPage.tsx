@@ -1,12 +1,15 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import {
   Brain,
   CheckCircle2,
   ExternalLink,
   Eye,
+  Link2,
   PartyPopper,
+  PencilLine,
   Sparkles,
+  X,
 } from "lucide-react";
 import * as api from "../lib/api";
 import type { KnowledgeCard, ReviewGrade } from "../lib/api";
@@ -50,26 +53,41 @@ const gradeOptions: Array<{
 export default function ReviewPage({
   onEditDate,
   onNavigate,
+  onOpenKnowledgeCard,
 }: {
   onEditDate: (date: string) => void;
   onNavigate: (page: Page) => void;
+  onOpenKnowledgeCard: (cardId: string) => void;
 }) {
   const [cards, setCards] = useState<KnowledgeCard[]>([]);
+  const [allCards, setAllCards] = useState<KnowledgeCard[]>([]);
   const [stats, setStats] = useState<api.DueReviewStats | null>(null);
+  const [reviewStats, setReviewStats] = useState<api.ReviewStatsResponse | null>(null);
   const [index, setIndex] = useState(0);
   const [revealed, setRevealed] = useState(false);
   const [loading, setLoading] = useState(true);
   const [grading, setGrading] = useState(false);
   const [error, setError] = useState("");
   const [toast, setToast] = useState("");
+  const [editing, setEditing] = useState<KnowledgeCard | null>(null);
+  const [editTitle, setEditTitle] = useState("");
+  const [editContent, setEditContent] = useState("");
+  const [editTagsText, setEditTagsText] = useState("");
+  const [savingEdit, setSavingEdit] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
     setError("");
     try {
-      const res = await api.getDueReviewCards(20);
+      const [res, statsRes, all] = await Promise.all([
+        api.getDueReviewCards(20),
+        api.getReviewStats().catch(() => null),
+        api.listKnowledgeCards().catch(() => []),
+      ]);
       setCards(res.cards);
       setStats(res.stats);
+      setReviewStats(statsRes);
+      setAllCards(all);
       setIndex(0);
       setRevealed(false);
     } catch (e) {
@@ -152,6 +170,40 @@ export default function ReviewPage({
     if (date) onEditDate(date);
   };
 
+  const relatedCards = useMemo(
+    () => (current?.related_ids || []).map((id) => allCards.find((card) => card.id === id)).filter((card): card is KnowledgeCard => !!card),
+    [allCards, current]
+  );
+
+  const openEdit = () => {
+    if (!current) return;
+    setEditing(current);
+    setEditTitle(current.title);
+    setEditContent(current.content);
+    setEditTagsText(current.tags.join(", "));
+  };
+
+  const saveEdit = async () => {
+    if (!editing) return;
+    setSavingEdit(true);
+    setError("");
+    try {
+      const saved = await api.updateKnowledgeCard(editing.id, {
+        title: editTitle.trim(),
+        content: editContent.trim(),
+        tags: editTagsText.split(",").map((tag) => tag.trim()).filter(Boolean),
+      });
+      setCards((prev) => prev.map((card) => (card.id === saved.id ? saved : card)));
+      setAllCards((prev) => prev.map((card) => (card.id === saved.id ? saved : card)));
+      setEditing(null);
+      setToast("卡片已更新");
+    } catch (e) {
+      setError(api.getErrorMessage(e));
+    } finally {
+      setSavingEdit(false);
+    }
+  };
+
   const finished = !loading && !error && stats !== null && cards.length === 0;
 
   return (
@@ -175,6 +227,25 @@ export default function ReviewPage({
           </div>
         )}
       </header>
+
+      {reviewStats && reviewStats.upcoming.some((d) => d.count > 0) && (
+        <div className="mx-auto mb-4 flex max-w-2xl flex-wrap items-center gap-2 rounded-xl border border-gray-100 bg-white px-4 py-2.5 dark:border-white/10 dark:bg-white/[0.04]">
+          <span className="text-xs font-medium text-gray-400 dark:text-gray-500">未来 7 天</span>
+          <div className="flex flex-1 items-end gap-1">
+            {reviewStats.upcoming.map((day) => (
+              <div key={day.date} className="flex flex-1 flex-col items-center gap-1" title={`${day.date} · ${day.count} 张`}>
+                <span className={`font-mono text-[11px] leading-none ${day.count > 0 ? "text-accent" : "text-gray-300 dark:text-gray-600"}`}>
+                  {day.count || ""}
+                </span>
+                <div className={`h-1.5 w-full rounded-full ${day.count > 0 ? "bg-accent/50" : "bg-gray-100 dark:bg-white/[0.04]"}`} />
+              </div>
+            ))}
+          </div>
+          <span className="text-[11px] text-gray-300 dark:text-gray-600">
+            {reviewStats.upcoming[0].date.slice(5)}~{reviewStats.upcoming[6].date.slice(5)}
+          </span>
+        </div>
+      )}
 
       {error && <div className="mb-4"><InlineError message={error} onRetry={load} /></div>}
 
@@ -290,7 +361,35 @@ export default function ReviewPage({
                       </button>
                     )}
 
-                    <div className="mt-6 grid grid-cols-2 gap-2 sm:grid-cols-4">
+                    {relatedCards.length > 0 && (
+                      <div className="mt-3 flex flex-wrap items-center gap-1.5">
+                        <span className="inline-flex items-center gap-1 text-[11px] font-medium text-gray-400 dark:text-gray-500">
+                          <Link2 size={11} /> 关联
+                        </span>
+                        {relatedCards.map((related) => (
+                          <button
+                            key={related.id}
+                            type="button"
+                            onClick={() => onOpenKnowledgeCard(related.id)}
+                            className="rounded-md bg-accent-light px-2 py-0.5 text-[11px] font-medium text-accent transition-colors hover:bg-accent-light/70 dark:bg-accent-light/20"
+                          >
+                            {related.title}
+                          </button>
+                        ))}
+                      </div>
+                    )}
+
+                    <div className="mt-4 flex items-center justify-between gap-2">
+                      <button
+                        type="button"
+                        onClick={openEdit}
+                        className="inline-flex h-8 items-center gap-1 rounded-lg border border-gray-200 px-2.5 text-xs font-medium text-gray-500 transition-colors hover:border-accent/30 hover:text-accent dark:border-white/10 dark:text-gray-400"
+                      >
+                        <PencilLine size={12} /> 编辑卡片
+                      </button>
+                    </div>
+
+                    <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4">
                       {gradeOptions.map((option) => (
                         <button
                           key={option.grade}
@@ -321,6 +420,67 @@ export default function ReviewPage({
       </div>
 
       {toast && <Toast message={toast} tone="good" autoHideMs={5000} onClose={() => setToast("")} />}
+
+      <AnimatePresence>
+        {editing && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-50 flex items-end justify-center bg-black/30 p-3 sm:items-center"
+            onClick={() => setEditing(null)}
+          >
+            <motion.div
+              initial={{ y: 16, opacity: 0 }}
+              animate={{ y: 0, opacity: 1 }}
+              exit={{ y: 16, opacity: 0 }}
+              transition={{ duration: 0.15 }}
+              className="ui-panel w-full max-w-md p-4 sm:p-5"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="mb-3 flex items-center justify-between">
+                <h3 className="text-sm font-bold text-gray-800 dark:text-gray-100">编辑知识卡片</h3>
+                <button type="button" onClick={() => setEditing(null)} className="ui-icon-button h-8 w-8" title="关闭">
+                  <X size={15} />
+                </button>
+              </div>
+              <div className="grid gap-3">
+                <input
+                  value={editTitle}
+                  onChange={(e) => setEditTitle(e.target.value)}
+                  placeholder="卡片标题"
+                  className="ui-field h-10"
+                />
+                <textarea
+                  value={editContent}
+                  onChange={(e) => setEditContent(e.target.value)}
+                  placeholder="卡片内容"
+                  className="ui-textarea min-h-[140px] text-sm leading-6"
+                />
+                <input
+                  value={editTagsText}
+                  onChange={(e) => setEditTagsText(e.target.value)}
+                  placeholder="标签，用逗号分隔"
+                  className="ui-field h-10"
+                />
+              </div>
+              <div className="mt-4 flex justify-end gap-2">
+                <button type="button" onClick={() => setEditing(null)} className="ui-button-secondary">
+                  取消
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void saveEdit()}
+                  disabled={savingEdit || !editTitle.trim() || !editContent.trim()}
+                  className="ui-button-primary"
+                >
+                  {savingEdit ? "保存中..." : "保存"}
+                </button>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </motion.div>
   );
 }

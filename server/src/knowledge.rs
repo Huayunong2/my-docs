@@ -205,6 +205,7 @@ JSON 格式：
             source_review_id: source_review_id.clone(),
             source_date: source_date.clone(),
             source_excerpt,
+            related_ids: vec![],
         });
     }
     let mut db = db
@@ -342,6 +343,7 @@ pub(crate) async fn create_card(
             source_review_id: payload.source_review_id.unwrap_or_default(),
             source_date: payload.source_date.unwrap_or_default(),
             source_excerpt: payload.source_excerpt.unwrap_or_default(),
+            related_ids: payload.related_ids.unwrap_or_default(),
         })
         .map(Json)
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))
@@ -402,6 +404,7 @@ pub(crate) async fn update_card(
         .unwrap_or(existing.source_review_id);
     let source_date = payload.source_date.unwrap_or(existing.source_date);
     let source_excerpt = payload.source_excerpt.unwrap_or(existing.source_excerpt);
+    let related_ids = payload.related_ids.unwrap_or(existing.related_ids);
     db.knowledge()
         .update(
             &id,
@@ -415,6 +418,7 @@ pub(crate) async fn update_card(
                 source_review_id,
                 source_date,
                 source_excerpt,
+                related_ids,
             },
         )
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?

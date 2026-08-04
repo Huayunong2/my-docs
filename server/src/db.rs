@@ -1,6 +1,6 @@
 use crate::models::{
     ArchiveMonth, Article, ArticleSummary, DailyReviewCount, DayExemption, KnowledgeCard, Review,
-    ReviewStats, ReviewStatsResponse,
+    ReviewHistoryEntry, ReviewStats, ReviewStatsResponse,
 };
 use chrono::{Duration, Local, NaiveDate};
 use rusqlite::types::Type;
@@ -72,6 +72,7 @@ pub(crate) struct KnowledgeCardDraft {
     pub(crate) source_review_id: String,
     pub(crate) source_date: String,
     pub(crate) source_excerpt: String,
+    pub(crate) related_ids: Vec<String>,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -208,6 +209,12 @@ struct PortableKnowledgeCard {
     usage_count: i64,
     #[serde(default)]
     last_used_at: String,
+    #[serde(default, deserialize_with = "deserialize_string_vec")]
+    related_ids: Vec<String>,
+    #[serde(default)]
+    stability: f64,
+    #[serde(default)]
+    difficulty: f64,
 }
 
 pub struct Database {
@@ -559,6 +566,17 @@ impl Database {
                 .execute("INSERT INTO schema_version (version) VALUES (5)", [])?;
         }
 
+        if current < 6 {
+            // 卡片关联（双向链接）+ FSRS-5 记忆状态（stability/difficulty）
+            self.conn.execute_batch(
+                "ALTER TABLE knowledge_cards ADD COLUMN related_ids TEXT NOT NULL DEFAULT '[]';
+                 ALTER TABLE knowledge_cards ADD COLUMN stability REAL NOT NULL DEFAULT 0;
+                 ALTER TABLE knowledge_cards ADD COLUMN difficulty REAL NOT NULL DEFAULT 0;",
+            )?;
+            self.conn
+                .execute("INSERT INTO schema_version (version) VALUES (6)", [])?;
+        }
+
         Ok(())
     }
 }
@@ -875,12 +893,14 @@ impl PortableArchivePersistence<'_> {
                 "SELECT id, card_type, status, title, content, tags, source_article_id,
                         source_review_id, source_date, source_excerpt, created_at, updated_at,
                         review_state, review_interval_days, review_ease, review_count,
-                        last_reviewed_at, next_review_at, usage_count, last_used_at
+                        last_reviewed_at, next_review_at, usage_count, last_used_at,
+                        related_ids, stability, difficulty
                  FROM knowledge_cards ORDER BY updated_at ASC",
             )?;
             let rows = statement
                 .query_map([], |row| {
                     let tags: String = row.get(5)?;
+                    let related_ids: String = row.get(20)?;
                     Ok(serde_json::json!({
                         "id": row.get::<_, String>(0)?,
                         "card_type": row.get::<_, String>(1)?,
@@ -902,6 +922,9 @@ impl PortableArchivePersistence<'_> {
                         "next_review_at": row.get::<_, String>(17)?,
                         "usage_count": row.get::<_, i64>(18)?,
                         "last_used_at": row.get::<_, String>(19)?,
+                        "related_ids": parse_json_vec(&related_ids)?,
+                        "stability": row.get::<_, f64>(21)?,
+                        "difficulty": row.get::<_, f64>(22)?,
                     }))
                 })?
                 .collect::<Result<Vec<_>>>()?;
@@ -992,9 +1015,10 @@ impl PortableArchivePersistence<'_> {
                  (id, card_type, status, title, content, tags, source_article_id,
                   source_review_id, source_date, source_excerpt, created_at, updated_at,
                   review_state, review_interval_days, review_ease, review_count,
-                  last_reviewed_at, next_review_at, usage_count, last_used_at)
+                  last_reviewed_at, next_review_at, usage_count, last_used_at,
+                  related_ids, stability, difficulty)
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12,
-                         ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20)
+                         ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23)
                  ON CONFLICT(id) DO UPDATE SET
                    card_type=excluded.card_type, status=excluded.status,
                    title=excluded.title, content=excluded.content, tags=excluded.tags,
@@ -1002,6 +1026,7 @@ impl PortableArchivePersistence<'_> {
                    source_review_id=excluded.source_review_id,
                    source_date=excluded.source_date,
                    source_excerpt=excluded.source_excerpt,
+                   related_ids=excluded.related_ids,
                    created_at=excluded.created_at, updated_at=excluded.updated_at",
                 params![
                     card.id,
@@ -1023,7 +1048,11 @@ impl PortableArchivePersistence<'_> {
                     card.last_reviewed_at,
                     card.next_review_at,
                     card.usage_count,
-                    card.last_used_at
+                    card.last_used_at,
+                    serialize_string_vec(&card.related_ids)?,
+                    // stability/difficulty 属于本地记忆状态，导入已有卡时保留本地值
+                    card.stability,
+                    card.difficulty
                 ],
             )?;
         }
@@ -1147,7 +1176,9 @@ impl ReviewPersistence<'_> {
 }
 
 impl KnowledgePersistence<'_> {
-    const SELECT_COLUMNS: &'static str = "id, card_type, status, title, content, tags, source_article_id, source_review_id, source_date, source_excerpt, created_at, updated_at, review_state, review_interval_days, review_ease, review_count, last_reviewed_at, next_review_at, usage_count, last_used_at";
+    const SELECT_COLUMNS: &'static str = "id, card_type, status, title, content, tags, source_article_id, source_review_id, source_date, source_excerpt, created_at, updated_at, review_state, review_interval_days, review_ease, review_count, last_reviewed_at, next_review_at, usage_count, last_used_at, related_ids, stability, difficulty";
+    /// 每日新卡上限：未评过分的确认卡每天最多进入复习队列这么多张（Anki 借鉴）。
+    const NEW_DAILY_LIMIT: i64 = 20;
 
     pub(crate) fn list(&mut self) -> Result<Vec<KnowledgeCard>> {
         let mut statement = self.conn.prepare(&format!(
@@ -1174,15 +1205,29 @@ impl KnowledgePersistence<'_> {
     }
 
     pub(crate) fn due(&mut self, limit: i64, today: &str) -> Result<Vec<KnowledgeCard>> {
+        // 新卡（next_review_at 为空）受每日上限控制，避免一次确认大量卡片堆积复习队列；
+        // 到期卡不受限。新卡在前、按创建顺序；到期卡按到期日。
         let mut statement = self.conn.prepare(&format!(
-            "SELECT {} FROM knowledge_cards
-             WHERE status='confirmed' AND (next_review_at='' OR next_review_at <= ?1)
-             ORDER BY (next_review_at='') DESC, next_review_at ASC, updated_at DESC
-             LIMIT ?2",
+            "SELECT * FROM (
+               SELECT {} FROM knowledge_cards
+               WHERE status='confirmed' AND next_review_at=''
+               ORDER BY created_at ASC LIMIT ?1
+             )
+             UNION ALL
+             SELECT * FROM (
+               SELECT {} FROM knowledge_cards
+               WHERE status='confirmed' AND next_review_at!='' AND next_review_at <= ?2
+               ORDER BY next_review_at ASC LIMIT ?3
+             )
+             LIMIT ?4",
+            Self::SELECT_COLUMNS,
             Self::SELECT_COLUMNS
         ))?;
         let rows = statement
-            .query_map(params![today, limit], row_to_knowledge_card)?
+            .query_map(
+                params![Self::NEW_DAILY_LIMIT, today, limit, limit],
+                row_to_knowledge_card,
+            )?
             .collect::<Result<Vec<_>>>()?;
         Ok(rows)
     }
@@ -1330,6 +1375,35 @@ impl KnowledgePersistence<'_> {
             )
             .unwrap_or((0, 0));
 
+        // 今天可学新卡：新卡队列受每日上限控制
+        let new_queue: i64 = self
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM knowledge_cards
+                 WHERE status='confirmed' AND next_review_at=''",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap_or(0);
+        let new_cards = new_queue.min(Self::NEW_DAILY_LIMIT);
+
+        // 未来 7 天到期预览
+        let mut upcoming = Vec::with_capacity(7);
+        for offset in 1..=7 {
+            let date = today_date + Duration::days(offset);
+            let key = date.format("%Y-%m-%d").to_string();
+            let count: i64 = self
+                .conn
+                .query_row(
+                    "SELECT COUNT(*) FROM knowledge_cards
+                     WHERE status='confirmed' AND next_review_at=?1",
+                    params![&key],
+                    |row| row.get(0),
+                )
+                .unwrap_or(0);
+            upcoming.push(DailyReviewCount { date: key, count });
+        }
+
         Ok(ReviewStatsResponse {
             total_reviews,
             streak_days,
@@ -1338,8 +1412,66 @@ impl KnowledgePersistence<'_> {
             total_confirmed,
             learning,
             mature,
+            new_cards,
+            upcoming,
             daily,
         })
+    }
+
+    /// 单张卡的复习历史（间隔曲线数据源）。
+    pub(crate) fn review_history(&mut self, card_id: &str) -> Result<Vec<ReviewHistoryEntry>> {
+        let mut statement = self.conn.prepare(
+            "SELECT grade, interval_days, ease, next_review_at, reviewed_at
+             FROM review_log WHERE card_id=?1 ORDER BY reviewed_at ASC, id ASC",
+        )?;
+        let rows = statement
+            .query_map(params![card_id], |row| {
+                Ok(ReviewHistoryEntry {
+                    grade: row.get(0)?,
+                    interval_days: row.get(1)?,
+                    ease: row.get(2)?,
+                    next_review_at: row.get(3)?,
+                    reviewed_at: row.get(4)?,
+                })
+            })?
+            .collect::<Result<Vec<_>>>()?;
+        Ok(rows)
+    }
+
+    /// 近 days 天每日复习数（热力图数据源），缺日补零。
+    pub(crate) fn review_heatmap(
+        &mut self,
+        days: i64,
+        today: &str,
+    ) -> Result<Vec<DailyReviewCount>> {
+        let today_date = NaiveDate::parse_from_str(today, "%Y-%m-%d")
+            .unwrap_or_else(|_| NaiveDate::from_ymd_opt(1970, 1, 1).expect("epoch date"));
+        let start_date = today_date - Duration::days(days - 1);
+        let start_key = start_date.format("%Y-%m-%d").to_string();
+        let mut counts: BTreeMap<String, i64> = {
+            let mut statement = self.conn.prepare(
+                "SELECT reviewed_at, COUNT(*) FROM review_log
+                 WHERE reviewed_at >= ?1 GROUP BY reviewed_at",
+            )?;
+            let rows = statement
+                .query_map(params![start_key], |row| {
+                    Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+                })?
+                .collect::<Result<BTreeMap<_, _>>>()?;
+            rows
+        };
+        let mut result = Vec::with_capacity(days as usize);
+        let mut cursor = start_date;
+        let end = today_date;
+        while cursor <= end {
+            let key = cursor.format("%Y-%m-%d").to_string();
+            result.push(DailyReviewCount {
+                date: key.clone(),
+                count: counts.remove(&key).unwrap_or(0),
+            });
+            cursor += Duration::days(1);
+        }
+        Ok(result)
     }
 
     pub(crate) fn touch(&mut self, id: &str, today: &str) -> Result<Option<KnowledgeCard>> {
@@ -1397,8 +1529,9 @@ impl KnowledgePersistence<'_> {
         if self.conn.execute(
             "UPDATE knowledge_cards SET card_type=?1, status=?2, title=?3, content=?4, tags=?5,
              source_article_id=?6, source_review_id=?7, source_date=?8, source_excerpt=?9,
+             related_ids=?10,
              next_review_at = CASE WHEN ?2 <> 'confirmed' THEN '' ELSE next_review_at END,
-             updated_at=?10 WHERE id=?11",
+             updated_at=?11 WHERE id=?12",
             params![
                 draft.card_type,
                 draft.status,
@@ -1409,6 +1542,7 @@ impl KnowledgePersistence<'_> {
                 draft.source_review_id,
                 draft.source_date,
                 draft.source_excerpt,
+                serialize_string_vec(&draft.related_ids)?,
                 now,
                 id
             ],
@@ -1660,6 +1794,9 @@ fn row_to_knowledge_card(row: &rusqlite::Row<'_>) -> Result<KnowledgeCard> {
         next_review_at: row.get(17)?,
         usage_count: row.get(18)?,
         last_used_at: row.get(19)?,
+        related_ids: parse_json_vec(&row.get::<_, String>(20)?)?,
+        stability: row.get(21)?,
+        difficulty: row.get(22)?,
     })
 }
 
@@ -1761,7 +1898,7 @@ mod migration_tests {
                 row.get(0)
             })
             .expect("read schema version");
-        assert_eq!(version, 5);
+        assert_eq!(version, 6);
 
         // 已迁移的库再次 initialize 必须幂等，不报重复列错误
         db.initialize().expect("re-initialize is idempotent");
@@ -1782,6 +1919,7 @@ mod migration_tests {
                 source_review_id: String::new(),
                 source_date: "2026-07-16".into(),
                 source_excerpt: "evidence".into(),
+                related_ids: vec![],
             })
             .expect("save card on fresh schema");
         assert_eq!(card.review_ease, 2.5);
@@ -1793,7 +1931,7 @@ mod migration_tests {
                 row.get(0)
             })
             .expect("read schema version");
-        assert_eq!(version, 5);
+        assert_eq!(version, 6);
     }
 }
 
@@ -1895,7 +2033,7 @@ mod migration_v5_tests {
                 row.get(0)
             })
             .expect("read schema version");
-        assert_eq!(version, 5);
+        assert_eq!(version, 6);
         db.initialize()
             .expect("re-initialize after v5 is idempotent");
     }
