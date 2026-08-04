@@ -776,17 +776,30 @@ export default function TodayPage({
               </AnimatePresence>
             </div>
 
-            {/* AI Summary */}
-            <motion.button
-              whileTap={{ scale: 0.95 }}
-              onClick={handleAISummary}
-              disabled={aiLoading}
-              className="ui-button-secondary w-full text-accent dark:text-accent md:w-auto"
-              title="AI 总结当前内容"
-            >
-              {aiLoading ? <LoaderCircle size={14} className="animate-spin" /> : <Sparkles size={14} />}
-              {aiLoading ? "总结中" : "AI 总结"}
-            </motion.button>
+            {/* AI 总结 + 提取卡片（移动端均分一行，桌面端并排） */}
+            <div className="flex w-full gap-2 md:w-auto">
+              <motion.button
+                whileTap={{ scale: 0.95 }}
+                onClick={handleAISummary}
+                disabled={aiLoading}
+                className="ui-button-secondary flex-1 text-accent dark:text-accent md:flex-none md:w-auto"
+                title="AI 总结当前内容"
+              >
+                {aiLoading ? <LoaderCircle size={14} className="animate-spin" /> : <Sparkles size={14} />}
+                {aiLoading ? "总结中" : "AI 总结"}
+              </motion.button>
+
+              <motion.button
+                whileTap={{ scale: 0.95 }}
+                onClick={handleExtractKnowledgeCards}
+                disabled={extractingCards}
+                className="ui-button-secondary flex-1 md:flex-none md:w-auto"
+                title="从当前正文抽取知识卡片草稿"
+              >
+                {extractingCards ? <LoaderCircle size={14} className="animate-spin" /> : <BookMarked size={14} />}
+                {extractingCards ? "提取中" : "提取卡片"}
+              </motion.button>
+            </div>
 
             <button
               type="button"
@@ -893,7 +906,7 @@ export default function TodayPage({
 
         {/* AI result panel */}
         <AnimatePresence>
-          {(aiResult || aiError) && (
+          {(aiResult || aiError || cardExtractNotice) && (
             <>
               <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
                 className="fixed inset-0 bg-black/20 z-30 md:hidden" onClick={() => { setAiResult(""); setAiError(""); setCardExtractNotice(""); setCardExtractCount(0); }} />
