@@ -185,7 +185,7 @@ export default function ReviewPage({
     setEditTitle(current.title);
     setEditContent(current.content);
     setEditTagsText(current.tags.join(", "));
-    setEditRelatedText((current.related_ids || [])
+    setEditRelatedText(((current.declared_related_ids?.length ? current.declared_related_ids : current.related_ids) || [])
       .map((id) => allCards.find((card) => card.id === id)?.title || "")
       .filter(Boolean)
       .join(", "));
