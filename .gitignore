@@ -62,5 +62,8 @@ Thumbs.db
 *.swp
 *.swo
 
+# Agent session metadata
+.reasonix/
+
 # Local helper scripts generated ad hoc
 gen_icons.py

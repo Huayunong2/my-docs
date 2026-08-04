@@ -1,0 +1,334 @@
+import { useCallback, useEffect, useState } from "react";
+import { AnimatePresence, motion } from "framer-motion";
+import {
+  Brain,
+  CheckCircle2,
+  ExternalLink,
+  Eye,
+  PartyPopper,
+  Sparkles,
+} from "lucide-react";
+import * as api from "../lib/api";
+import type { KnowledgeCard, KnowledgeCardType, ReviewGrade } from "../lib/api";
+import type { Page } from "../App";
+import MarkdownContent from "./MarkdownContent";
+import { EmptyState, InlineError, LoadingState, Toast } from "./ui/Feedback";
+
+const typeLabels: Record<KnowledgeCardType, string> = {
+  fact: "事实",
+  method: "方法",
+  concept: "概念",
+  decision: "决策",
+  case: "案例",
+  quote: "表述",
+  principle: "原则",
+};
+
+const gradeOptions: Array<{
+  grade: ReviewGrade;
+  label: string;
+  hint: string;
+  className: string;
+}> = [
+  {
+    grade: "again",
+    label: "忘记",
+    hint: "1 · 当天重来",
+    className: "border-red-200 bg-red-50 text-red-600 hover:bg-red-100 active:bg-red-200/70 dark:border-red-500/25 dark:bg-red-500/10 dark:text-red-300 dark:hover:bg-red-500/20",
+  },
+  {
+    grade: "hard",
+    label: "困难",
+    hint: "2 · 短间隔",
+    className: "border-amber-200 bg-amber-50 text-amber-600 hover:bg-amber-100 active:bg-amber-200/70 dark:border-amber-500/25 dark:bg-amber-500/10 dark:text-amber-300 dark:hover:bg-amber-500/20",
+  },
+  {
+    grade: "good",
+    label: "记得",
+    hint: "3 · 正常间隔",
+    className: "border-emerald-200 bg-emerald-50 text-emerald-600 hover:bg-emerald-100 active:bg-emerald-200/70 dark:border-emerald-500/25 dark:bg-emerald-500/10 dark:text-emerald-300 dark:hover:bg-emerald-500/20",
+  },
+  {
+    grade: "easy",
+    label: "轻松",
+    hint: "4 · 长间隔",
+    className: "border-sky-200 bg-sky-50 text-sky-600 hover:bg-sky-100 active:bg-sky-200/70 dark:border-sky-500/25 dark:bg-sky-500/10 dark:text-sky-300 dark:hover:bg-sky-500/20",
+  },
+];
+
+export default function ReviewPage({
+  onEditDate,
+  onNavigate,
+}: {
+  onEditDate: (date: string) => void;
+  onNavigate: (page: Page) => void;
+}) {
+  const [cards, setCards] = useState<KnowledgeCard[]>([]);
+  const [stats, setStats] = useState<api.DueReviewStats | null>(null);
+  const [index, setIndex] = useState(0);
+  const [revealed, setRevealed] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [grading, setGrading] = useState(false);
+  const [error, setError] = useState("");
+  const [toast, setToast] = useState("");
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    setError("");
+    try {
+      const res = await api.getDueReviewCards(20);
+      setCards(res.cards);
+      setStats(res.stats);
+      setIndex(0);
+      setRevealed(false);
+    } catch (e) {
+      setError(api.getErrorMessage(e));
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    load();
+  }, [load]);
+
+  const current = cards[index] || null;
+
+  const grade = useCallback(
+    async (value: ReviewGrade) => {
+      if (!current || grading) return;
+      setGrading(true);
+      setError("");
+      try {
+        const updated = await api.gradeReviewCard(current.id, value);
+        const remaining = cards.filter((card) => card.id !== current.id);
+        if (value === "again") {
+          // 当天重来：放回队列尾部，稍后再遇到；今日 due 数不减
+          setCards([...remaining, updated]);
+          setToast("已安排今天稍后再次复习");
+        } else {
+          setCards(remaining);
+          if (remaining.length === 0) {
+            // 队列已空：重新拉取以刷新统计与完成态
+            void load();
+          }
+          setToast("已记录，继续下一张");
+        }
+        setRevealed(false);
+        setStats((s) => (s
+          ? {
+              ...s,
+              due: value === "again" ? s.due : Math.max(0, s.due - 1),
+              reviewed_today: s.reviewed_today + 1,
+            }
+          : s));
+      } catch (e) {
+        setError(api.getErrorMessage(e));
+      } finally {
+        setGrading(false);
+      }
+    },
+    [cards, current, grading, load]
+  );
+
+  // 空格显示答案，1-4 评分
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if (e.ctrlKey || e.metaKey || e.altKey) return;
+      if (!current || loading) return;
+      if (!revealed) {
+        if (e.key === " " || e.key === "Enter") {
+          e.preventDefault();
+          setRevealed(true);
+        }
+        return;
+      }
+      const map: Record<string, ReviewGrade> = { "1": "again", "2": "hard", "3": "good", "4": "easy" };
+      const gradeKey = map[e.key];
+      if (gradeKey) void grade(gradeKey);
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [current, grade, loading, revealed]);
+
+  const openSource = () => {
+    if (!current) return;
+    if (current.source_review_id) {
+      onNavigate("reviews");
+      return;
+    }
+    const date = current.source_date;
+    if (date) onEditDate(date);
+  };
+
+  const finished = !loading && !error && stats !== null && cards.length === 0;
+
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: 10 }}
+      animate={{ opacity: 1, y: 0 }}
+      className="min-h-full px-3 pb-24 pt-4 sm:px-4 md:px-8 md:py-6"
+    >
+      <header className="mb-4 flex flex-col gap-3 md:mb-5 md:flex-row md:items-end md:justify-between">
+        <div>
+          <h2 className="flex items-center gap-2 text-xl font-bold text-gray-800 dark:text-gray-100">
+            <Brain size={20} /> 间隔复习
+          </h2>
+          <p className="mt-1 text-sm text-gray-400 dark:text-gray-400">按遗忘曲线回顾已沉淀的知识卡片</p>
+        </div>
+        {stats && (
+          <div className="flex gap-2">
+            <StatChip label="今日到期" value={stats.due} highlight={stats.due > 0} />
+            <StatChip label="已复习" value={stats.reviewed_today} />
+            <StatChip label="已沉淀" value={stats.total_confirmed} />
+          </div>
+        )}
+      </header>
+
+      {error && <div className="mb-4"><InlineError message={error} onRetry={load} /></div>}
+
+      <div className="mx-auto max-w-2xl">
+        {loading ? (
+          <LoadingState label="加载到期卡片..." rows={2} />
+        ) : finished ? (
+          <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }}>
+            <EmptyState
+              icon={PartyPopper}
+              title={stats?.total_confirmed === 0 ? "还没有可复习的卡片" : "今天的复习已完成"}
+              description={
+                stats?.total_confirmed === 0
+                  ? "把草稿卡片确认入库后，就会出现在这里。"
+                  : `今天已复习 ${stats?.reviewed_today ?? 0} 张，明天再来巩固。`
+              }
+              action={
+                stats?.total_confirmed === 0 ? (
+                  <button type="button" onClick={() => onNavigate("knowledge")} className="ui-button-primary">
+                    去知识页确认卡片
+                  </button>
+                ) : undefined
+              }
+            />
+          </motion.div>
+        ) : current ? (
+          <AnimatePresence mode="wait">
+            <motion.div
+              key={current.id}
+              initial={{ opacity: 0, x: 24 }}
+              animate={{ opacity: 1, x: 0 }}
+              exit={{ opacity: 0, x: -24 }}
+              transition={{ duration: 0.18 }}
+            >
+              <div className="ui-panel p-5 sm:p-6">
+                <div className="mb-3 flex flex-wrap items-center gap-2">
+                  <span className="rounded-md bg-accent-light px-2 py-0.5 text-[11px] font-semibold text-accent dark:bg-accent-light/20">
+                    {typeLabels[current.card_type]}
+                  </span>
+                  {current.source_date && (
+                    <span className="font-mono text-xs text-gray-400 dark:text-gray-500">
+                      {current.source_date}
+                    </span>
+                  )}
+                  {current.review_count ? (
+                    <span className="text-xs text-gray-400 dark:text-gray-500">
+                      复习过 {current.review_count} 次
+                    </span>
+                  ) : null}
+                </div>
+
+                <h3 className="text-lg font-bold leading-snug text-gray-800 dark:text-gray-100">
+                  {current.title}
+                </h3>
+
+                {current.tags.length > 0 && (
+                  <div className="mt-2 flex flex-wrap gap-1.5">
+                    {current.tags.map((tag) => (
+                      <span key={tag} className="rounded-full bg-gray-100 px-2 py-0.5 text-[11px] text-gray-500 dark:bg-white/[0.06] dark:text-gray-400">
+                        #{tag}
+                      </span>
+                    ))}
+                  </div>
+                )}
+
+                {!revealed ? (
+                  <div className="mt-6 flex flex-col items-center gap-2 pb-2">
+                    <button
+                      type="button"
+                      onClick={() => setRevealed(true)}
+                      className="ui-button-primary h-12 w-full max-w-xs text-base"
+                    >
+                      <Eye size={16} /> 显示答案
+                    </button>
+                    <span className="text-xs text-gray-400 dark:text-gray-500">按空格键快速显示</span>
+                  </div>
+                ) : (
+                  <motion.div initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} className="mt-5">
+                    <div className="rounded-xl border border-gray-100 bg-gray-50 p-4 dark:border-white/10 dark:bg-white/[0.035]">
+                      <MarkdownContent content={current.content} />
+                    </div>
+
+                    {current.source_excerpt && (
+                      <div className="mt-3 rounded-xl border border-amber-200/40 bg-amber-50/70 p-3 dark:border-amber-500/15 dark:bg-amber-500/[0.06]">
+                        <div className="mb-1 flex items-center gap-1 text-[11px] font-semibold text-amber-700 dark:text-amber-300">
+                          <Sparkles size={11} /> 原文片段
+                        </div>
+                        <p className="text-xs leading-5 text-amber-900/80 dark:text-amber-200/70">
+                          {current.source_excerpt}
+                        </p>
+                      </div>
+                    )}
+
+                    {current.source_date && (
+                      <button
+                        type="button"
+                        onClick={openSource}
+                        className="mt-3 inline-flex items-center gap-1 text-xs font-semibold text-accent hover:underline"
+                      >
+                        <ExternalLink size={12} /> 查看来源
+                      </button>
+                    )}
+
+                    <div className="mt-6 grid grid-cols-2 gap-2 sm:grid-cols-4">
+                      {gradeOptions.map((option) => (
+                        <button
+                          key={option.grade}
+                          type="button"
+                          onClick={() => void grade(option.grade)}
+                          disabled={grading}
+                          className={[
+                            "flex h-16 flex-col items-center justify-center gap-1 rounded-xl border font-semibold transition-all active:scale-95 disabled:opacity-50",
+                            option.className,
+                          ].join(" ")}
+                        >
+                          <span className="text-base leading-none">{option.label}</span>
+                          <span className="text-[10px] font-normal opacity-70">{option.hint}</span>
+                        </button>
+                      ))}
+                    </div>
+                  </motion.div>
+                )}
+              </div>
+
+              <p className="mt-3 flex items-center justify-center gap-1.5 text-xs text-gray-400 dark:text-gray-500">
+                <CheckCircle2 size={12} className="text-emerald-500" />
+                剩余 {cards.length} 张 · 空格翻面，1-4 评分
+              </p>
+            </motion.div>
+          </AnimatePresence>
+        ) : null}
+      </div>
+
+      {toast && <Toast message={toast} tone="good" onClose={() => setToast("")} />}
+    </motion.div>
+  );
+}
+
+function StatChip({ label, value, highlight }: { label: string; value: number; highlight?: boolean }) {
+  return (
+    <div className="ui-panel flex items-center gap-2 px-3 py-1.5">
+      <span className="text-xs text-gray-400 dark:text-gray-500">{label}</span>
+      <span className={`font-mono text-sm font-bold ${highlight ? "text-accent" : "text-gray-700 dark:text-gray-200"}`}>
+        {value}
+      </span>
+    </div>
+  );
+}

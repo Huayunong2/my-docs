@@ -1,10 +1,28 @@
 import { useEffect, useState, useCallback, useRef } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { AlertTriangle, Search, SearchX } from "lucide-react";
+import { AlertTriangle, BookMarked, FileText, Search, SearchX } from "lucide-react";
 import * as api from "../lib/api";
-import type { Article, ArticleSummary } from "../lib/api";
+import type { Article, ArticleSummary, KnowledgeCard, KnowledgeCardType } from "../lib/api";
 import ArticleDetail from "./ArticleDetail";
 import { useConfirmDialog } from "./ui/Feedback";
+
+const cardTypeLabels: Record<KnowledgeCardType, string> = {
+  fact: "事实",
+  method: "方法",
+  concept: "概念",
+  decision: "决策",
+  case: "案例",
+  quote: "表述",
+  principle: "原则",
+};
+
+const statusLabels: Record<string, string> = {
+  draft: "待确认",
+  confirmed: "已沉淀",
+  outdated: "已过时",
+};
+
+type SearchTab = "articles" | "cards";
 
 function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -46,15 +64,19 @@ function HighlightText({ text, query }: { text: string; query: string }) {
 
 export default function SearchPage({
   onEditDate,
+  onOpenKnowledgeCard,
   initialQuery,
   initialNonce,
 }: {
   onEditDate: (date: string) => void;
+  onOpenKnowledgeCard: (cardId: string) => void;
   initialQuery?: string;
   initialNonce?: number;
 }) {
+  const [tab, setTab] = useState<SearchTab>("articles");
   const [query, setQuery] = useState(initialQuery || "");
   const [results, setResults] = useState<ArticleSummary[]>([]);
+  const [cardResults, setCardResults] = useState<KnowledgeCard[]>([]);
   const [detail, setDetail] = useState<Article | null>(null);
   const [activeTag, setActiveTag] = useState("");
   const [searched, setSearched] = useState(false);
@@ -66,28 +88,43 @@ export default function SearchPage({
   const doSearch = useCallback(async (q: string) => {
     if (!q.trim()) {
       setResults([]);
+      setCardResults([]);
       setSearched(false);
       return;
     }
     setLoading(true);
     setSearched(true);
     try {
-      const res = await api.searchArticles(q.trim());
-      setResults(res);
-      setActiveTag("");
+      if (tab === "cards") {
+        const res = await api.listKnowledgeCards({ q: q.trim() });
+        setCardResults(res);
+      } else {
+        const res = await api.searchArticles(q.trim());
+        setResults(res);
+        setActiveTag("");
+      }
     } catch (e: any) {
       setError(api.getErrorMessage(e));
       setResults([]);
+      setCardResults([]);
     }
     setLoading(false);
-  }, []);
+  }, [tab]);
 
+  const switchTab = (next: SearchTab) => {
+    setTab(next);
+    if (query.trim()) doSearch(query);
+  };
+
+  // 从搜索跳转携带的关键词只应用一次，切换 Tab 不应重置输入框
+  const initialQueryHandled = useRef(false);
   useEffect(() => {
-    if (initialQuery) {
+    if (initialQuery && !initialQueryHandled.current) {
+      initialQueryHandled.current = true;
       setQuery(initialQuery);
       doSearch(initialQuery);
     }
-  }, [doSearch, initialNonce]);
+  }, [doSearch, initialNonce, initialQuery]);
 
   const handleInput = (e: React.ChangeEvent<HTMLInputElement>) => {
     const v = e.target.value;
@@ -149,6 +186,24 @@ export default function SearchPage({
         全文搜索
       </h2>
 
+      {/* Tab switch */}
+      <div className="ui-segment mb-4 grid w-full max-w-xs grid-cols-2">
+        <button
+          type="button"
+          onClick={() => switchTab("articles")}
+          className={["ui-segment-item", tab === "articles" ? "ui-segment-item-active" : ""].join(" ")}
+        >
+          <FileText size={13} className="mr-1 inline" /> 文章
+        </button>
+        <button
+          type="button"
+          onClick={() => switchTab("cards")}
+          className={["ui-segment-item", tab === "cards" ? "ui-segment-item-active" : ""].join(" ")}
+        >
+          <BookMarked size={13} className="mr-1 inline" /> 知识卡片
+        </button>
+      </div>
+
       {/* Search input */}
       <motion.div
         className="relative"
@@ -201,7 +256,7 @@ export default function SearchPage({
             </div>
           )}
 
-          {searched && !error && results.length === 0 && !loading && (
+          {searched && !error && ((tab === "articles" ? results.length : cardResults.length) === 0) && !loading && (
             <motion.div
               key="no-results"
               initial={{ opacity: 0, y: 8 }}
@@ -209,12 +264,12 @@ export default function SearchPage({
               className="text-center py-16 text-gray-400 dark:text-gray-400"
             >
               <SearchX size={30} className="mx-auto mb-2 text-gray-300 dark:text-gray-600" />
-              <p className="text-sm">没有找到匹配的记录</p>
+              <p className="text-sm">没有找到匹配的{tab === "articles" ? "记录" : "知识卡片"}</p>
               <p className="text-xs mt-1">试试其他关键词</p>
             </motion.div>
           )}
 
-          {results.length > 0 && (
+          {tab === "articles" && results.length > 0 && (
             <motion.div
               key="results"
               initial={{ opacity: 0 }}
@@ -278,6 +333,56 @@ export default function SearchPage({
                   {a.tags.length > 0 && (
                     <div className="mt-2 flex flex-wrap gap-1">
                       {a.tags.map((tag) => (
+                        <span key={tag} className="rounded-full bg-gray-100 px-2 py-0.5 text-[11px] text-gray-500 dark:bg-gray-800 dark:text-gray-300">
+                          #{tag}
+                        </span>
+                      ))}
+                    </div>
+                  )}
+                </motion.div>
+              ))}
+            </motion.div>
+          )}
+
+          {tab === "cards" && cardResults.length > 0 && (
+            <motion.div
+              key="card-results"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              className="space-y-2"
+            >
+              <p className="text-sm text-gray-400 dark:text-gray-400 mb-3">
+                找到 {cardResults.length} 张知识卡片
+              </p>
+              {cardResults.map((card, i) => (
+                <motion.div
+                  key={card.id}
+                  initial={{ opacity: 0, y: 8 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  transition={{ delay: i * 0.04 }}
+                  onClick={() => onOpenKnowledgeCard(card.id)}
+                  className="p-4 rounded-xl cursor-pointer border border-gray-100/80 dark:border-white/5 bg-white dark:bg-white/[0.04] hover:border-gray-200 dark:hover:border-white/10 hover:shadow-card-hover transition-all duration-200"
+                >
+                  <div className="flex flex-wrap items-center gap-2 mb-1">
+                    <span className="rounded-md bg-accent-light px-1.5 py-0.5 text-[11px] font-semibold text-accent dark:bg-accent-light/20">
+                      {cardTypeLabels[card.card_type]}
+                    </span>
+                    <span className="text-xs text-gray-400 dark:text-gray-400 font-mono">
+                      {card.source_date || "无来源日期"}
+                    </span>
+                    <span className="text-xs text-gray-400 dark:text-gray-400">
+                      {statusLabels[card.status] || card.status}
+                    </span>
+                  </div>
+                  <h4 className="font-medium text-gray-800 dark:text-gray-200">
+                    <HighlightText text={card.title || "(无标题)"} query={query} />
+                  </h4>
+                  <p className="text-sm text-gray-400 dark:text-gray-400 mt-1 line-clamp-2">
+                    <HighlightText text={card.content} query={query} />
+                  </p>
+                  {card.tags.length > 0 && (
+                    <div className="mt-2 flex flex-wrap gap-1">
+                      {card.tags.map((tag) => (
                         <span key={tag} className="rounded-full bg-gray-100 px-2 py-0.5 text-[11px] text-gray-500 dark:bg-gray-800 dark:text-gray-300">
                           #{tag}
                         </span>

@@ -240,17 +240,26 @@ export interface KnowledgeCard {
   source_excerpt: string;
   created_at: string;
   updated_at: string;
+  review_state?: string;
+  review_interval_days?: number;
+  review_ease?: number;
+  review_count?: number;
+  last_reviewed_at?: string;
+  next_review_at?: string;
+  usage_count?: number;
+  last_used_at?: string;
 }
 
 function mapKnowledgeCard(card: KnowledgeCard): KnowledgeCard {
   return { ...card, tags: readTagList(card.tags) };
 }
 
-export function listKnowledgeCards(filters: { card_type?: string; status?: string; q?: string } = {}) {
+export function listKnowledgeCards(filters: { card_type?: string; status?: string; q?: string; usage?: "never_used" } = {}) {
   const params = new URLSearchParams();
   if (filters.card_type) params.set("card_type", filters.card_type);
   if (filters.status) params.set("status", filters.status);
   if (filters.q) params.set("q", filters.q);
+  if (filters.usage) params.set("usage", filters.usage);
   const query = params.toString();
   return httpRequest<KnowledgeCard[]>(`/knowledge-cards${query ? `?${query}` : ""}`).then((items) => items.map(mapKnowledgeCard));
 }
@@ -295,6 +304,42 @@ export function updateKnowledgeCard(id: string, payload: Partial<{
 
 export function deleteKnowledgeCard(id: string) {
   return httpRequest<void>(`/knowledge-cards/${encodeURIComponent(id)}`, { method: "DELETE" });
+}
+
+// ── Review scheduling ──────────────────────────────
+
+export type ReviewGrade = "again" | "hard" | "good" | "easy";
+
+export interface DueReviewStats {
+  due: number;
+  reviewed_today: number;
+  total_confirmed: number;
+}
+
+export interface DueReviewResponse {
+  cards: KnowledgeCard[];
+  stats: DueReviewStats;
+}
+
+export function getDueReviewCards(limit = 20) {
+  return httpRequest<DueReviewResponse>(`/review/due?limit=${limit}`).then((res) => ({
+    ...res,
+    cards: res.cards.map(mapKnowledgeCard),
+  }));
+}
+
+export function gradeReviewCard(id: string, grade: ReviewGrade) {
+  return httpRequest<KnowledgeCard>(`/review/${encodeURIComponent(id)}/grade`, {
+    method: "POST",
+    body: JSON.stringify({ grade }),
+  }).then(mapKnowledgeCard);
+}
+
+export function touchKnowledgeCard(id: string) {
+  return httpRequest<KnowledgeCard>(`/knowledge-cards/${encodeURIComponent(id)}/touch`, {
+    method: "POST",
+    body: "{}",
+  }).then(mapKnowledgeCard);
 }
 
 // ── Archive ─────────────────────────────────────────

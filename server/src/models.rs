@@ -130,6 +130,39 @@ pub(crate) struct KnowledgeCard {
     pub(crate) source_excerpt: String,
     pub(crate) created_at: String,
     pub(crate) updated_at: String,
+    #[serde(default)]
+    pub(crate) review_state: String,
+    #[serde(default)]
+    pub(crate) review_interval_days: f64,
+    #[serde(default = "default_review_ease")]
+    pub(crate) review_ease: f64,
+    #[serde(default)]
+    pub(crate) review_count: i64,
+    #[serde(default)]
+    pub(crate) last_reviewed_at: String,
+    #[serde(default)]
+    pub(crate) next_review_at: String,
+    #[serde(default)]
+    pub(crate) usage_count: i64,
+    #[serde(default)]
+    pub(crate) last_used_at: String,
+}
+
+fn default_review_ease() -> f64 {
+    2.5
+}
+
+#[derive(Debug, Serialize)]
+pub(crate) struct ReviewStats {
+    pub(crate) due: i64,
+    pub(crate) reviewed_today: i64,
+    pub(crate) total_confirmed: i64,
+}
+
+#[derive(Debug, Serialize)]
+pub(crate) struct DueReviewResponse {
+    pub(crate) cards: Vec<KnowledgeCard>,
+    pub(crate) stats: ReviewStats,
 }
 
 #[derive(Debug, Serialize)]
@@ -262,6 +295,17 @@ pub(crate) struct KnowledgeListQuery {
     pub(crate) card_type: Option<String>,
     pub(crate) status: Option<String>,
     pub(crate) q: Option<String>,
+    pub(crate) usage: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub(crate) struct DueQuery {
+    pub(crate) limit: Option<i64>,
+}
+
+#[derive(Debug, Deserialize)]
+pub(crate) struct GradeCardPayload {
+    pub(crate) grade: String,
 }
 
 #[derive(Debug, Deserialize)]
