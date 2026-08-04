@@ -919,7 +919,8 @@ export default function TodayPage({
               >
                 <div className="flex items-center justify-between border-b border-gray-100 px-5 py-3.5 dark:border-white/5">
                   <h3 className="flex items-center gap-2 text-sm font-bold text-gray-800 dark:text-gray-100">
-                    <Bot size={16} /> AI 总结
+                    {aiResult || aiError ? <Bot size={16} /> : <BookMarked size={16} />}
+                    {aiResult || aiError ? "AI 总结" : "提取知识卡片"}
                   </h3>
                   <div className="flex items-center gap-2">
                     <button
