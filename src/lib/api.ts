@@ -321,6 +321,26 @@ export interface DueReviewResponse {
   stats: DueReviewStats;
 }
 
+export interface DailyReviewCount {
+  date: string;
+  count: number;
+}
+
+export interface ReviewStatsResponse {
+  total_reviews: number;
+  streak_days: number;
+  reviewed_today: number;
+  due: number;
+  total_confirmed: number;
+  learning: number;
+  mature: number;
+  daily: DailyReviewCount[];
+}
+
+export function getReviewStats() {
+  return httpRequest<ReviewStatsResponse>("/review/stats");
+}
+
 export function getDueReviewCards(limit = 20) {
   return httpRequest<DueReviewResponse>(`/review/due?limit=${limit}`).then((res) => ({
     ...res,

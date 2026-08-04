@@ -1,7 +1,8 @@
 use crate::models::{
-    ArchiveMonth, Article, ArticleSummary, DayExemption, KnowledgeCard, Review, ReviewStats,
+    ArchiveMonth, Article, ArticleSummary, DailyReviewCount, DayExemption, KnowledgeCard, Review,
+    ReviewStats, ReviewStatsResponse,
 };
-use chrono::{Local, NaiveDate};
+use chrono::{Duration, Local, NaiveDate};
 use rusqlite::types::Type;
 use rusqlite::{params, Connection, OpenFlags, OptionalExtension, Result};
 use serde::Deserialize;
@@ -527,6 +528,35 @@ impl Database {
             }
             self.conn
                 .execute("INSERT INTO schema_version (version) VALUES (4)", [])?;
+        }
+
+        if current < 5 {
+            // 复习历史日志（统计/趋势/间隔曲线的数据源）+ review_state 状态机回填
+            self.conn.execute_batch(
+                "CREATE TABLE IF NOT EXISTS review_log (
+                    id             INTEGER PRIMARY KEY AUTOINCREMENT,
+                    card_id        TEXT NOT NULL,
+                    grade          TEXT NOT NULL,
+                    interval_days  REAL NOT NULL,
+                    ease           REAL NOT NULL,
+                    next_review_at TEXT NOT NULL,
+                    reviewed_at    TEXT NOT NULL
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_review_log_card
+                    ON review_log(card_id, reviewed_at);
+                CREATE INDEX IF NOT EXISTS idx_review_log_date
+                    ON review_log(reviewed_at);
+
+                -- 为已积累复习记录的卡回填状态机语义
+                UPDATE knowledge_cards SET review_state = CASE
+                    WHEN review_count > 0 AND review_interval_days >= 21 AND review_ease >= 2.5 THEN 'mature'
+                    WHEN review_count > 0 THEN 'learning'
+                    ELSE 'new'
+                END;",
+            )?;
+            self.conn
+                .execute("INSERT INTO schema_version (version) VALUES (5)", [])?;
         }
 
         Ok(())
@@ -1186,21 +1216,130 @@ impl KnowledgePersistence<'_> {
     pub(crate) fn apply_grade(
         &mut self,
         id: &str,
+        grade: &str,
         interval_days: f64,
         ease: f64,
         next_review_at: &str,
         today: &str,
     ) -> Result<Option<KnowledgeCard>> {
-        let updated = self.conn.execute(
+        let tx = self.conn.transaction()?;
+        let updated = tx.execute(
             "UPDATE knowledge_cards SET review_interval_days=?1, review_ease=?2,
-             review_count=review_count+1, last_reviewed_at=?3, next_review_at=?4
+             review_count=review_count+1, last_reviewed_at=?3, next_review_at=?4,
+             review_state = CASE
+                WHEN ?1 >= 21 AND ?2 >= 2.5 THEN 'mature'
+                ELSE 'learning'
+             END
              WHERE id=?5 AND status='confirmed'",
             params![interval_days, ease, today, next_review_at, id],
         )?;
         if updated == 0 {
             return Ok(None);
         }
+        tx.execute(
+            "INSERT INTO review_log (card_id, grade, interval_days, ease, next_review_at, reviewed_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![id, grade, interval_days, ease, next_review_at, today],
+        )?;
+        tx.commit()?;
         self.find(id)
+    }
+
+    pub(crate) fn review_stats(&mut self, today: &str) -> Result<ReviewStatsResponse> {
+        let today_date = NaiveDate::parse_from_str(today, "%Y-%m-%d")
+            .unwrap_or_else(|_| NaiveDate::from_ymd_opt(1970, 1, 1).expect("epoch date"));
+        let reviewed_dates: Vec<String> = {
+            let mut statement = self
+                .conn
+                .prepare("SELECT DISTINCT reviewed_at FROM review_log ORDER BY reviewed_at DESC")?;
+            let rows = statement
+                .query_map([], |row| row.get::<_, String>(0))?
+                .collect::<Result<Vec<_>>>()?;
+            rows
+        };
+        let mut streak_days = 0i64;
+        let mut cursor = today_date;
+        if !reviewed_dates.iter().any(|date| date == today) {
+            cursor -= Duration::days(1);
+        }
+        while reviewed_dates
+            .iter()
+            .any(|date| date == &cursor.format("%Y-%m-%d").to_string())
+        {
+            streak_days += 1;
+            cursor -= Duration::days(1);
+        }
+
+        let start_date = today_date - Duration::days(29);
+        let start_key = start_date.format("%Y-%m-%d").to_string();
+        let mut counts: BTreeMap<String, i64> = {
+            let mut statement = self.conn.prepare(
+                "SELECT reviewed_at, COUNT(*) FROM review_log
+                 WHERE reviewed_at >= ?1 GROUP BY reviewed_at",
+            )?;
+            let rows = statement
+                .query_map(params![start_key], |row| {
+                    Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+                })?
+                .collect::<Result<BTreeMap<_, _>>>()?;
+            rows
+        };
+        let mut daily = Vec::with_capacity(30);
+        let mut cursor = start_date;
+        while cursor <= today_date {
+            let key = cursor.format("%Y-%m-%d").to_string();
+            daily.push(DailyReviewCount {
+                date: key.clone(),
+                count: counts.remove(&key).unwrap_or(0),
+            });
+            cursor += Duration::days(1);
+        }
+
+        let (total_reviews, learning, mature) = self.conn.query_row(
+            "SELECT
+                COALESCE(SUM(review_count), 0),
+                COALESCE(SUM(CASE WHEN review_state='learning' THEN 1 ELSE 0 END), 0),
+                COALESCE(SUM(CASE WHEN review_state='mature' THEN 1 ELSE 0 END), 0)
+             FROM knowledge_cards",
+            [],
+            |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, i64>(1)?,
+                    row.get::<_, i64>(2)?,
+                ))
+            },
+        )?;
+        let reviewed_today: i64 = self
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM knowledge_cards WHERE last_reviewed_at=?1",
+                params![today],
+                |row| row.get(0),
+            )
+            .unwrap_or(0);
+        let (due, total_confirmed) = self
+            .conn
+            .query_row(
+                "SELECT
+                    (SELECT COUNT(*) FROM knowledge_cards
+                     WHERE status='confirmed' AND (next_review_at='' OR next_review_at <= ?1)),
+                    (SELECT COUNT(*) FROM knowledge_cards WHERE status='confirmed')",
+                params![today],
+                |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)),
+            )
+            .unwrap_or((0, 0));
+
+        Ok(ReviewStatsResponse {
+            total_reviews,
+            streak_days,
+            reviewed_today,
+            due,
+            total_confirmed,
+            learning,
+            mature,
+            daily,
+        })
     }
 
     pub(crate) fn touch(&mut self, id: &str, today: &str) -> Result<Option<KnowledgeCard>> {
@@ -1583,7 +1722,7 @@ mod migration_tests {
     }
 
     #[test]
-    fn v3_database_migrates_to_v4_preserving_existing_cards_with_defaults() {
+    fn v3_database_migrates_to_latest_preserving_existing_cards_with_defaults() {
         let conn = Connection::open_in_memory().expect("in-memory connection");
         conn.execute_batch(&format!(
             "CREATE TABLE schema_version (version INTEGER NOT NULL);
@@ -1622,14 +1761,14 @@ mod migration_tests {
                 row.get(0)
             })
             .expect("read schema version");
-        assert_eq!(version, 4);
+        assert_eq!(version, 5);
 
         // 已迁移的库再次 initialize 必须幂等，不报重复列错误
         db.initialize().expect("re-initialize is idempotent");
     }
 
     #[test]
-    fn fresh_database_reaches_v4_with_review_columns() {
+    fn fresh_database_reaches_latest_schema_with_review_columns() {
         let mut db = Database::new_in_memory().expect("in-memory database");
         let card = db
             .knowledge()
@@ -1654,6 +1793,110 @@ mod migration_tests {
                 row.get(0)
             })
             .expect("read schema version");
-        assert_eq!(version, 4);
+        assert_eq!(version, 5);
+    }
+}
+
+#[cfg(test)]
+mod migration_v5_tests {
+    use super::*;
+
+    fn v4_knowledge_cards_table() -> &'static str {
+        "CREATE TABLE knowledge_cards (
+            id                    TEXT PRIMARY KEY,
+            card_type             TEXT NOT NULL,
+            status                TEXT NOT NULL,
+            title                 TEXT NOT NULL,
+            content               TEXT NOT NULL,
+            tags                  TEXT DEFAULT '[]',
+            source_article_id     TEXT DEFAULT '',
+            source_review_id      TEXT DEFAULT '',
+            source_date           TEXT DEFAULT '',
+            source_excerpt        TEXT DEFAULT '',
+            created_at            TEXT NOT NULL,
+            updated_at            TEXT NOT NULL,
+            review_state          TEXT NOT NULL DEFAULT 'new',
+            review_interval_days  REAL NOT NULL DEFAULT 0,
+            review_ease           REAL NOT NULL DEFAULT 2.5,
+            review_count          INTEGER NOT NULL DEFAULT 0,
+            last_reviewed_at      TEXT NOT NULL DEFAULT '',
+            next_review_at        TEXT NOT NULL DEFAULT '',
+            usage_count           INTEGER NOT NULL DEFAULT 0,
+            last_used_at          TEXT NOT NULL DEFAULT ''
+        );"
+    }
+
+    #[test]
+    fn v4_database_migrates_to_v5_with_review_log_and_state_backfill() {
+        let conn = Connection::open_in_memory().expect("in-memory connection");
+        conn.execute_batch(&format!(
+            "CREATE TABLE schema_version (version INTEGER NOT NULL);
+             {} 
+             INSERT INTO schema_version (version) VALUES (4);
+             INSERT INTO knowledge_cards
+               (id, card_type, status, title, content, tags, source_article_id, source_review_id,
+                source_date, source_excerpt, created_at, updated_at, review_state,
+                review_interval_days, review_ease, review_count, last_reviewed_at, next_review_at,
+                usage_count, last_used_at)
+             VALUES
+               ('mature-1', 'method', 'confirmed', '已掌握', '内容', '[]', '', '', '2026-07-01', '',
+                '2026-07-01T09:00:00', '2026-07-01T09:00:00', 'new', 30, 2.7, 5,
+                '2026-08-01', '2026-08-31', 0, ''),
+               ('learning-1', 'fact', 'confirmed', '学习中', '内容', '[]', '', '', '2026-07-02', '',
+                '2026-07-02T09:00:00', '2026-07-02T09:00:00', 'new', 3, 2.5, 2,
+                '2026-08-02', '2026-08-05', 0, ''),
+               ('fresh-1', 'fact', 'draft', '新卡', '内容', '[]', '', '', '2026-07-03', '',
+                '2026-07-03T09:00:00', '2026-07-03T09:00:00', 'new', 0, 2.5, 0,
+                '', '', 0, '');",
+            v4_knowledge_cards_table()
+        ))
+        .expect("create v4 schema");
+
+        let mut db = Database { conn };
+        db.initialize().expect("migrate to v5");
+
+        // review_state 回填
+        let states: Vec<(String, String)> = db
+            .knowledge()
+            .list()
+            .expect("list cards")
+            .into_iter()
+            .map(|card| (card.id, card.review_state))
+            .collect();
+        let by_id = |id: &str| {
+            states
+                .iter()
+                .find(|(key, _)| key == id)
+                .map(|(_, s)| s.as_str())
+                .unwrap_or("")
+        };
+        assert_eq!(by_id("mature-1"), "mature", "长间隔+高 ease 回填为 mature");
+        assert_eq!(
+            by_id("learning-1"),
+            "learning",
+            "已复习但间隔短回填为 learning"
+        );
+        assert_eq!(by_id("fresh-1"), "new", "未复习保持 new");
+
+        // review_log 表可用
+        let total: i64 = db
+            .knowledge()
+            .review_stats("2026-08-03")
+            .expect("review stats")
+            .total_reviews;
+        assert_eq!(
+            total, 7,
+            "review_log 空表不干扰累计（累计来自 review_count）"
+        );
+
+        let version: i64 = db
+            .conn
+            .query_row("SELECT MAX(version) FROM schema_version", [], |row| {
+                row.get(0)
+            })
+            .expect("read schema version");
+        assert_eq!(version, 5);
+        db.initialize()
+            .expect("re-initialize after v5 is idempotent");
     }
 }

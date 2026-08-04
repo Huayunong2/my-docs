@@ -9,20 +9,11 @@ import {
   Sparkles,
 } from "lucide-react";
 import * as api from "../lib/api";
-import type { KnowledgeCard, KnowledgeCardType, ReviewGrade } from "../lib/api";
+import type { KnowledgeCard, ReviewGrade } from "../lib/api";
+import { cardTypeLabels, reviewStateLabels } from "../lib/cardLabels";
 import type { Page } from "../App";
 import MarkdownContent from "./MarkdownContent";
 import { EmptyState, InlineError, LoadingState, Toast } from "./ui/Feedback";
-
-const typeLabels: Record<KnowledgeCardType, string> = {
-  fact: "事实",
-  method: "方法",
-  concept: "概念",
-  decision: "决策",
-  case: "案例",
-  quote: "表述",
-  principle: "原则",
-};
 
 const gradeOptions: Array<{
   grade: ReviewGrade;
@@ -221,8 +212,20 @@ export default function ReviewPage({
               <div className="ui-panel p-5 sm:p-6">
                 <div className="mb-3 flex flex-wrap items-center gap-2">
                   <span className="rounded-md bg-accent-light px-2 py-0.5 text-[11px] font-semibold text-accent dark:bg-accent-light/20">
-                    {typeLabels[current.card_type]}
+                    {cardTypeLabels[current.card_type]}
                   </span>
+                  {current.review_state && current.review_state !== "new" && (
+                    <span
+                      className={[
+                        "rounded-md px-2 py-0.5 text-[11px] font-medium",
+                        current.review_state === "mature"
+                          ? "bg-emerald-50 text-emerald-600 dark:bg-emerald-500/10 dark:text-emerald-300"
+                          : "bg-amber-50 text-amber-600 dark:bg-amber-500/10 dark:text-amber-300",
+                      ].join(" ")}
+                    >
+                      {reviewStateLabels[current.review_state] || current.review_state}
+                    </span>
+                  )}
                   {current.source_date && (
                     <span className="font-mono text-xs text-gray-400 dark:text-gray-500">
                       {current.source_date}
@@ -317,7 +320,7 @@ export default function ReviewPage({
         ) : null}
       </div>
 
-      {toast && <Toast message={toast} tone="good" onClose={() => setToast("")} />}
+      {toast && <Toast message={toast} tone="good" autoHideMs={5000} onClose={() => setToast("")} />}
     </motion.div>
   );
 }

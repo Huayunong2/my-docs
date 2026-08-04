@@ -166,6 +166,24 @@ pub(crate) struct DueReviewResponse {
 }
 
 #[derive(Debug, Serialize)]
+pub(crate) struct DailyReviewCount {
+    pub(crate) date: String,
+    pub(crate) count: i64,
+}
+
+#[derive(Debug, Serialize)]
+pub(crate) struct ReviewStatsResponse {
+    pub(crate) total_reviews: i64,
+    pub(crate) streak_days: i64,
+    pub(crate) reviewed_today: i64,
+    pub(crate) due: i64,
+    pub(crate) total_confirmed: i64,
+    pub(crate) learning: i64,
+    pub(crate) mature: i64,
+    pub(crate) daily: Vec<DailyReviewCount>,
+}
+
+#[derive(Debug, Serialize)]
 pub(crate) struct BackupMeta {
     pub(crate) name: String,
     pub(crate) size_bytes: u64,

@@ -34,14 +34,15 @@ interface SidebarProps {
   onPrefetch: (p: Page) => void;
   dark: boolean;
   onToggleDark: () => void;
+  dueCount?: number | null;
 }
 
-export default function Sidebar({ page, onNavigate, onPrefetch, dark, onToggleDark }: SidebarProps) {
+export default function Sidebar({ page, onNavigate, onPrefetch, dark, onToggleDark, dueCount }: SidebarProps) {
   return (
     <>
       {/* Desktop sidebar */}
       <aside className="hidden md:flex w-[220px] min-w-[220px] h-full glass bg-sidebar dark:bg-sidebar-dark border-r border-gray-200/50 dark:border-white/10 flex-col select-none z-10">
-        <DesktopSidebar page={page} onNavigate={onNavigate} onPrefetch={onPrefetch} dark={dark} onToggleDark={onToggleDark} />
+        <DesktopSidebar page={page} onNavigate={onNavigate} onPrefetch={onPrefetch} dark={dark} onToggleDark={onToggleDark} dueCount={dueCount} />
       </aside>
 
       {/* Mobile bottom tab bar */}
@@ -53,6 +54,7 @@ export default function Sidebar({ page, onNavigate, onPrefetch, dark, onToggleDa
             active={page === item.id}
             onClick={() => onNavigate(item.id)}
             onPrefetch={() => onPrefetch(item.id)}
+            badge={item.id === "review" && dueCount && dueCount > 0 ? dueCount : undefined}
           />
         ))}
         <button
@@ -68,7 +70,7 @@ export default function Sidebar({ page, onNavigate, onPrefetch, dark, onToggleDa
   );
 }
 
-function DesktopSidebar({ page, onNavigate, onPrefetch, dark, onToggleDark }: SidebarProps) {
+function DesktopSidebar({ page, onNavigate, onPrefetch, dark, onToggleDark, dueCount }: SidebarProps) {
   const ThemeIcon = dark ? Sun : Moon;
   return (
     <>
@@ -98,6 +100,11 @@ function DesktopSidebar({ page, onNavigate, onPrefetch, dark, onToggleDark }: Si
             >
               <Icon className="mr-3" size={18} strokeWidth={page === item.id ? 2.4 : 2.1} />
               {item.label}
+              {item.id === "review" && dueCount && dueCount > 0 && (
+                <span className="ml-auto rounded-full bg-accent px-1.5 py-0.5 text-[10px] font-bold leading-none text-white">
+                  {dueCount > 99 ? "99+" : dueCount}
+                </span>
+              )}
             </NavButton>
           );
         })}
@@ -165,11 +172,13 @@ function MobileNavButton({
   active,
   onClick,
   onPrefetch,
+  badge,
 }: {
   item: { id: Page; label: string; icon: LucideIcon };
   active: boolean;
   onClick: () => void;
   onPrefetch: () => void;
+  badge?: number;
 }) {
   const Icon = item.icon;
   return (
@@ -188,6 +197,11 @@ function MobileNavButton({
     >
       <Icon size={17} strokeWidth={active ? 2.35 : 2} />
       <span className="max-w-full truncate text-[10px] font-medium leading-none">{item.label}</span>
+      {badge !== undefined && badge > 0 && (
+        <span className="absolute right-0.5 top-0.5 flex h-3.5 min-w-3.5 items-center justify-center rounded-full bg-accent px-0.5 text-[9px] font-bold leading-none text-white shadow-sm">
+          {badge > 99 ? "99+" : badge}
+        </span>
+      )}
       {active && (
         <span className="absolute -top-0.5 h-0.5 w-4 rounded-full bg-accent/80" />
       )}
