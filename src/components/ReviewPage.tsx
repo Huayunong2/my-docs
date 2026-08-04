@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import {
   Brain,
@@ -73,9 +73,12 @@ export default function ReviewPage({
   const [editTitle, setEditTitle] = useState("");
   const [editContent, setEditContent] = useState("");
   const [editTagsText, setEditTagsText] = useState("");
+  const [editRelatedText, setEditRelatedText] = useState("");
   const [savingEdit, setSavingEdit] = useState(false);
 
+  const loadToken = useRef(0);
   const load = useCallback(async () => {
+    const token = ++loadToken.current;
     setLoading(true);
     setError("");
     try {
@@ -84,6 +87,7 @@ export default function ReviewPage({
         api.getReviewStats().catch(() => null),
         api.listKnowledgeCards().catch(() => []),
       ]);
+      if (token !== loadToken.current) return;
       setCards(res.cards);
       setStats(res.stats);
       setReviewStats(statsRes);
@@ -91,9 +95,9 @@ export default function ReviewPage({
       setIndex(0);
       setRevealed(false);
     } catch (e) {
-      setError(api.getErrorMessage(e));
+      if (token === loadToken.current) setError(api.getErrorMessage(e));
     } finally {
-      setLoading(false);
+      if (token === loadToken.current) setLoading(false);
     }
   }, []);
 
@@ -181,6 +185,20 @@ export default function ReviewPage({
     setEditTitle(current.title);
     setEditContent(current.content);
     setEditTagsText(current.tags.join(", "));
+    setEditRelatedText((current.related_ids || [])
+      .map((id) => allCards.find((card) => card.id === id)?.title || "")
+      .filter(Boolean)
+      .join(", "));
+  };
+
+  const resolveRelatedIds = (text: string): string[] => {
+    const titles = text.split(",").map((title) => title.trim()).filter(Boolean);
+    const ids: string[] = [];
+    for (const title of titles) {
+      const matched = allCards.find((card) => card.id !== editing?.id && card.title === title);
+      if (matched && !ids.includes(matched.id)) ids.push(matched.id);
+    }
+    return ids;
   };
 
   const saveEdit = async () => {
@@ -192,6 +210,7 @@ export default function ReviewPage({
         title: editTitle.trim(),
         content: editContent.trim(),
         tags: editTagsText.split(",").map((tag) => tag.trim()).filter(Boolean),
+        related_ids: resolveRelatedIds(editRelatedText),
       });
       setCards((prev) => prev.map((card) => (card.id === saved.id ? saved : card)));
       setAllCards((prev) => prev.map((card) => (card.id === saved.id ? saved : card)));
@@ -461,6 +480,12 @@ export default function ReviewPage({
                   value={editTagsText}
                   onChange={(e) => setEditTagsText(e.target.value)}
                   placeholder="标签，用逗号分隔"
+                  className="ui-field h-10"
+                />
+                <input
+                  value={editRelatedText}
+                  onChange={(e) => setEditRelatedText(e.target.value)}
+                  placeholder="关联卡片（逗号分隔的标题）"
                   className="ui-field h-10"
                 />
               </div>

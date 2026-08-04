@@ -149,9 +149,7 @@ pub(crate) struct KnowledgeCard {
     #[serde(default)]
     pub(crate) related_ids: Vec<String>,
     #[serde(default)]
-    pub(crate) stability: f64,
-    #[serde(default)]
-    pub(crate) difficulty: f64,
+    pub(crate) first_reviewed_at: String,
 }
 
 fn default_review_ease() -> f64 {
