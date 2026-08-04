@@ -194,8 +194,7 @@ fn review_and_knowledge_http_shapes_hide_storage_serialization() {
         usage_count: 0,
         last_used_at: "".into(),
         related_ids: vec![],
-        stability: 0.0,
-        difficulty: 0.0,
+        first_reviewed_at: "".into(),
     };
 
     let review_json = serde_json::to_value(review).expect("serialize review");
@@ -815,4 +814,99 @@ fn related_ids_are_persisted_and_round_trip() {
         .expect("find")
         .expect("exists");
     assert_eq!(restored.related_ids, vec![second.id]);
+}
+
+#[test]
+fn daily_new_card_quota_accrues_across_refreshes() {
+    let mut db = Database::new_in_memory().expect("in-memory database");
+    // 30 张未评分新卡
+    let mut ids = Vec::new();
+    for index in 0..30 {
+        let mut draft = card_draft("confirmed");
+        draft.title = format!("堆积卡 {index}");
+        ids.push(db.knowledge().save(draft).expect("save new card").id);
+    }
+    // 今天学 15 张（good 后 next_review_at 非空，退出新卡队列）
+    for id in ids.iter().take(15) {
+        db.knowledge()
+            .apply_grade(id, "good", 3.0, 2.5, "2026-07-19", "2026-07-16")
+            .expect("grade new card");
+    }
+    // 今天已学 15 张，剩余额度 5 → due 最多再进 5 张新卡
+    let due = db.knowledge().due(100, "2026-07-16").expect("due cards");
+    let new_in_due = due.iter().filter(|c| c.next_review_at.is_empty()).count();
+    assert_eq!(
+        new_in_due, 5,
+        "每天最多累计 20 张新卡，已学 15 张只剩 5 张额度"
+    );
+    // 再次刷新也不会突破额度
+    let due_again = db.knowledge().due(100, "2026-07-16").expect("due again");
+    assert_eq!(
+        due_again
+            .iter()
+            .filter(|c| c.next_review_at.is_empty())
+            .count(),
+        5
+    );
+    // 次日额度恢复
+    let next_day = db.knowledge().due(100, "2026-07-17").expect("due next day");
+    let new_next_day = next_day
+        .iter()
+        .filter(|c| c.next_review_at.is_empty())
+        .count();
+    assert_eq!(new_next_day, 15, "次日已学归零，剩余 15 张新卡可学");
+    // stats.due 与可复习数一致：明天 15 张新卡 + 今天 good 的 15 张未到期
+    let stats = db.knowledge().stats("2026-07-16").expect("stats");
+    assert_eq!(stats.due, 5);
+}
+
+#[test]
+fn related_ids_are_resolved_bidirectionally_on_read() {
+    let mut db = Database::new_in_memory().expect("in-memory database");
+    let mut a = card_draft("confirmed");
+    a.title = "卡A".into();
+    let a = db.knowledge().save(a).expect("save A");
+    let mut b = card_draft("confirmed");
+    b.title = "卡B".into();
+    let b = db.knowledge().save(b).expect("save B");
+
+    // A 声明关联 B（只存单向）
+    let mut update = card_draft("confirmed");
+    update.title = "卡A".into();
+    update.related_ids = vec![b.id.clone()];
+    db.knowledge().update(&a.id, update).expect("update A");
+
+    // B 读取时反向合成出 A
+    let b_view = db.knowledge().find(&b.id).expect("find B").expect("exists");
+    assert!(b_view.related_ids.contains(&a.id), "B 应反向显示 A");
+    // A 仍显示 B
+    let a_view = db.knowledge().find(&a.id).expect("find A").expect("exists");
+    assert!(a_view.related_ids.contains(&b.id));
+    // list 同样双向
+    let all = db.knowledge().list().expect("list");
+    let b_in_list = all.iter().find(|c| c.id == b.id).unwrap();
+    assert!(b_in_list.related_ids.contains(&a.id));
+}
+
+#[test]
+fn deleting_a_card_cleans_dangling_related_ids() {
+    let mut db = Database::new_in_memory().expect("in-memory database");
+    let mut a = card_draft("confirmed");
+    a.title = "卡A".into();
+    let a = db.knowledge().save(a).expect("save A");
+    let mut b = card_draft("confirmed");
+    b.title = "卡B".into();
+    let b = db.knowledge().save(b).expect("save B");
+
+    let mut update = card_draft("confirmed");
+    update.title = "卡A".into();
+    update.related_ids = vec![b.id.clone()];
+    db.knowledge().update(&a.id, update).expect("update A");
+
+    assert!(db.knowledge().delete(&b.id).expect("delete B"));
+    let a_view = db.knowledge().find(&a.id).expect("find A").expect("exists");
+    assert!(
+        !a_view.related_ids.contains(&b.id),
+        "删除 B 后 A 不再引用悬空 id"
+    );
 }

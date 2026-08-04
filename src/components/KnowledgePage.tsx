@@ -802,7 +802,14 @@ function IntervalChart({ history }: { history: api.ReviewHistoryEntry[] }) {
   const lastX = 100;
   const lastY = 26 - (last.interval_days / max) * 24;
   return (
-    <svg viewBox="0 0 100 30" preserveAspectRatio="none" className="h-9 w-full">
+    <svg
+      viewBox="0 0 100 30"
+      preserveAspectRatio="none"
+      role="img"
+      aria-label={`复习间隔趋势：最近复习间隔 ${last.interval_days.toFixed(0)} 天`}
+      className="h-9 w-full"
+    >
+      <title>{`复习间隔趋势 · 最近 ${last.interval_days.toFixed(0)} 天 · 共 ${history.length} 次复习`}</title>
       <polyline
         points={points}
         fill="none"
