@@ -169,7 +169,7 @@ export default function ReviewsPage() {
     setNotice("");
     setError("");
     try {
-      const cards = await api.extractKnowledgeCards({
+      const { cards, skipped } = await api.extractKnowledgeCards({
         content: normalizeReviewContent(review.kind, review.title, review.content),
         source_review_id: review.id,
         source_date: review.period_end,
@@ -177,8 +177,12 @@ export default function ReviewsPage() {
       });
       setNotice(
         cards.length
-          ? `已从「${review.title}」提取 ${cards.length} 张知识卡片草稿，可到知识工作台确认。`
-          : "这份复盘里没有足够稳定的知识卡片。"
+          ? skipped > 0
+            ? `已从「${review.title}」提取 ${cards.length} 张新草稿，跳过 ${skipped} 张与已有卡片重复。`
+            : `已从「${review.title}」提取 ${cards.length} 张知识卡片草稿，可到知识工作台确认。`
+          : skipped > 0
+            ? `这份复盘的 ${skipped} 个知识点已沉淀过，无需重复提取。`
+            : "这份复盘里没有足够稳定的知识卡片。"
       );
     } catch (e) {
       setError(api.getErrorMessage(e));

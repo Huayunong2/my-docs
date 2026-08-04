@@ -285,7 +285,10 @@ export function extractKnowledgeCards(payload: {
   source_date?: string;
   max_cards?: number;
 }) {
-  return httpRequest<KnowledgeCard[]>("/knowledge-cards/extract", { method: "POST", body: JSON.stringify(payload) }).then((items) => items.map(mapKnowledgeCard));
+  return httpRequest<{ cards: KnowledgeCard[]; skipped: number }>("/knowledge-cards/extract", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  }).then((res) => ({ ...res, cards: res.cards.map(mapKnowledgeCard) }));
 }
 
 export function updateKnowledgeCard(id: string, payload: Partial<{

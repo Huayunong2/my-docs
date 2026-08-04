@@ -361,6 +361,12 @@ pub(crate) struct ExtractKnowledgeCardsPayload {
     pub(crate) max_cards: Option<usize>,
 }
 
+#[derive(Debug, Serialize)]
+pub(crate) struct ExtractCardsResponse {
+    pub(crate) cards: Vec<KnowledgeCard>,
+    pub(crate) skipped: usize,
+}
+
 #[derive(Debug, Deserialize)]
 pub(crate) struct GenerateReviewPayload {
     pub(crate) kind: String,
