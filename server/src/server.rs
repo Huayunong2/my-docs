@@ -11,6 +11,7 @@ use crate::helpers::{app_data_dir, backups_dir};
 use crate::knowledge;
 use crate::middleware::{add_security_headers, configured_cors, require_api_token};
 use crate::models::*;
+use crate::review;
 use crate::stats;
 
 use axum::{extract::State, http::StatusCode, middleware, response::Json, Router};
@@ -274,6 +275,12 @@ fn build_router(db: Database) -> Router {
                 .put(knowledge::update_card)
                 .delete(knowledge::delete_card),
         )
+        .route(
+            "/knowledge-cards/:id/touch",
+            axum::routing::post(review::touch_card),
+        )
+        .route("/review/due", axum::routing::get(review::due_cards))
+        .route("/review/:id/grade", axum::routing::post(review::grade_card))
         .route("/ai/summary", axum::routing::post(ai::ai_summary))
         .route("/health", axum::routing::get(detailed_health_check))
         .route("/articles/import", axum::routing::post(import_articles))

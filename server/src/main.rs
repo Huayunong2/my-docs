@@ -11,6 +11,7 @@ pub(crate) mod helpers;
 mod knowledge;
 pub(crate) mod middleware;
 pub(crate) mod models;
+mod review;
 mod server;
 mod stats;
 

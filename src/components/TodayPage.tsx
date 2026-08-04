@@ -139,6 +139,8 @@ export default function TodayPage({
   const [extractingCards, setExtractingCards] = useState(false);
   const [cardExtractNotice, setCardExtractNotice] = useState("");
   const [cardExtractCount, setCardExtractCount] = useState(0);
+  const [knowledgePrompt, setKnowledgePrompt] = useState(false);
+  const knowledgePromptDate = useRef("");
   const saveTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
   const articleRef = useRef<Article | null>(null);
   const recordSession = useRef(new DailyRecordSession({
@@ -168,6 +170,7 @@ export default function TodayPage({
     setDirty(false);
     setSaveStatus("idle");
     setSaveError("");
+    setKnowledgePrompt(false);
 
     const generation = recordSession.current.begin(date, null);
     articleRef.current = null;
@@ -242,6 +245,14 @@ export default function TodayPage({
         setDirty(false);
         setSaveStatus("saved");
         setTimeout(() => setSaveStatus((s) => (s === "saved" ? "idle" : s)), 2000);
+        // 沉淀提示（非侵入、当天一次）：内容超过阈值且当天尚未提示过
+        const plainLength = newContent.trim().replace(/\s+/g, "").length;
+        if (plainLength >= 500
+          && knowledgePromptDate.current !== date
+          && !localStorage.getItem(`knowledge-prompt:${date}`)) {
+          knowledgePromptDate.current = date;
+          setKnowledgePrompt(true);
+        }
         return true;
       } catch (e: any) {
         setSaveStatus("error");
@@ -840,6 +851,45 @@ export default function TodayPage({
           <span>·</span>
           <span>{tags.length ? `${tags.length} 标签` : "无标签"}</span>
         </div>
+
+        <AnimatePresence>
+          {knowledgePrompt && (
+            <motion.div
+              initial={{ opacity: 0, y: -6 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -6 }}
+              transition={{ duration: 0.15 }}
+              className="mt-2 flex flex-wrap items-center justify-between gap-2 rounded-xl border border-accent/20 bg-accent-light/40 px-4 py-2.5 text-xs dark:bg-accent-light/10"
+            >
+              <span className="text-gray-600 dark:text-gray-300">今天的记录比较长，想把其中的规律沉淀成知识卡片？</span>
+              <span className="flex items-center gap-2">
+                {onNavigate && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      localStorage.setItem(`knowledge-prompt:${date}`, "1");
+                      setKnowledgePrompt(false);
+                      onNavigate("knowledge");
+                    }}
+                    className="inline-flex h-7 items-center gap-1 rounded-lg bg-accent px-2.5 text-xs font-semibold text-white hover:bg-accent/90"
+                  >
+                    <BookMarked size={12} /> 去沉淀
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={() => {
+                    localStorage.setItem(`knowledge-prompt:${date}`, "1");
+                    setKnowledgePrompt(false);
+                  }}
+                  className="text-gray-400 hover:text-gray-600 dark:text-gray-300"
+                >
+                  稍后
+                </button>
+              </span>
+            </motion.div>
+          )}
+        </AnimatePresence>
 
         {/* AI result panel */}
         <AnimatePresence>

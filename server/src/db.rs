@@ -1,4 +1,6 @@
-use crate::models::{ArchiveMonth, Article, ArticleSummary, DayExemption, KnowledgeCard, Review};
+use crate::models::{
+    ArchiveMonth, Article, ArticleSummary, DayExemption, KnowledgeCard, Review, ReviewStats,
+};
 use chrono::{Local, NaiveDate};
 use rusqlite::types::Type;
 use rusqlite::{params, Connection, OpenFlags, OptionalExtension, Result};
@@ -189,6 +191,22 @@ struct PortableKnowledgeCard {
     created_at: String,
     #[serde(default)]
     updated_at: String,
+    #[serde(default = "default_review_state")]
+    review_state: String,
+    #[serde(default)]
+    review_interval_days: f64,
+    #[serde(default = "default_review_ease")]
+    review_ease: f64,
+    #[serde(default)]
+    review_count: i64,
+    #[serde(default)]
+    last_reviewed_at: String,
+    #[serde(default)]
+    next_review_at: String,
+    #[serde(default)]
+    usage_count: i64,
+    #[serde(default)]
+    last_used_at: String,
 }
 
 pub struct Database {
@@ -456,6 +474,59 @@ impl Database {
             )?;
             self.conn
                 .execute("INSERT INTO schema_version (version) VALUES (3)", [])?;
+        }
+
+        if current < 4 {
+            // 复习调度 + 复用追踪字段。逐列检查以避免部分迁移后重复执行报错。
+            let existing_columns: Vec<String> = self
+                .conn
+                .prepare("PRAGMA table_info(knowledge_cards)")?
+                .query_map([], |row| row.get(1))?
+                .collect::<Result<_>>()?;
+            let mut pending = Vec::new();
+            for (column, statement) in [
+                (
+                    "review_state",
+                    "ALTER TABLE knowledge_cards ADD COLUMN review_state TEXT NOT NULL DEFAULT 'new'",
+                ),
+                (
+                    "review_interval_days",
+                    "ALTER TABLE knowledge_cards ADD COLUMN review_interval_days REAL NOT NULL DEFAULT 0",
+                ),
+                (
+                    "review_ease",
+                    "ALTER TABLE knowledge_cards ADD COLUMN review_ease REAL NOT NULL DEFAULT 2.5",
+                ),
+                (
+                    "review_count",
+                    "ALTER TABLE knowledge_cards ADD COLUMN review_count INTEGER NOT NULL DEFAULT 0",
+                ),
+                (
+                    "last_reviewed_at",
+                    "ALTER TABLE knowledge_cards ADD COLUMN last_reviewed_at TEXT NOT NULL DEFAULT ''",
+                ),
+                (
+                    "next_review_at",
+                    "ALTER TABLE knowledge_cards ADD COLUMN next_review_at TEXT NOT NULL DEFAULT ''",
+                ),
+                (
+                    "usage_count",
+                    "ALTER TABLE knowledge_cards ADD COLUMN usage_count INTEGER NOT NULL DEFAULT 0",
+                ),
+                (
+                    "last_used_at",
+                    "ALTER TABLE knowledge_cards ADD COLUMN last_used_at TEXT NOT NULL DEFAULT ''",
+                ),
+            ] {
+                if !existing_columns.iter().any(|existing| existing == column) {
+                    pending.push(statement);
+                }
+            }
+            if !pending.is_empty() {
+                self.conn.execute_batch(&pending.join(";"))?;
+            }
+            self.conn
+                .execute("INSERT INTO schema_version (version) VALUES (4)", [])?;
         }
 
         Ok(())
@@ -772,7 +843,9 @@ impl PortableArchivePersistence<'_> {
         let knowledge_cards = {
             let mut statement = self.conn.prepare(
                 "SELECT id, card_type, status, title, content, tags, source_article_id,
-                        source_review_id, source_date, source_excerpt, created_at, updated_at
+                        source_review_id, source_date, source_excerpt, created_at, updated_at,
+                        review_state, review_interval_days, review_ease, review_count,
+                        last_reviewed_at, next_review_at, usage_count, last_used_at
                  FROM knowledge_cards ORDER BY updated_at ASC",
             )?;
             let rows = statement
@@ -791,6 +864,14 @@ impl PortableArchivePersistence<'_> {
                         "source_excerpt": row.get::<_, String>(9)?,
                         "created_at": row.get::<_, String>(10)?,
                         "updated_at": row.get::<_, String>(11)?,
+                        "review_state": row.get::<_, String>(12)?,
+                        "review_interval_days": row.get::<_, f64>(13)?,
+                        "review_ease": row.get::<_, f64>(14)?,
+                        "review_count": row.get::<_, i64>(15)?,
+                        "last_reviewed_at": row.get::<_, String>(16)?,
+                        "next_review_at": row.get::<_, String>(17)?,
+                        "usage_count": row.get::<_, i64>(18)?,
+                        "last_used_at": row.get::<_, String>(19)?,
                     }))
                 })?
                 .collect::<Result<Vec<_>>>()?;
@@ -874,11 +955,24 @@ impl PortableArchivePersistence<'_> {
 
         for card in archive.knowledge_cards {
             let tags = serde_json::to_string(&normalize_tags(card.tags))?;
+            // 复习/使用进度是本地积累数据：导入已存在的卡时保留本地值，
+            // 只覆盖卡片内容字段（旧档案缺省字段不会清零已积累的进度）。
             tx.execute(
-                "INSERT OR REPLACE INTO knowledge_cards
+                "INSERT INTO knowledge_cards
                  (id, card_type, status, title, content, tags, source_article_id,
-                  source_review_id, source_date, source_excerpt, created_at, updated_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+                  source_review_id, source_date, source_excerpt, created_at, updated_at,
+                  review_state, review_interval_days, review_ease, review_count,
+                  last_reviewed_at, next_review_at, usage_count, last_used_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12,
+                         ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20)
+                 ON CONFLICT(id) DO UPDATE SET
+                   card_type=excluded.card_type, status=excluded.status,
+                   title=excluded.title, content=excluded.content, tags=excluded.tags,
+                   source_article_id=excluded.source_article_id,
+                   source_review_id=excluded.source_review_id,
+                   source_date=excluded.source_date,
+                   source_excerpt=excluded.source_excerpt,
+                   created_at=excluded.created_at, updated_at=excluded.updated_at",
                 params![
                     card.id,
                     card.card_type,
@@ -891,7 +985,15 @@ impl PortableArchivePersistence<'_> {
                     card.source_date,
                     card.source_excerpt,
                     card.created_at,
-                    card.updated_at
+                    card.updated_at,
+                    card.review_state,
+                    card.review_interval_days,
+                    card.review_ease,
+                    card.review_count,
+                    card.last_reviewed_at,
+                    card.next_review_at,
+                    card.usage_count,
+                    card.last_used_at
                 ],
             )?;
         }
@@ -1015,11 +1117,13 @@ impl ReviewPersistence<'_> {
 }
 
 impl KnowledgePersistence<'_> {
+    const SELECT_COLUMNS: &'static str = "id, card_type, status, title, content, tags, source_article_id, source_review_id, source_date, source_excerpt, created_at, updated_at, review_state, review_interval_days, review_ease, review_count, last_reviewed_at, next_review_at, usage_count, last_used_at";
+
     pub(crate) fn list(&mut self) -> Result<Vec<KnowledgeCard>> {
-        let mut statement = self.conn.prepare(
-            "SELECT id, card_type, status, title, content, tags, source_article_id, source_review_id, source_date, source_excerpt, created_at, updated_at
-             FROM knowledge_cards ORDER BY updated_at DESC, created_at DESC",
-        )?;
+        let mut statement = self.conn.prepare(&format!(
+            "SELECT {} FROM knowledge_cards ORDER BY updated_at DESC, created_at DESC",
+            Self::SELECT_COLUMNS
+        ))?;
         let rows = statement
             .query_map([], row_to_knowledge_card)?
             .collect::<Result<Vec<_>>>()?;
@@ -1029,11 +1133,85 @@ impl KnowledgePersistence<'_> {
     pub(crate) fn find(&mut self, id: &str) -> Result<Option<KnowledgeCard>> {
         self.conn
             .query_row(
-                "SELECT id, card_type, status, title, content, tags, source_article_id, source_review_id, source_date, source_excerpt, created_at, updated_at FROM knowledge_cards WHERE id=?1",
+                &format!(
+                    "SELECT {} FROM knowledge_cards WHERE id=?1",
+                    Self::SELECT_COLUMNS
+                ),
                 params![id],
                 row_to_knowledge_card,
             )
             .optional()
+    }
+
+    pub(crate) fn due(&mut self, limit: i64, today: &str) -> Result<Vec<KnowledgeCard>> {
+        let mut statement = self.conn.prepare(&format!(
+            "SELECT {} FROM knowledge_cards
+             WHERE status='confirmed' AND (next_review_at='' OR next_review_at <= ?1)
+             ORDER BY (next_review_at='') DESC, next_review_at ASC, updated_at DESC
+             LIMIT ?2",
+            Self::SELECT_COLUMNS
+        ))?;
+        let rows = statement
+            .query_map(params![today, limit], row_to_knowledge_card)?
+            .collect::<Result<Vec<_>>>()?;
+        Ok(rows)
+    }
+
+    pub(crate) fn stats(&mut self, today: &str) -> Result<ReviewStats> {
+        Ok(self
+            .conn
+            .query_row(
+                "SELECT
+                    (SELECT COUNT(*) FROM knowledge_cards
+                     WHERE status='confirmed' AND (next_review_at='' OR next_review_at <= ?1)),
+                    (SELECT COUNT(*) FROM knowledge_cards WHERE last_reviewed_at=?1),
+                    (SELECT COUNT(*) FROM knowledge_cards WHERE status='confirmed')",
+                params![today],
+                |row| {
+                    Ok(ReviewStats {
+                        due: row.get(0)?,
+                        reviewed_today: row.get(1)?,
+                        total_confirmed: row.get(2)?,
+                    })
+                },
+            )
+            .optional()?
+            .unwrap_or(ReviewStats {
+                due: 0,
+                reviewed_today: 0,
+                total_confirmed: 0,
+            }))
+    }
+
+    pub(crate) fn apply_grade(
+        &mut self,
+        id: &str,
+        interval_days: f64,
+        ease: f64,
+        next_review_at: &str,
+        today: &str,
+    ) -> Result<Option<KnowledgeCard>> {
+        let updated = self.conn.execute(
+            "UPDATE knowledge_cards SET review_interval_days=?1, review_ease=?2,
+             review_count=review_count+1, last_reviewed_at=?3, next_review_at=?4
+             WHERE id=?5 AND status='confirmed'",
+            params![interval_days, ease, today, next_review_at, id],
+        )?;
+        if updated == 0 {
+            return Ok(None);
+        }
+        self.find(id)
+    }
+
+    pub(crate) fn touch(&mut self, id: &str, today: &str) -> Result<Option<KnowledgeCard>> {
+        let updated = self.conn.execute(
+            "UPDATE knowledge_cards SET usage_count=usage_count+1, last_used_at=?1 WHERE id=?2",
+            params![today, id],
+        )?;
+        if updated == 0 {
+            return Ok(None);
+        }
+        self.find(id)
     }
 
     pub(crate) fn save(&mut self, draft: KnowledgeCardDraft) -> Result<KnowledgeCard> {
@@ -1079,10 +1257,24 @@ impl KnowledgePersistence<'_> {
         let now = Local::now().format("%Y-%m-%dT%H:%M:%S").to_string();
         if self.conn.execute(
             "UPDATE knowledge_cards SET card_type=?1, status=?2, title=?3, content=?4, tags=?5,
-             source_article_id=?6, source_review_id=?7, source_date=?8, source_excerpt=?9, updated_at=?10 WHERE id=?11",
-            params![draft.card_type, draft.status, draft.title, draft.content, tags,
-                draft.source_article_id, draft.source_review_id, draft.source_date, draft.source_excerpt, now, id],
-        )? == 0 {
+             source_article_id=?6, source_review_id=?7, source_date=?8, source_excerpt=?9,
+             next_review_at = CASE WHEN ?2 <> 'confirmed' THEN '' ELSE next_review_at END,
+             updated_at=?10 WHERE id=?11",
+            params![
+                draft.card_type,
+                draft.status,
+                draft.title,
+                draft.content,
+                tags,
+                draft.source_article_id,
+                draft.source_review_id,
+                draft.source_date,
+                draft.source_excerpt,
+                now,
+                id
+            ],
+        )? == 0
+        {
             return Ok(None);
         }
         self.find(id)
@@ -1216,6 +1408,14 @@ fn default_card_type() -> String {
     "fact".into()
 }
 
+fn default_review_ease() -> f64 {
+    2.5
+}
+
+fn default_review_state() -> String {
+    "new".into()
+}
+
 fn normalize_tags(values: Vec<String>) -> Vec<String> {
     let mut result = Vec::new();
     for value in values {
@@ -1313,6 +1513,14 @@ fn row_to_knowledge_card(row: &rusqlite::Row<'_>) -> Result<KnowledgeCard> {
         source_excerpt: row.get(9)?,
         created_at: row.get(10)?,
         updated_at: row.get(11)?,
+        review_state: row.get(12)?,
+        review_interval_days: row.get(13)?,
+        review_ease: row.get(14)?,
+        review_count: row.get(15)?,
+        last_reviewed_at: row.get(16)?,
+        next_review_at: row.get(17)?,
+        usage_count: row.get(18)?,
+        last_used_at: row.get(19)?,
     })
 }
 
@@ -1350,5 +1558,102 @@ fn dirs_next() -> Option<PathBuf> {
     #[cfg(not(any(target_os = "linux", target_os = "windows")))]
     {
         dirs::data_dir()
+    }
+}
+
+#[cfg(test)]
+mod migration_tests {
+    use super::*;
+
+    fn v3_knowledge_cards_table() -> &'static str {
+        "CREATE TABLE knowledge_cards (
+            id                TEXT PRIMARY KEY,
+            card_type         TEXT NOT NULL,
+            status            TEXT NOT NULL,
+            title             TEXT NOT NULL,
+            content           TEXT NOT NULL,
+            tags              TEXT DEFAULT '[]',
+            source_article_id TEXT DEFAULT '',
+            source_review_id  TEXT DEFAULT '',
+            source_date       TEXT DEFAULT '',
+            source_excerpt    TEXT DEFAULT '',
+            created_at        TEXT NOT NULL,
+            updated_at        TEXT NOT NULL
+        );"
+    }
+
+    #[test]
+    fn v3_database_migrates_to_v4_preserving_existing_cards_with_defaults() {
+        let conn = Connection::open_in_memory().expect("in-memory connection");
+        conn.execute_batch(&format!(
+            "CREATE TABLE schema_version (version INTEGER NOT NULL);
+             {} 
+             INSERT INTO schema_version (version) VALUES (3);",
+            v3_knowledge_cards_table()
+        ))
+        .expect("create v3 schema");
+        conn.execute(
+            "INSERT INTO knowledge_cards (id, card_type, status, title, content, tags, source_article_id, source_review_id, source_date, source_excerpt, created_at, updated_at)
+             VALUES ('legacy-1', 'fact', 'confirmed', '旧卡', '内容', '[]', '', '', '2026-07-01', '片段', '2026-07-01T09:00:00', '2026-07-01T09:00:00')",
+            [],
+        )
+        .expect("seed legacy card");
+
+        let mut db = Database { conn };
+        db.initialize().expect("migrate to v4");
+
+        let card = db
+            .knowledge()
+            .find("legacy-1")
+            .expect("find card")
+            .expect("legacy card survives migration");
+        assert_eq!(card.review_state, "new");
+        assert_eq!(card.review_interval_days, 0.0);
+        assert_eq!(card.review_ease, 2.5);
+        assert_eq!(card.review_count, 0);
+        assert_eq!(card.last_reviewed_at, "");
+        assert_eq!(card.next_review_at, "");
+        assert_eq!(card.usage_count, 0);
+        assert_eq!(card.last_used_at, "");
+
+        let version: i64 = db
+            .conn
+            .query_row("SELECT MAX(version) FROM schema_version", [], |row| {
+                row.get(0)
+            })
+            .expect("read schema version");
+        assert_eq!(version, 4);
+
+        // 已迁移的库再次 initialize 必须幂等，不报重复列错误
+        db.initialize().expect("re-initialize is idempotent");
+    }
+
+    #[test]
+    fn fresh_database_reaches_v4_with_review_columns() {
+        let mut db = Database::new_in_memory().expect("in-memory database");
+        let card = db
+            .knowledge()
+            .save(KnowledgeCardDraft {
+                card_type: "fact".into(),
+                status: "confirmed".into(),
+                title: "新库".into(),
+                content: "直接建到最新 schema".into(),
+                tags: vec![],
+                source_article_id: String::new(),
+                source_review_id: String::new(),
+                source_date: "2026-07-16".into(),
+                source_excerpt: "evidence".into(),
+            })
+            .expect("save card on fresh schema");
+        assert_eq!(card.review_ease, 2.5);
+        assert_eq!(card.review_state, "new");
+
+        let version: i64 = db
+            .conn
+            .query_row("SELECT MAX(version) FROM schema_version", [], |row| {
+                row.get(0)
+            })
+            .expect("read schema version");
+        assert_eq!(version, 4);
     }
 }

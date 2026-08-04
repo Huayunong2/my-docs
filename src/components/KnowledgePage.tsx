@@ -89,7 +89,12 @@ function compact(value: string) {
   return value.trim().replace(/\s+/g, "").toLowerCase();
 }
 
-export default function KnowledgePage({ onEditDate, onNavigate }: { onEditDate: (date: string) => void; onNavigate: (page: Page) => void }) {
+export default function KnowledgePage({ onEditDate, onNavigate, initialCardId, initialNonce }: {
+  onEditDate: (date: string) => void;
+  onNavigate: (page: Page) => void;
+  initialCardId?: string;
+  initialNonce?: number;
+}) {
   const [cards, setCards] = useState<KnowledgeCard[]>([]);
   const [allCards, setAllCards] = useState<KnowledgeCard[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -97,6 +102,7 @@ export default function KnowledgePage({ onEditDate, onNavigate }: { onEditDate: 
   const [draft, setDraft] = useState<DraftState>(emptyDraft);
   const [activeStatus, setActiveStatus] = useState<KnowledgeCardStatus>("draft");
   const [typeFilter, setTypeFilter] = useState("");
+  const [usageFilter, setUsageFilter] = useState<"" | "never_used">("");
   const [query, setQuery] = useState("");
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -108,6 +114,7 @@ export default function KnowledgePage({ onEditDate, onNavigate }: { onEditDate: 
   const [sourceLoading, setSourceLoading] = useState(false);
   const autoSaveTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
   const lastSavedSignature = useRef("");
+  const touchedCardIds = useRef<Set<string>>(new Set());
   const { confirm, dialog } = useConfirmDialog();
 
   const selectedCard = useMemo(() => cards.find((card) => card.id === selectedId) || allCards.find((card) => card.id === selectedId) || null, [allCards, cards, selectedId]);
@@ -133,7 +140,7 @@ export default function KnowledgePage({ onEditDate, onNavigate }: { onEditDate: 
     setError("");
     try {
       const [list, fullList] = await Promise.all([
-        api.listKnowledgeCards({ card_type: typeFilter, status: activeStatus, q: query.trim() }),
+        api.listKnowledgeCards({ card_type: typeFilter, status: activeStatus, q: query.trim(), usage: usageFilter || undefined }),
         api.listKnowledgeCards(),
       ]);
       setCards(list);
@@ -152,7 +159,7 @@ export default function KnowledgePage({ onEditDate, onNavigate }: { onEditDate: 
     }
   };
 
-  useEffect(() => { loadCards(false); }, [activeStatus, typeFilter]);
+  useEffect(() => { loadCards(false); }, [activeStatus, typeFilter, usageFilter]);
 
   useEffect(() => {
     if (!selectedCard?.source_article_id) {
@@ -208,7 +215,31 @@ export default function KnowledgePage({ onEditDate, onNavigate }: { onEditDate: 
     setNotice("");
     setSaveState("idle");
     lastSavedSignature.current = JSON.stringify(payloadFromDraft(toDraft(card)));
+    // 复用追踪：每张卡在页面会话内只记一次打开
+    if (!touchedCardIds.current.has(card.id)) {
+      touchedCardIds.current.add(card.id);
+      api.touchKnowledgeCard(card.id)
+        .then((touched) => {
+          const patch = (item: KnowledgeCard) => item.id === touched.id
+            ? { ...item, usage_count: touched.usage_count ?? item.usage_count, last_used_at: touched.last_used_at ?? item.last_used_at }
+            : item;
+          setAllCards((items) => items.map(patch));
+          setCards((items) => items.map(patch));
+        })
+        .catch(() => { /* 使用计数失败不打扰用户 */ });
+    }
   };
+
+  // 从搜索跳转打开指定卡片（只定位一次，避免 allCards 刷新时覆盖用户正在编辑的卡）
+  const initialCardHandled = useRef<string | null>(null);
+  useEffect(() => {
+    if (!initialCardId || initialCardHandled.current === initialCardId) return;
+    const target = allCards.find((card) => card.id === initialCardId);
+    if (!target) return;
+    initialCardHandled.current = initialCardId;
+    setActiveStatus(target.status);
+    openCard(target);
+  }, [initialCardId, initialNonce, allCards]);
 
   const startNew = () => {
     setSelectedId(null);
@@ -364,6 +395,13 @@ export default function KnowledgePage({ onEditDate, onNavigate }: { onEditDate: 
               ))}
             </div>
           </div>
+          <div className="mt-4">
+            <div className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-gray-400 dark:text-gray-500">使用</div>
+            <div className="grid grid-cols-2 gap-1.5 xl:grid-cols-1">
+              <FilterButton active={!usageFilter} onClick={() => setUsageFilter("")}>全部卡片</FilterButton>
+              <FilterButton active={usageFilter === "never_used"} onClick={() => setUsageFilter(usageFilter === "never_used" ? "" : "never_used")}>从未使用</FilterButton>
+            </div>
+          </div>
           <button type="button" onClick={startNew} className="ui-button-primary mt-4 w-full">
             <Plus size={14} /> 新建卡片
           </button>
@@ -469,6 +507,7 @@ export default function KnowledgePage({ onEditDate, onNavigate }: { onEditDate: 
                       <div className="mt-1 flex flex-wrap items-center gap-1.5 text-[11px] text-gray-400 dark:text-gray-500">
                         <span>{typeLabels[card.card_type]}</span>
                         {card.source_date && <span>· {card.source_date} · {card.source_review_id ? "AI 复盘" : "每日记录"}</span>}
+                        {card.usage_count ? `· 用过 ${card.usage_count} 次` : ""}
                         {card.tags.slice(0, 2).map((tag) => <span key={tag}>#{tag}</span>)}
                       </div>
                     </div>
@@ -490,6 +529,8 @@ export default function KnowledgePage({ onEditDate, onNavigate }: { onEditDate: 
               </div>
               <p className="mt-1 text-xs text-gray-400 dark:text-gray-500">
                 {selectedCard?.source_date || draft.source_date ? `${selectedCard?.source_date || draft.source_date} · ${currentSourceType}` : "来源用于回溯依据"}
+                {selectedCard?.usage_count ? ` · 用过 ${selectedCard.usage_count} 次` : ""}
+                {selectedCard?.last_used_at ? ` · 最近使用 ${selectedCard.last_used_at}` : ""}
               </p>
             </div>
             <div className="flex flex-wrap gap-2">

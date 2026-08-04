@@ -2,8 +2,9 @@ import { motion } from "framer-motion";
 import {
   Archive,
   BarChart3,
-  BookOpenText,
   BookMarked,
+  BookOpenText,
+  Brain,
   CalendarDays,
   FileText,
   Moon,
@@ -22,6 +23,7 @@ const navItems: { id: Page; label: string; icon: LucideIcon }[] = [
   { id: "search", label: "搜索", icon: Search },
   { id: "stats", label: "统计", icon: BarChart3 },
   { id: "reviews", label: "复盘", icon: BookOpenText },
+  { id: "review", label: "复习", icon: Brain },
   { id: "knowledge", label: "知识", icon: BookMarked },
   { id: "settings", label: "设置", icon: Settings },
 ];
@@ -43,7 +45,7 @@ export default function Sidebar({ page, onNavigate, onPrefetch, dark, onToggleDa
       </aside>
 
       {/* Mobile bottom tab bar */}
-      <nav className="md:hidden fixed bottom-0 left-0 right-0 z-20 grid grid-cols-9 gap-0.5 border-t border-gray-200 bg-white px-2 py-1 safe-bottom shadow-[0_-8px_24px_rgba(15,23,42,0.10)] dark:border-white/10 dark:bg-gray-950">
+      <nav className="md:hidden fixed bottom-0 left-0 right-0 z-20 grid grid-cols-10 gap-0.5 border-t border-gray-200 bg-white px-1.5 py-1 safe-bottom shadow-[0_-8px_24px_rgba(15,23,42,0.10)] dark:border-white/10 dark:bg-gray-950">
         {navItems.map((item) => (
           <MobileNavButton
             key={item.id}
@@ -184,7 +186,7 @@ function MobileNavButton({
       ].join(" ")}
       title={item.label}
     >
-      <Icon size={18} strokeWidth={active ? 2.35 : 2} />
+      <Icon size={17} strokeWidth={active ? 2.35 : 2} />
       <span className="max-w-full truncate text-[10px] font-medium leading-none">{item.label}</span>
       {active && (
         <span className="absolute -top-0.5 h-0.5 w-4 rounded-full bg-accent/80" />

@@ -86,6 +86,11 @@ pub(crate) async fn list_cards(
             return Err((StatusCode::BAD_REQUEST, "Invalid card status".into()));
         }
     }
+    if let Some(usage) = q.usage.as_deref() {
+        if !usage.is_empty() && usage != "never_used" {
+            return Err((StatusCode::BAD_REQUEST, "Invalid usage filter".into()));
+        }
+    }
 
     let mut db = db
         .lock()
@@ -98,12 +103,16 @@ pub(crate) async fn list_cards(
     let query = q.q.unwrap_or_default().trim().to_lowercase();
     let card_type_filter = q.card_type.unwrap_or_default();
     let status_filter = q.status.unwrap_or_default();
+    let usage_filter = q.usage.unwrap_or_default();
     let mut cards = Vec::new();
     for card in rows {
         if !card_type_filter.is_empty() && card.card_type != card_type_filter {
             continue;
         }
         if !status_filter.is_empty() && card.status != status_filter {
+            continue;
+        }
+        if usage_filter == "never_used" && card.usage_count != 0 {
             continue;
         }
         if !query.is_empty() {
