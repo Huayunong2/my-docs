@@ -473,7 +473,7 @@ export default function TodayPage({
     setCardExtractNotice("");
     setCardExtractCount(0);
     try {
-      const cards = await api.extractKnowledgeCards({
+      const { cards, skipped } = await api.extractKnowledgeCards({
         content,
         source_article_id: article?.id,
         source_date: date,
@@ -481,8 +481,12 @@ export default function TodayPage({
       });
       setCardExtractNotice(
         cards.length
-          ? `已生成 ${cards.length} 张知识卡片草稿，可到知识库确认。`
-          : "这篇内容里没有足够稳定的知识卡片。"
+          ? skipped > 0
+            ? `已生成 ${cards.length} 张新草稿，跳过 ${skipped} 张与已有卡片重复，可到知识库确认。`
+            : `已生成 ${cards.length} 张知识卡片草稿，可到知识库确认。`
+          : skipped > 0
+            ? `没有新的知识点（${skipped} 张与已有卡片重复），可到知识库查看已有卡片。`
+            : "这篇内容里没有足够稳定的知识卡片。"
       );
       setCardExtractCount(cards.length);
     } catch (e: any) {

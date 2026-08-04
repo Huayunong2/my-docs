@@ -130,7 +130,7 @@ pub(crate) async fn list_cards(
 pub(crate) async fn extract_cards(
     State(db): State<AppState>,
     Json(payload): Json<ExtractKnowledgeCardsPayload>,
-) -> Result<Json<Vec<KnowledgeCard>>, (StatusCode, String)> {
+) -> Result<Json<ExtractCardsResponse>, (StatusCode, String)> {
     let source = payload.content.trim();
     if source.is_empty() {
         return Err((StatusCode::BAD_REQUEST, "Content is required".into()));
@@ -143,12 +143,15 @@ pub(crate) async fn extract_cards(
 - 只允许使用原文明确出现或可直接归纳的内容，不要补充背景、建议、计划、未来问题或心理推测。
 - 如果原文只是流水账、情绪表达或证据不足，返回空数组。
 - 每张卡片必须能回到原文找到依据，并且读者只看卡片也能复习。
-- 内容要像个人知识库条目：稳定、具体、可复用、可回看，不要空泛。
-- title 不超过 30 个中文字符，content 使用 2-5 句中文，说明“是什么 / 为什么重要 / 怎么用 / 适用边界”中的至少两项。
+- 卡片是"知识"，不是"代码摘录"：主题必须是可迁移的规律、结论、原理、事实，而不是具体的模块名、字段名、接口名、文件名。
+  - 如果原文围绕某个具体对象（如某模块的某字段、某次修复的某文件），先提炼它背后的通用规则再写卡片；
+  - 不要在 title 里出现只有原项目语境才懂的专有名词；宁可写成"释放后使用（UAF）的根因排查"，也不要写"某模块析构顺序问题"。
+- title 不超过 30 个中文字符，写成能独立成立的一句话知识（"是什么"优先于"哪个对象"），脱离原项目后仍可理解。
+- content 使用 2-5 句中文，必须覆盖"是什么 / 为什么重要 / 怎么用 / 适用边界"中的至少两项；如果这条规则源于某个具体场景，用不超过一句交代场景（例如"在固件升级里发现"），让多年后回看时能想起上下文。
 - source_excerpt 必须是原文中能支撑该卡片的原文短片段；如果没有明确片段，不要生成该卡片。
 - card_type 只能是：fact, method, concept, decision, case, quote, principle。
-- 优先抽取：关键概念、方法步骤、设计原则、调试经验、项目事实、决策依据、可引用表述。
-- 不要抽取：普通情绪、泛泛计划、无依据评价、只对当天有意义的流水账。
+- 优先抽取：关键概念、可复用方法、设计原则、调试经验背后的规律、项目事实、决策依据、可引用表述。
+- 不要抽取：普通情绪、泛泛计划、无依据评价、只对当天有意义的流水账、纯实现细节（如"把 A 接口改成 B 接口"而没有规律）。
 - tags 只给 1-4 个短标签。
 - 只输出 JSON，不要输出 Markdown 或解释。
 
@@ -207,10 +210,81 @@ JSON 格式：
     let mut db = db
         .lock()
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-    db.knowledge()
-        .save_many(drafts)
-        .map(Json)
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))
+    // 去重：今日提取与复盘提取可能命中同一知识点（来源不同），
+    // 与库内已有卡及本次草稿间比较，高度相似的跳过，避免重复入库。
+    let existing = db
+        .knowledge()
+        .list()
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let mut kept: Vec<KnowledgeCardDraft> = Vec::new();
+    let mut skipped = 0usize;
+    for draft in drafts {
+        let duplicate = existing
+            .iter()
+            .any(|card| cards_similar(&card.title, &card.content, &draft.title, &draft.content))
+            || kept.iter().any(|other| {
+                cards_similar(&other.title, &other.content, &draft.title, &draft.content)
+            });
+        if duplicate {
+            skipped += 1;
+        } else {
+            kept.push(draft);
+        }
+    }
+    let cards = db
+        .knowledge()
+        .save_many(kept)
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    Ok(Json(ExtractCardsResponse { cards, skipped }))
+}
+
+/// 去掉空白、标点与小写后的紧凑文本，用于标题/内容比较。
+fn compact(value: &str) -> String {
+    value
+        .chars()
+        .filter(|c| c.is_alphanumeric())
+        .flat_map(|c| c.to_lowercase())
+        .collect()
+}
+
+/// 字符 bigram Dice 系数（0.0 ~ 1.0），比 Jaccard 对同义改写的长度差异更宽容。
+fn text_similarity(a: &str, b: &str) -> f64 {
+    fn bigrams(value: &str) -> std::collections::HashSet<(char, char)> {
+        let chars: Vec<char> = value.chars().filter(|c| c.is_alphanumeric()).collect();
+        chars.windows(2).map(|w| (w[0], w[1])).collect()
+    }
+    let ca = compact(a);
+    let cb = compact(b);
+    if ca.is_empty() || cb.is_empty() {
+        return 0.0;
+    }
+    let ba = bigrams(&ca);
+    let bb = bigrams(&cb);
+    let shared = ba.intersection(&bb).count();
+    let total = ba.len() + bb.len();
+    if total == 0 {
+        return 0.0;
+    }
+    2.0 * shared as f64 / total as f64
+}
+
+/// 两张卡是否视为同一知识点：标题/内容相同、互相包含，或内容高度相似。
+fn cards_similar(title_a: &str, content_a: &str, title_b: &str, content_b: &str) -> bool {
+    let ta = compact(title_a);
+    let tb = compact(title_b);
+    let ca = compact(content_a);
+    let cb = compact(content_b);
+    if !ta.is_empty() && ta == tb {
+        return true;
+    }
+    if !ca.is_empty() && ca == cb {
+        return true;
+    }
+    if ta.chars().count() >= 6 && tb.chars().count() >= 6 && (ta.contains(&tb) || tb.contains(&ta))
+    {
+        return true;
+    }
+    text_similarity(&ca, &cb) >= 0.62
 }
 
 pub(crate) async fn get_card(
@@ -363,4 +437,62 @@ pub(crate) async fn delete_card(
         return Err((StatusCode::NOT_FOUND, "Knowledge card not found".into()));
     }
     Ok(StatusCode::NO_CONTENT)
+}
+
+#[cfg(test)]
+mod similarity_tests {
+    use super::{cards_similar, text_similarity};
+
+    #[test]
+    fn identical_titles_or_contents_count_as_duplicate() {
+        assert!(cards_similar(
+            "写文件先写 .part 再 rename",
+            "内容甲",
+            "写文件先写 .part 再 rename",
+            "内容乙"
+        ));
+        assert!(cards_similar(
+            "标题甲",
+            "临时文件写完再原子改名",
+            "标题乙",
+            "临时文件写完再原子改名"
+        ));
+    }
+
+    #[test]
+    fn contained_long_titles_count_as_duplicate() {
+        assert!(cards_similar(
+            "设备写保护分层校验与失败终止",
+            "内容甲",
+            "设备写保护分层校验",
+            "内容乙"
+        ));
+    }
+
+    #[test]
+    fn paraphrased_contents_with_high_similarity_count_as_duplicate() {
+        let a = "输出文件采用写 .part 临时文件、数据完整后原子 rename 的模式，支持断点续传。";
+        let b = "输出文件先写 .part 临时文件，数据完整后原子重命名，支持断点续传恢复。";
+        assert!(text_similarity(a, b) > 0.62);
+        assert!(cards_similar("标题甲", a, "标题乙", b));
+    }
+
+    #[test]
+    fn different_knowledge_points_are_not_duplicates() {
+        let a = "输出文件采用写 .part 临时文件、数据完整后原子 rename 的模式。";
+        let b = "硬件采集场景下，必须在数据完整处理并落盘后再向 FPGA 发送 ACK。";
+        assert!(text_similarity(a, b) < 0.62);
+        assert!(!cards_similar("临时文件原子改名", a, "ACK 时机", b));
+    }
+
+    #[test]
+    fn short_titles_do_not_trigger_substring_false_positives() {
+        // 标题太短时不做包含判定，避免 "错误处理" 和 "错误处理顺序" 误伤
+        assert!(!cards_similar(
+            "错误处理",
+            "内容甲",
+            "错误处理顺序",
+            "内容乙"
+        ));
+    }
 }
