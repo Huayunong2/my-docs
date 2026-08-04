@@ -797,7 +797,7 @@ export default function TodayPage({
                 whileTap={{ scale: 0.95 }}
                 onClick={handleExtractKnowledgeCards}
                 disabled={extractingCards}
-                className="ui-button-secondary flex-1 md:flex-none md:w-auto"
+                className="ui-button-secondary flex-1 text-emerald-600 dark:text-emerald-300 md:flex-none md:w-auto"
                 title="从当前正文抽取知识卡片草稿"
               >
                 {extractingCards ? <LoaderCircle size={14} className="animate-spin" /> : <BookMarked size={14} />}
