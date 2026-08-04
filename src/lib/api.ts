@@ -249,6 +249,7 @@ export interface KnowledgeCard {
   usage_count?: number;
   last_used_at?: string;
   related_ids?: string[];
+  declared_related_ids?: string[];
   first_reviewed_at?: string;
 }
 

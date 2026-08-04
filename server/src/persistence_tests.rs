@@ -194,6 +194,7 @@ fn review_and_knowledge_http_shapes_hide_storage_serialization() {
         usage_count: 0,
         last_used_at: "".into(),
         related_ids: vec![],
+        declared_related_ids: vec![],
         first_reviewed_at: "".into(),
     };
 

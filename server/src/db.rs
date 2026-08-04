@@ -1914,6 +1914,7 @@ fn row_to_knowledge_card(row: &rusqlite::Row<'_>) -> Result<KnowledgeCard> {
         usage_count: row.get(18)?,
         last_used_at: row.get(19)?,
         related_ids: parse_json_vec(&row.get::<_, String>(20)?)?,
+        declared_related_ids: parse_json_vec(&row.get::<_, String>(20)?)?,
         first_reviewed_at: row.get(21)?,
     })
 }

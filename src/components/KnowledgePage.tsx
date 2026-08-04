@@ -198,7 +198,7 @@ export default function KnowledgePage({ onEditDate, onNavigate, initialCardId, i
   const openCard = (card: KnowledgeCard) => {
     setSelectedId(card.id);
     setDraft(toDraft(card));
-    setRelatedText((card.related_ids || [])
+    setRelatedText(((card.declared_related_ids?.length ? card.declared_related_ids : card.related_ids) || [])
       .map((id) => allCards.find((item) => item.id === id)?.title || "")
       .filter(Boolean)
       .join(", "));

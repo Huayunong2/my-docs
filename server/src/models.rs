@@ -148,6 +148,10 @@ pub(crate) struct KnowledgeCard {
     pub(crate) last_used_at: String,
     #[serde(default)]
     pub(crate) related_ids: Vec<String>,
+    /// 主动声明边（存储原始值）；related_ids 是含反向合成的展示值。
+    /// 编辑表单只应基于声明边，避免把反向合成边物化回存储。
+    #[serde(default)]
+    pub(crate) declared_related_ids: Vec<String>,
     #[serde(default)]
     pub(crate) first_reviewed_at: String,
 }
