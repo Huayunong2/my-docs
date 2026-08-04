@@ -1,6 +1,8 @@
 use crate::db::Database;
 use crate::helpers::format_date;
-use crate::models::{DueQuery, DueReviewResponse, GradeCardPayload, KnowledgeCard};
+use crate::models::{
+    DueQuery, DueReviewResponse, GradeCardPayload, KnowledgeCard, ReviewStatsResponse,
+};
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::Json;
@@ -115,6 +117,12 @@ pub(crate) async fn grade_card(
         .find(&id)
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
         .ok_or((StatusCode::NOT_FOUND, "Knowledge card not found".into()))?;
+    if card.status != "confirmed" {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "Knowledge card is not in the review queue".into(),
+        ));
+    }
     let outcome = apply_grade_rule(
         card.review_interval_days,
         card.review_ease,
@@ -125,6 +133,7 @@ pub(crate) async fn grade_card(
     db.knowledge()
         .apply_grade(
             &id,
+            &grade,
             outcome.interval_days,
             outcome.ease,
             &outcome.next_review_at,
@@ -133,6 +142,19 @@ pub(crate) async fn grade_card(
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
         .map(Json)
         .ok_or((StatusCode::NOT_FOUND, "Knowledge card not found".into()))
+}
+
+pub(crate) async fn review_stats(
+    State(db): State<AppState>,
+) -> Result<Json<ReviewStatsResponse>, (StatusCode, String)> {
+    let today = Local::now().format("%Y-%m-%d").to_string();
+    let mut db = db
+        .lock()
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    db.knowledge()
+        .review_stats(&today)
+        .map(Json)
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))
 }
 
 pub(crate) async fn touch_card(

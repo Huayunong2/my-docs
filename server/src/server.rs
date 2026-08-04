@@ -280,6 +280,7 @@ fn build_router(db: Database) -> Router {
             axum::routing::post(review::touch_card),
         )
         .route("/review/due", axum::routing::get(review::due_cards))
+        .route("/review/stats", axum::routing::get(review::review_stats))
         .route("/review/:id/grade", axum::routing::post(review::grade_card))
         .route("/ai/summary", axum::routing::post(ai::ai_summary))
         .route("/health", axum::routing::get(detailed_health_check))

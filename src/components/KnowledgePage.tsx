@@ -19,25 +19,10 @@ import {
 import * as api from "../lib/api";
 import type { Page } from "../App";
 import type { Article, KnowledgeCard, KnowledgeCardStatus, KnowledgeCardType } from "../lib/api";
+import { cardStatusLabels as statusLabels, cardTypeLabels as typeLabels } from "../lib/cardLabels";
 import { normalizeTags } from "../lib/tags";
 import MarkdownContent from "./MarkdownContent";
 import { useConfirmDialog } from "./ui/Feedback";
-
-const typeLabels: Record<KnowledgeCardType, string> = {
-  fact: "事实",
-  method: "方法",
-  concept: "概念",
-  decision: "决策",
-  case: "案例",
-  quote: "表述",
-  principle: "原则",
-};
-
-const statusLabels: Record<KnowledgeCardStatus, string> = {
-  draft: "待确认",
-  confirmed: "已沉淀",
-  outdated: "已过时",
-};
 
 const typeOptions = Object.entries(typeLabels) as Array<[KnowledgeCardType, string]>;
 const statusOptions = Object.entries(statusLabels) as Array<[KnowledgeCardStatus, string]>;

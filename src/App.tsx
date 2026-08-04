@@ -1,6 +1,7 @@
 import { lazy, Suspense, useState, useCallback, useEffect } from "react";
 import Sidebar from "./components/Sidebar";
 import TodayPage from "./components/TodayPage";
+import * as api from "./lib/api";
 
 export type Page = "today" | "history" | "archive" | "search" | "stats" | "reviews" | "review" | "knowledge" | "settings";
 
@@ -33,6 +34,23 @@ function App() {
   const [recordTarget, setRecordTarget] = useState<{ date: string; nonce: number } | null>(null);
   const [searchTarget, setSearchTarget] = useState<{ query: string; nonce: number } | null>(null);
   const [knowledgeTarget, setKnowledgeTarget] = useState<{ cardId: string; nonce: number } | null>(null);
+  const [dueCount, setDueCount] = useState<number | null>(null);
+
+  // 侧栏「今日到期」角标：挂载时 + 每分钟刷新；未配置/失败时静默隐藏
+  useEffect(() => {
+    let cancelled = false;
+    const refresh = () => {
+      api.getDueReviewCards(1)
+        .then((res) => { if (!cancelled) setDueCount(res.stats.due); })
+        .catch(() => { if (!cancelled) setDueCount(null); });
+    };
+    refresh();
+    const timer = window.setInterval(refresh, 60_000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, []);
   const [dark, setDark] = useState(() => {
     if (typeof window !== "undefined") {
       return window.matchMedia("(prefers-color-scheme: dark)").matches;
@@ -85,7 +103,7 @@ function App() {
   return (
     <div className={dark ? "dark" : ""} style={{ display: "contents" }}>
       <div className="flex h-dvh w-screen bg-surface dark:bg-surface-dark transition-colors duration-300">
-        <Sidebar page={page} onNavigate={navigate} onPrefetch={preloadPage} dark={dark} onToggleDark={toggleDark} />
+        <Sidebar page={page} onNavigate={navigate} onPrefetch={preloadPage} dark={dark} onToggleDark={toggleDark} dueCount={dueCount} />
         <main className="flex-1 min-w-0 overflow-y-auto">
           <Suspense fallback={<PageFallback />}>
             <PageContent page={page} recordTarget={recordTarget} searchTarget={searchTarget} knowledgeTarget={knowledgeTarget} onEditDate={openRecordDate} onSearchTerm={openSearchTerm} onOpenKnowledgeCard={openKnowledgeCard} onNavigate={navigate} />

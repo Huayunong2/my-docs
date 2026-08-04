@@ -1,4 +1,4 @@
-import { useCallback, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useState, type ReactNode } from "react";
 import type { LucideIcon } from "lucide-react";
 
 type Tone = "neutral" | "good" | "warn" | "bad";
@@ -21,11 +21,18 @@ export function Toast({
   message,
   tone = "neutral",
   onClose,
+  autoHideMs,
 }: {
   message: string;
   tone?: Tone;
   onClose?: () => void;
+  autoHideMs?: number;
 }) {
+  useEffect(() => {
+    if (!message || !autoHideMs || !onClose) return;
+    const timer = window.setTimeout(onClose, autoHideMs);
+    return () => window.clearTimeout(timer);
+  }, [autoHideMs, message, onClose]);
   if (!message) return null;
   const toneClass = {
     neutral: "border-gray-700 bg-gray-900 text-white",

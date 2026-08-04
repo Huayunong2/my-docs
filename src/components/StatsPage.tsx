@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { MouseEvent } from "react";
 import { motion } from "framer-motion";
-import { Activity, BarChart3, BookOpenText, CalendarCheck, CalendarDays, CalendarRange, CircleHelp, Clock, Coffee, FileText, Heart, HeartPulse, LineChart, LoaderCircle, PencilLine, Plane, ShieldCheck, Sparkles, Target, TrendingUp, Trophy, Umbrella } from "lucide-react";
+import { Activity, BarChart3, BookOpenText, Brain, CalendarCheck, CalendarClock, CalendarDays, CalendarRange, CheckCircle2, CircleHelp, Clock, Coffee, FileText, Flame, Heart, HeartPulse, LineChart, LoaderCircle, PencilLine, Plane, Repeat, ShieldCheck, Sparkles, Target, TrendingUp, Trophy, Umbrella } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import * as api from "../lib/api";
 import type { MonthDayStats, Review, ReviewKind, StatsOverview, WeekReview } from "../lib/api";
@@ -74,6 +74,7 @@ export default function StatsPage({
   const [month, setMonth] = useState(now.getMonth() + 1);
   const [overview, setOverview] = useState<StatsOverview | null>(null);
   const [days, setDays] = useState<MonthDayStats[]>([]);
+  const [reviewStats, setReviewStats] = useState<api.ReviewStatsResponse | null>(null);
   const [weekReview, setWeekReview] = useState<WeekReview | null>(null);
   const [weeklyReviews, setWeeklyReviews] = useState<Review[]>([]);
   const [monthlyReviews, setMonthlyReviews] = useState<Review[]>([]);
@@ -276,6 +277,13 @@ export default function StatsPage({
     return () => { mountedRef.current = false; };
   }, []);
 
+  // 复习统计（静默失败，不影响页面主体）
+  useEffect(() => {
+    api.getReviewStats()
+      .then((stats) => { if (mountedRef.current) setReviewStats(stats); })
+      .catch(() => { if (mountedRef.current) setReviewStats(null); });
+  }, []);
+
   const generateAiReview = async (kind: ReviewKind) => {
     if (!mountedRef.current || generationInFlight.current) return;
     generationInFlight.current = true;
@@ -372,6 +380,70 @@ export default function StatsPage({
           tone={exemptionMetricTone}
         />
       </div>
+
+      {reviewStats && (
+        <section className="ui-panel mb-4 p-4 md:mb-6">
+          <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+            <div>
+              <h3 className="flex items-center gap-2 text-sm font-semibold text-gray-700 dark:text-gray-200">
+                <Brain size={16} className="text-accent" /> 复习
+              </h3>
+              <p className="mt-0.5 text-xs text-gray-400 dark:text-gray-400">
+                学习中 {reviewStats.learning} 张 · 已掌握 {reviewStats.mature} 张 · 累计确认 {reviewStats.total_confirmed} 张
+              </p>
+            </div>
+            {reviewStats.due > 0 && (
+              <button
+                type="button"
+                onClick={() => onNavigate("review")}
+                className="inline-flex h-8 items-center gap-1 rounded-lg bg-accent px-3 text-xs font-semibold text-white shadow-sm shadow-accent/20 transition-colors hover:bg-accent/90"
+              >
+                去复习 {reviewStats.due} 张 →
+              </button>
+            )}
+          </div>
+          <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+            <CompactMetric icon={Repeat} label="累计复习" value={String(reviewStats.total_reviews)} unit="次" tone="accent" />
+            <CompactMetric icon={Flame} label="连续复习" value={String(reviewStats.streak_days)} unit="天" tone="amber" />
+            <CompactMetric icon={CheckCircle2} label="今日已复习" value={String(reviewStats.reviewed_today)} unit="张" tone="green" />
+            <CompactMetric icon={CalendarClock} label="待复习" value={String(reviewStats.due)} unit="张" tone={reviewStats.due > 0 ? "rose" : "gray"} />
+          </div>
+          <div className="mt-4">
+            <div className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-gray-400 dark:text-gray-500">
+              近 30 天复习趋势
+            </div>
+            {reviewStats.daily.some((d) => d.count > 0) ? (
+              <div className="flex h-16 items-end gap-[3px]">
+                {reviewStats.daily.map((d) => {
+                  const max = Math.max(1, ...reviewStats.daily.map((item) => item.count));
+                  return (
+                    <div
+                      key={d.date}
+                      title={`${d.date} · ${d.count} 次`}
+                      className={[
+                        "flex-1 rounded-t-[3px] transition-colors",
+                        d.count > 0
+                          ? "bg-accent/35 hover:bg-accent/60 dark:bg-accent/40 dark:hover:bg-accent/70"
+                          : "bg-gray-100 dark:bg-white/[0.04]",
+                      ].join(" ")}
+                      style={{ height: d.count > 0 ? `${Math.max(14, (d.count / max) * 100)}%` : "4px" }}
+                    />
+                  );
+                })}
+              </div>
+            ) : (
+              <p className="rounded-lg bg-gray-50 px-3 py-4 text-center text-xs text-gray-400 dark:bg-white/[0.035] dark:text-gray-500">
+                还没有复习记录——确认卡片后到「复习」页开始第一次间隔复习
+              </p>
+            )}
+            {reviewStats.daily.some((d) => d.count > 0) && (
+              <p className="mt-1.5 text-[11px] text-gray-400 dark:text-gray-500">
+                每天复习的卡片数，坚持连续复习比单次量大更重要
+              </p>
+            )}
+          </div>
+        </section>
+      )}
 
       <div className="space-y-4 md:space-y-6">
         <div className="grid items-start gap-4 xl:grid-cols-[minmax(0,1.55fr)_minmax(360px,0.85fr)]">

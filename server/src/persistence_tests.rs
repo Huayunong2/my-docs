@@ -319,7 +319,7 @@ fn grading_applies_interval_and_ease_updates() {
     // good：首次复习 interval=3、ease 不变，next_review_at 为今天+3 天
     let graded = db
         .knowledge()
-        .apply_grade(&card.id, 3.0, 2.5, "2026-07-19", "2026-07-16")
+        .apply_grade(&card.id, "good", 3.0, 2.5, "2026-07-19", "2026-07-16")
         .expect("apply good grade")
         .expect("card exists");
     assert_eq!(graded.review_interval_days, 3.0);
@@ -345,7 +345,7 @@ fn grading_applies_interval_and_ease_updates() {
     // again：next_review_at 回到今天、ease 下降、interval 归 0
     let again = db
         .knowledge()
-        .apply_grade(&card.id, 0.0, 2.3, "2026-07-16", "2026-07-19")
+        .apply_grade(&card.id, "again", 0.0, 2.3, "2026-07-16", "2026-07-19")
         .expect("apply again grade")
         .expect("card exists");
     assert_eq!(again.review_interval_days, 0.0);
@@ -362,7 +362,7 @@ fn status_change_away_from_confirmed_clears_next_review_at() {
         .save(card_draft("confirmed"))
         .expect("save card");
     db.knowledge()
-        .apply_grade(&card.id, 3.0, 2.5, "2026-07-19", "2026-07-16")
+        .apply_grade(&card.id, "good", 3.0, 2.5, "2026-07-19", "2026-07-16")
         .expect("apply grade");
 
     let mut draft = card_draft("draft");
@@ -436,7 +436,7 @@ fn portable_archive_round_trip_preserves_review_and_usage_fields() {
         .expect("save card");
     source
         .knowledge()
-        .apply_grade(&card.id, 3.0, 2.5, "2026-07-19", "2026-07-16")
+        .apply_grade(&card.id, "good", 3.0, 2.5, "2026-07-19", "2026-07-16")
         .expect("apply grade");
     source
         .knowledge()
@@ -521,7 +521,7 @@ fn grading_a_non_confirmed_card_does_not_apply_progress() {
 
     let graded = db
         .knowledge()
-        .apply_grade(&card.id, 3.0, 2.5, "2026-07-19", "2026-07-16")
+        .apply_grade(&card.id, "good", 3.0, 2.5, "2026-07-19", "2026-07-16")
         .expect("apply grade on draft");
     assert!(
         graded.is_none(),
@@ -545,7 +545,7 @@ fn importing_an_archive_over_an_existing_card_keeps_local_review_progress() {
         .save(card_draft("confirmed"))
         .expect("save card");
     db.knowledge()
-        .apply_grade(&card.id, 3.0, 2.5, "2026-07-19", "2026-07-16")
+        .apply_grade(&card.id, "good", 3.0, 2.5, "2026-07-19", "2026-07-16")
         .expect("apply grade");
     db.knowledge()
         .touch(&card.id, "2026-07-16")
@@ -587,4 +587,114 @@ fn importing_an_archive_over_an_existing_card_keeps_local_review_progress() {
     assert_eq!(restored.next_review_at, "2026-07-19");
     assert_eq!(restored.usage_count, 1);
     assert_eq!(restored.last_used_at, "2026-07-16");
+}
+
+#[test]
+fn grading_writes_review_history_log_and_advances_state() {
+    let mut db = Database::new_in_memory().expect("in-memory database");
+    let card = db
+        .knowledge()
+        .save(card_draft("confirmed"))
+        .expect("save card");
+
+    // 首次评分：state new → learning，review_log 落一条（经 stats 间接验证）
+    let graded = db
+        .knowledge()
+        .apply_grade(&card.id, "good", 3.0, 2.5, "2026-07-19", "2026-07-16")
+        .expect("apply grade")
+        .expect("card exists");
+    assert_eq!(graded.review_state, "learning");
+
+    let stats = db
+        .knowledge()
+        .review_stats("2026-07-16")
+        .expect("review stats");
+    assert_eq!(stats.total_reviews, 1);
+
+    // 长间隔 + 高 ease → mature
+    let mature = db
+        .knowledge()
+        .apply_grade(&card.id, "easy", 30.0, 2.7, "2026-08-15", "2026-07-16")
+        .expect("apply grade")
+        .expect("card exists");
+    assert_eq!(mature.review_state, "mature");
+    assert_eq!(mature.review_count, 2);
+
+    // again 打回 learning
+    let back = db
+        .knowledge()
+        .apply_grade(&card.id, "again", 0.0, 2.5, "2026-07-16", "2026-07-16")
+        .expect("apply grade")
+        .expect("card exists");
+    assert_eq!(back.review_state, "learning");
+}
+
+#[test]
+fn review_stats_report_totals_streak_and_daily_series() {
+    let mut db = Database::new_in_memory().expect("in-memory database");
+    let first = db
+        .knowledge()
+        .save(card_draft("confirmed"))
+        .expect("save card");
+    let second = db
+        .knowledge()
+        .save(card_draft("confirmed"))
+        .expect("save second card");
+
+    // 07-14 复习 2 次（两张卡），07-15 复习 1 次，07-16（today）复习 1 次
+    db.knowledge()
+        .apply_grade(&first.id, "good", 3.0, 2.5, "2026-07-17", "2026-07-14")
+        .expect("grade");
+    db.knowledge()
+        .apply_grade(&second.id, "hard", 1.0, 2.35, "2026-07-15", "2026-07-14")
+        .expect("grade");
+    db.knowledge()
+        .apply_grade(&first.id, "good", 8.0, 2.5, "2026-07-22", "2026-07-15")
+        .expect("grade");
+    db.knowledge()
+        .apply_grade(&first.id, "good", 20.0, 2.5, "2026-08-05", "2026-07-16")
+        .expect("grade");
+
+    let stats = db
+        .knowledge()
+        .review_stats("2026-07-16")
+        .expect("review stats");
+    assert_eq!(stats.total_reviews, 4);
+    assert_eq!(stats.streak_days, 3); // 07-14 → 07-16 连续三天
+    assert_eq!(stats.reviewed_today, 1);
+    assert_eq!(stats.due, 1); // first 卡 next=2026-08-05 未到期，second 卡 next=07-15 已到期
+    assert_eq!(stats.total_confirmed, 2);
+    assert_eq!(stats.mature, 0);
+    assert_eq!(stats.daily.len(), 30);
+    let by_date = |date: &str| {
+        stats
+            .daily
+            .iter()
+            .find(|d| d.date == date)
+            .map(|d| d.count)
+            .unwrap_or(-1)
+    };
+    assert_eq!(by_date("2026-07-14"), 2);
+    assert_eq!(by_date("2026-07-15"), 1);
+    assert_eq!(by_date("2026-07-16"), 1);
+    assert_eq!(by_date("2026-07-13"), 0);
+}
+
+#[test]
+fn review_stats_streak_starts_from_yesterday_when_today_has_no_review() {
+    let mut db = Database::new_in_memory().expect("in-memory database");
+    let card = db
+        .knowledge()
+        .save(card_draft("confirmed"))
+        .expect("save card");
+    db.knowledge()
+        .apply_grade(&card.id, "good", 3.0, 2.5, "2026-07-19", "2026-07-15")
+        .expect("grade yesterday");
+
+    let stats = db
+        .knowledge()
+        .review_stats("2026-07-16")
+        .expect("review stats");
+    assert_eq!(stats.streak_days, 1, "今天未复习则从昨天起算");
+    assert_eq!(stats.reviewed_today, 0);
 }

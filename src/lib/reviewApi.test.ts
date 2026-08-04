@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { getDueReviewCards, gradeReviewCard, touchKnowledgeCard } from "./api";
+import { getDueReviewCards, getReviewStats, gradeReviewCard, touchKnowledgeCard } from "./api";
 
 function storage(values: Record<string, string>) {
   return {
@@ -63,5 +63,29 @@ describe("review scheduling API", () => {
     const [url, options] = fetchMock.mock.calls[0];
     expect(url).toBe("https://example.test/api/knowledge-cards/card-1/touch");
     expect(options.method).toBe("POST");
+  });
+
+  it("loads review stats from the stats endpoint", async () => {
+    vi.stubGlobal("window", { __TAURI_INTERNALS__: {} });
+    vi.stubGlobal("localStorage", storage({ server_url: "https://example.test/api" }));
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({
+      total_reviews: 12,
+      streak_days: 3,
+      reviewed_today: 2,
+      due: 5,
+      total_confirmed: 20,
+      learning: 14,
+      mature: 6,
+      daily: [{ date: "2026-08-01", count: 2 }],
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const res = await getReviewStats();
+
+    const [url] = fetchMock.mock.calls[0];
+    expect(url).toBe("https://example.test/api/review/stats");
+    expect(res.total_reviews).toBe(12);
+    expect(res.streak_days).toBe(3);
+    expect(res.daily[0].count).toBe(2);
   });
 });
