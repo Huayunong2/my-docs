@@ -446,7 +446,7 @@ impl Database {
                 "
             CREATE TABLE IF NOT EXISTS knowledge_cards (
                 id                TEXT PRIMARY KEY,
-                card_type         TEXT NOT NULL CHECK(card_type IN ('fact', 'method', 'concept', 'decision', 'case', 'quote', 'principle')),
+                card_type         TEXT NOT NULL CHECK(card_type IN ('fact', 'method', 'concept', 'decision', 'case', 'quote', 'principle', 'snippet')),
                 status            TEXT NOT NULL CHECK(status IN ('draft', 'confirmed', 'outdated')),
                 title             TEXT NOT NULL,
                 content           TEXT NOT NULL,
@@ -600,6 +600,61 @@ impl Database {
             }
             self.conn
                 .execute("INSERT INTO schema_version (version) VALUES (7)", [])?;
+        }
+
+        if current < 8 {
+            // 扩展 card_type 合法值：新增 snippet（代码/API 片段）。
+            // SQLite 无法直接修改 CHECK 约束，需要重建 knowledge_cards 表。
+            self.conn.execute_batch(
+                "
+                BEGIN;
+                ALTER TABLE knowledge_cards RENAME TO knowledge_cards_old;
+                CREATE TABLE knowledge_cards (
+                    id                  TEXT PRIMARY KEY,
+                    card_type           TEXT NOT NULL CHECK(card_type IN ('fact', 'method', 'concept', 'decision', 'case', 'quote', 'principle', 'snippet')),
+                    status              TEXT NOT NULL CHECK(status IN ('draft', 'confirmed', 'outdated')),
+                    title               TEXT NOT NULL,
+                    content             TEXT NOT NULL,
+                    tags                TEXT DEFAULT '[]',
+                    source_article_id   TEXT DEFAULT '',
+                    source_review_id    TEXT DEFAULT '',
+                    source_date         TEXT DEFAULT '',
+                    source_excerpt      TEXT DEFAULT '',
+                    created_at          TEXT NOT NULL,
+                    updated_at          TEXT NOT NULL,
+                    review_state        TEXT NOT NULL DEFAULT 'new',
+                    review_interval_days REAL NOT NULL DEFAULT 0,
+                    review_ease         REAL NOT NULL DEFAULT 2.5,
+                    review_count        INTEGER NOT NULL DEFAULT 0,
+                    last_reviewed_at    TEXT NOT NULL DEFAULT '',
+                    next_review_at      TEXT NOT NULL DEFAULT '',
+                    usage_count         INTEGER NOT NULL DEFAULT 0,
+                    last_used_at        TEXT NOT NULL DEFAULT '',
+                    related_ids         TEXT NOT NULL DEFAULT '[]',
+                    first_reviewed_at   TEXT NOT NULL DEFAULT ''
+                );
+                INSERT INTO knowledge_cards
+                    (id, card_type, status, title, content, tags, source_article_id, source_review_id,
+                     source_date, source_excerpt, created_at, updated_at, review_state,
+                     review_interval_days, review_ease, review_count, last_reviewed_at, next_review_at,
+                     usage_count, last_used_at, related_ids, first_reviewed_at)
+                    SELECT id, card_type, status, title, content, tags, source_article_id, source_review_id,
+                     source_date, source_excerpt, created_at, updated_at, review_state,
+                     review_interval_days, review_ease, review_count, last_reviewed_at, next_review_at,
+                     usage_count, last_used_at, related_ids, first_reviewed_at
+                    FROM knowledge_cards_old;
+                DROP TABLE knowledge_cards_old;
+                CREATE INDEX IF NOT EXISTS idx_knowledge_cards_type_status
+                    ON knowledge_cards(card_type, status, updated_at DESC);
+                CREATE INDEX IF NOT EXISTS idx_knowledge_cards_source
+                    ON knowledge_cards(source_date, source_article_id, source_review_id);
+                CREATE INDEX IF NOT EXISTS idx_knowledge_cards_status_updated
+                    ON knowledge_cards(status, updated_at DESC);
+                COMMIT;
+                ",
+            )?;
+            self.conn
+                .execute("INSERT INTO schema_version (version) VALUES (8)", [])?;
         }
 
         Ok(())
@@ -1360,8 +1415,9 @@ impl KnowledgePersistence<'_> {
         &mut self,
         id: &str,
         grade: &str,
+        stability: f64,
+        difficulty: f64,
         interval_days: f64,
-        ease: f64,
         next_review_at: &str,
         today: &str,
     ) -> Result<Option<KnowledgeCard>> {
@@ -1370,12 +1426,9 @@ impl KnowledgePersistence<'_> {
             "UPDATE knowledge_cards SET review_interval_days=?1, review_ease=?2,
              review_count=review_count+1, last_reviewed_at=?3, next_review_at=?4,
              first_reviewed_at = CASE WHEN review_count = 0 THEN ?3 ELSE first_reviewed_at END,
-             review_state = CASE
-                WHEN ?1 >= 21 AND ?2 >= 2.5 THEN 'mature'
-                ELSE 'learning'
-             END
+             review_state = CASE WHEN ?1 >= 21 THEN 'mature' ELSE 'learning' END
              WHERE id=?5 AND status='confirmed'",
-            params![interval_days, ease, today, next_review_at, id],
+            params![stability, difficulty, today, next_review_at, id],
         )?;
         if updated == 0 {
             return Ok(None);
@@ -1383,7 +1436,7 @@ impl KnowledgePersistence<'_> {
         tx.execute(
             "INSERT INTO review_log (card_id, grade, interval_days, ease, next_review_at, reviewed_at)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-            params![id, grade, interval_days, ease, next_review_at, today],
+            params![id, grade, interval_days, difficulty, next_review_at, today],
         )?;
         tx.commit()?;
         self.find(id)
@@ -1689,7 +1742,7 @@ fn valid_knowledge_draft(draft: &KnowledgeCardDraft) -> bool {
     matches!(draft.status.as_str(), "draft" | "confirmed" | "outdated")
         && matches!(
             draft.card_type.as_str(),
-            "fact" | "method" | "concept" | "decision" | "case" | "quote" | "principle"
+            "fact" | "method" | "concept" | "decision" | "case" | "quote" | "principle" | "snippet"
         )
         && !draft.title.trim().is_empty()
         && !draft.content.trim().is_empty()
@@ -1730,7 +1783,7 @@ fn validate_archive(archive: &PortableArchiveInput) -> std::result::Result<(), A
             || !matches!(card.status.as_str(), "draft" | "confirmed" | "outdated")
             || !matches!(
                 card.card_type.as_str(),
-                "fact" | "method" | "concept" | "decision" | "case" | "quote" | "principle"
+                "fact" | "method" | "concept" | "decision" | "case" | "quote" | "principle" | "snippet"
             )
     }) {
         return Err(ArchiveImportError::Invalid(
@@ -2017,7 +2070,7 @@ mod migration_tests {
                 row.get(0)
             })
             .expect("read schema version");
-        assert_eq!(version, 7);
+        assert_eq!(version, 8);
 
         // 已迁移的库再次 initialize 必须幂等，不报重复列错误
         db.initialize().expect("re-initialize is idempotent");
@@ -2050,7 +2103,7 @@ mod migration_tests {
                 row.get(0)
             })
             .expect("read schema version");
-        assert_eq!(version, 7);
+        assert_eq!(version, 8);
     }
 }
 
@@ -2152,7 +2205,7 @@ mod migration_v5_tests {
                 row.get(0)
             })
             .expect("read schema version");
-        assert_eq!(version, 7);
+        assert_eq!(version, 8);
         db.initialize()
             .expect("re-initialize after v5 is idempotent");
     }

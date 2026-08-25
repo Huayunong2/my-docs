@@ -161,6 +161,12 @@ fn default_review_ease() -> f64 {
 }
 
 #[derive(Debug, Serialize)]
+pub(crate) struct KnowledgeTagCount {
+    pub(crate) tag: String,
+    pub(crate) count: i64,
+}
+
+#[derive(Debug, Serialize)]
 pub(crate) struct ReviewStats {
     pub(crate) due: i64,
     pub(crate) reviewed_today: i64,
@@ -333,6 +339,7 @@ pub(crate) struct KnowledgeListQuery {
     pub(crate) status: Option<String>,
     pub(crate) q: Option<String>,
     pub(crate) usage: Option<String>,
+    pub(crate) tag: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]

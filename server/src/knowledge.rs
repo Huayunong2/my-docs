@@ -6,6 +6,7 @@ use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::Json;
 use serde_json::Value;
+use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 
 type AppState = Arc<Mutex<Database>>;
@@ -13,7 +14,7 @@ type AppState = Arc<Mutex<Database>>;
 fn valid_card_type(value: &str) -> bool {
     matches!(
         value,
-        "fact" | "method" | "concept" | "decision" | "case" | "quote" | "principle"
+        "fact" | "method" | "concept" | "decision" | "case" | "quote" | "principle" | "snippet"
     )
 }
 
@@ -104,6 +105,7 @@ pub(crate) async fn list_cards(
     let card_type_filter = q.card_type.unwrap_or_default();
     let status_filter = q.status.unwrap_or_default();
     let usage_filter = q.usage.unwrap_or_default();
+    let tag_filter = q.tag.unwrap_or_default();
     let mut cards = Vec::new();
     for card in rows {
         if !card_type_filter.is_empty() && card.card_type != card_type_filter {
@@ -113,6 +115,9 @@ pub(crate) async fn list_cards(
             continue;
         }
         if usage_filter == "never_used" && card.usage_count != 0 {
+            continue;
+        }
+        if !tag_filter.is_empty() && !card.tags.iter().any(|t| t == &tag_filter) {
             continue;
         }
         if !query.is_empty() {
@@ -125,6 +130,31 @@ pub(crate) async fn list_cards(
         cards.push(card);
     }
     Ok(Json(cards))
+}
+
+/// 返回所有已用标签及其计数，按使用频次降序、同频次按名称排序。
+pub(crate) async fn list_tags(
+    State(db): State<AppState>,
+) -> Result<Json<Vec<KnowledgeTagCount>>, (StatusCode, String)> {
+    let mut db = db
+        .lock()
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let rows = db
+        .knowledge()
+        .list()
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let mut counts: BTreeMap<String, i64> = BTreeMap::new();
+    for card in rows {
+        for tag in card.tags {
+            *counts.entry(tag).or_default() += 1;
+        }
+    }
+    let mut tags: Vec<KnowledgeTagCount> = counts
+        .into_iter()
+        .map(|(tag, count)| KnowledgeTagCount { tag, count })
+        .collect();
+    tags.sort_by(|a, b| b.count.cmp(&a.count).then_with(|| a.tag.cmp(&b.tag)));
+    Ok(Json(tags))
 }
 
 pub(crate) async fn extract_cards(
