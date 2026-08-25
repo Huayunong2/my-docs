@@ -266,6 +266,10 @@ fn build_router(db: Database) -> Router {
             axum::routing::get(knowledge::list_cards).post(knowledge::create_card),
         )
         .route(
+            "/knowledge-cards/tags",
+            axum::routing::get(knowledge::list_tags),
+        )
+        .route(
             "/knowledge-cards/extract",
             axum::routing::post(knowledge::extract_cards),
         )

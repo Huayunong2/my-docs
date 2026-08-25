@@ -324,11 +324,11 @@ fn grading_applies_interval_and_ease_updates() {
     // good：首次复习 interval=3、ease 不变，next_review_at 为今天+3 天
     let graded = db
         .knowledge()
-        .apply_grade(&card.id, "good", 3.0, 2.5, "2026-07-19", "2026-07-16")
+        .apply_grade(&card.id, "good", 3.0, 5.0, 3.0, "2026-07-19", "2026-07-16")
         .expect("apply good grade")
         .expect("card exists");
     assert_eq!(graded.review_interval_days, 3.0);
-    assert_eq!(graded.review_ease, 2.5);
+    assert_eq!(graded.review_ease, 5.0);
     assert_eq!(graded.review_count, 1);
     assert_eq!(graded.last_reviewed_at, "2026-07-16");
     assert_eq!(graded.next_review_at, "2026-07-19");
@@ -350,11 +350,11 @@ fn grading_applies_interval_and_ease_updates() {
     // again：next_review_at 回到今天、ease 下降、interval 归 0
     let again = db
         .knowledge()
-        .apply_grade(&card.id, "again", 0.0, 2.3, "2026-07-16", "2026-07-19")
+        .apply_grade(&card.id, "again", 0.0, 5.0, 0.0, "2026-07-16", "2026-07-19")
         .expect("apply again grade")
         .expect("card exists");
     assert_eq!(again.review_interval_days, 0.0);
-    assert_eq!(again.review_ease, 2.3);
+    assert_eq!(again.review_ease, 5.0);
     assert_eq!(again.review_count, 2);
     assert_eq!(again.next_review_at, "2026-07-16");
 }
@@ -367,7 +367,7 @@ fn status_change_away_from_confirmed_clears_next_review_at() {
         .save(card_draft("confirmed"))
         .expect("save card");
     db.knowledge()
-        .apply_grade(&card.id, "good", 3.0, 2.5, "2026-07-19", "2026-07-16")
+        .apply_grade(&card.id, "good", 3.0, 5.0, 3.0, "2026-07-19", "2026-07-16")
         .expect("apply grade");
 
     let mut draft = card_draft("draft");
@@ -441,7 +441,7 @@ fn portable_archive_round_trip_preserves_review_and_usage_fields() {
         .expect("save card");
     source
         .knowledge()
-        .apply_grade(&card.id, "good", 3.0, 2.5, "2026-07-19", "2026-07-16")
+        .apply_grade(&card.id, "good", 3.0, 5.0, 3.0, "2026-07-19", "2026-07-16")
         .expect("apply grade");
     source
         .knowledge()
@@ -467,7 +467,7 @@ fn portable_archive_round_trip_preserves_review_and_usage_fields() {
         .expect("find card")
         .expect("restored card");
     assert_eq!(restored.review_interval_days, 3.0);
-    assert_eq!(restored.review_ease, 2.5);
+    assert_eq!(restored.review_ease, 5.0);
     assert_eq!(restored.review_count, 1);
     assert_eq!(restored.last_reviewed_at, "2026-07-16");
     assert_eq!(restored.next_review_at, "2026-07-19");
@@ -526,7 +526,7 @@ fn grading_a_non_confirmed_card_does_not_apply_progress() {
 
     let graded = db
         .knowledge()
-        .apply_grade(&card.id, "good", 3.0, 2.5, "2026-07-19", "2026-07-16")
+        .apply_grade(&card.id, "good", 3.0, 5.0, 3.0, "2026-07-19", "2026-07-16")
         .expect("apply grade on draft");
     assert!(
         graded.is_none(),
@@ -550,7 +550,7 @@ fn importing_an_archive_over_an_existing_card_keeps_local_review_progress() {
         .save(card_draft("confirmed"))
         .expect("save card");
     db.knowledge()
-        .apply_grade(&card.id, "good", 3.0, 2.5, "2026-07-19", "2026-07-16")
+        .apply_grade(&card.id, "good", 3.0, 5.0, 3.0, "2026-07-19", "2026-07-16")
         .expect("apply grade");
     db.knowledge()
         .touch(&card.id, "2026-07-16")
@@ -605,7 +605,7 @@ fn grading_writes_review_history_log_and_advances_state() {
     // 首次评分：state new → learning，review_log 落一条（经 stats 间接验证）
     let graded = db
         .knowledge()
-        .apply_grade(&card.id, "good", 3.0, 2.5, "2026-07-19", "2026-07-16")
+        .apply_grade(&card.id, "good", 3.0, 5.0, 3.0, "2026-07-19", "2026-07-16")
         .expect("apply grade")
         .expect("card exists");
     assert_eq!(graded.review_state, "learning");
@@ -619,7 +619,7 @@ fn grading_writes_review_history_log_and_advances_state() {
     // 长间隔 + 高 ease → mature
     let mature = db
         .knowledge()
-        .apply_grade(&card.id, "easy", 30.0, 2.7, "2026-08-15", "2026-07-16")
+        .apply_grade(&card.id, "easy", 30.0, 5.0, 30.0, "2026-08-15", "2026-07-16")
         .expect("apply grade")
         .expect("card exists");
     assert_eq!(mature.review_state, "mature");
@@ -628,7 +628,7 @@ fn grading_writes_review_history_log_and_advances_state() {
     // again 打回 learning
     let back = db
         .knowledge()
-        .apply_grade(&card.id, "again", 0.0, 2.5, "2026-07-16", "2026-07-16")
+        .apply_grade(&card.id, "again", 0.0, 5.0, 0.0, "2026-07-16", "2026-07-16")
         .expect("apply grade")
         .expect("card exists");
     assert_eq!(back.review_state, "learning");
@@ -648,16 +648,16 @@ fn review_stats_report_totals_streak_and_daily_series() {
 
     // 07-14 复习 2 次（两张卡），07-15 复习 1 次，07-16（today）复习 1 次
     db.knowledge()
-        .apply_grade(&first.id, "good", 3.0, 2.5, "2026-07-17", "2026-07-14")
+        .apply_grade(&first.id, "good", 3.0, 5.0, 3.0, "2026-07-17", "2026-07-14")
         .expect("grade");
     db.knowledge()
-        .apply_grade(&second.id, "hard", 1.0, 2.35, "2026-07-15", "2026-07-14")
+        .apply_grade(&second.id, "hard", 1.0, 5.0, 1.0, "2026-07-15", "2026-07-14")
         .expect("grade");
     db.knowledge()
-        .apply_grade(&first.id, "good", 8.0, 2.5, "2026-07-22", "2026-07-15")
+        .apply_grade(&first.id, "good", 8.0, 5.0, 8.0, "2026-07-22", "2026-07-15")
         .expect("grade");
     db.knowledge()
-        .apply_grade(&first.id, "good", 20.0, 2.5, "2026-08-05", "2026-07-16")
+        .apply_grade(&first.id, "good", 20.0, 5.0, 20.0, "2026-08-05", "2026-07-16")
         .expect("grade");
 
     let stats = db
@@ -693,7 +693,7 @@ fn review_stats_streak_starts_from_yesterday_when_today_has_no_review() {
         .save(card_draft("confirmed"))
         .expect("save card");
     db.knowledge()
-        .apply_grade(&card.id, "good", 3.0, 2.5, "2026-07-19", "2026-07-15")
+        .apply_grade(&card.id, "good", 3.0, 5.0, 3.0, "2026-07-19", "2026-07-15")
         .expect("grade yesterday");
 
     let stats = db
@@ -717,7 +717,7 @@ fn due_queue_limits_new_cards_to_daily_cap() {
     due_card.title = "到期卡".into();
     let due_card = db.knowledge().save(due_card).expect("save due card");
     db.knowledge()
-        .apply_grade(&due_card.id, "good", 3.0, 2.5, "2026-07-01", "2026-07-01")
+        .apply_grade(&due_card.id, "good", 3.0, 5.0, 3.0, "2026-07-01", "2026-07-01")
         .expect("grade due card");
 
     let due = db.knowledge().due(100, "2026-07-16").expect("due cards");
@@ -739,7 +739,7 @@ fn review_stats_reports_new_card_cap_and_upcoming_days() {
         .expect("save card");
     // 明天到期
     db.knowledge()
-        .apply_grade(&card.id, "good", 3.0, 2.5, "2026-07-17", "2026-07-14")
+        .apply_grade(&card.id, "good", 3.0, 5.0, 3.0, "2026-07-17", "2026-07-14")
         .expect("grade");
 
     let stats = db.knowledge().review_stats("2026-07-16").expect("stats");
@@ -761,10 +761,10 @@ fn review_history_and_heatmap_track_per_day_counts() {
         .save(card_draft("confirmed"))
         .expect("save card");
     db.knowledge()
-        .apply_grade(&card.id, "good", 3.0, 2.5, "2026-07-19", "2026-07-16")
+        .apply_grade(&card.id, "good", 3.0, 5.0, 3.0, "2026-07-19", "2026-07-16")
         .expect("grade");
     db.knowledge()
-        .apply_grade(&card.id, "again", 0.0, 2.3, "2026-07-16", "2026-07-16")
+        .apply_grade(&card.id, "again", 0.0, 5.0, 0.0, "2026-07-16", "2026-07-16")
         .expect("grade again");
 
     let history = db.knowledge().review_history(&card.id).expect("history");
@@ -830,7 +830,7 @@ fn daily_new_card_quota_accrues_across_refreshes() {
     // 今天学 15 张（good 后 next_review_at 非空，退出新卡队列）
     for id in ids.iter().take(15) {
         db.knowledge()
-            .apply_grade(id, "good", 3.0, 2.5, "2026-07-19", "2026-07-16")
+            .apply_grade(id, "good", 3.0, 5.0, 3.0, "2026-07-19", "2026-07-16")
             .expect("grade new card");
     }
     // 今天已学 15 张，剩余额度 5 → due 最多再进 5 张新卡
