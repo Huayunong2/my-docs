@@ -1,5 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { motion } from "framer-motion";
+import { useAutoAnimate } from "@formkit/auto-animate/react";
+import CodeMirror from "@uiw/react-codemirror";
+import { markdown } from "@codemirror/lang-markdown";
+import { Line, LineChart, ResponsiveContainer, Tooltip } from "recharts";
+import { Command } from "cmdk";
 import {
   BookMarked,
   CheckCircle2,
@@ -15,6 +20,7 @@ import {
   Sparkles,
   Tags,
   Trash2,
+  X,
 } from "lucide-react";
 import * as api from "../lib/api";
 import type { Page } from "../App";
@@ -23,6 +29,7 @@ import { cardStatusLabels as statusLabels, cardTypeLabels as typeLabels } from "
 import { normalizeTags } from "../lib/tags";
 import MarkdownContent from "./MarkdownContent";
 import { useConfirmDialog } from "./ui/Feedback";
+import { Tabs, TabsList, TabsTrigger } from "./ui/tabs";
 
 const typeOptions = Object.entries(typeLabels) as Array<[KnowledgeCardType, string]>;
 const statusOptions = Object.entries(statusLabels) as Array<[KnowledgeCardStatus, string]>;
@@ -74,12 +81,15 @@ function compact(value: string) {
   return value.trim().replace(/\s+/g, "").toLowerCase();
 }
 
-export default function KnowledgePage({ onEditDate, onNavigate, initialCardId, initialNonce }: {
+export default function KnowledgePage({ onEditDate, onNavigate, initialCardId, initialNonce, dark, onWikiLink }: {
   onEditDate: (date: string) => void;
   onNavigate: (page: Page) => void;
   initialCardId?: string;
   initialNonce?: number;
+  dark?: boolean;
+  onWikiLink?: (title: string) => void;
 }) {
+  const [listParent] = useAutoAnimate();
   const [cards, setCards] = useState<KnowledgeCard[]>([]);
   const [allCards, setAllCards] = useState<KnowledgeCard[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -88,6 +98,9 @@ export default function KnowledgePage({ onEditDate, onNavigate, initialCardId, i
   const [activeStatus, setActiveStatus] = useState<KnowledgeCardStatus>("draft");
   const [typeFilter, setTypeFilter] = useState("");
   const [usageFilter, setUsageFilter] = useState<"" | "never_used">("");
+  const [tagFilter, setTagFilter] = useState("");
+  const [tagCounts, setTagCounts] = useState<api.KnowledgeTagCount[]>([]);
+  const [tagInput, setTagInput] = useState("");
   const [query, setQuery] = useState("");
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -97,7 +110,8 @@ export default function KnowledgePage({ onEditDate, onNavigate, initialCardId, i
   const [notice, setNotice] = useState("");
   const [sourceArticle, setSourceArticle] = useState<Article | null>(null);
   const [sourceLoading, setSourceLoading] = useState(false);
-  const [relatedText, setRelatedText] = useState("");
+  const [draftRelatedIds, setDraftRelatedIds] = useState<string[]>([]);
+  const [relatedQuery, setRelatedQuery] = useState("");
   const [reviewHistory, setReviewHistory] = useState<api.ReviewHistoryEntry[]>([]);
   const autoSaveTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
   const lastSavedSignature = useRef("");
@@ -123,11 +137,24 @@ export default function KnowledgePage({ onEditDate, onNavigate, initialCardId, i
   }, [allCards, draft.content, draft.title, selectedId]);
 
   const loadCards = async (keepSelection = true) => {
+    // 切换筛选/状态前先落盘未保存的编辑，避免列表刷新时覆盖草稿。
+    // related_ids 不在 payloadFromDraft 内，后端 update 会保留原值，不会误清。
+    if (dirty && selectedId) {
+      const pending = payloadFromDraft(draft);
+      if (pending.title && pending.content) {
+        try {
+          await api.updateKnowledgeCard(selectedId, pending);
+          setDirty(false);
+        } catch {
+          // 保存失败不阻断列表刷新；内容会留待下次 auto-save 重试
+        }
+      }
+    }
     setLoading(true);
     setError("");
     try {
       const [list, fullList] = await Promise.all([
-        api.listKnowledgeCards({ card_type: typeFilter, status: activeStatus, q: query.trim(), usage: usageFilter || undefined }),
+        api.listKnowledgeCards({ card_type: typeFilter, status: activeStatus, q: query.trim(), usage: usageFilter || undefined, tag: tagFilter || undefined }),
         api.listKnowledgeCards(),
       ]);
       setCards(list);
@@ -146,7 +173,15 @@ export default function KnowledgePage({ onEditDate, onNavigate, initialCardId, i
     }
   };
 
-  useEffect(() => { loadCards(false); }, [activeStatus, typeFilter, usageFilter]);
+  useEffect(() => { loadCards(false); }, [activeStatus, typeFilter, usageFilter, tagFilter]);
+
+  useEffect(() => {
+    let cancelled = false;
+    api.listKnowledgeTags()
+      .then((tags) => { if (!cancelled) setTagCounts(tags); })
+      .catch(() => { if (!cancelled) setTagCounts([]); });
+    return () => { cancelled = true; };
+  }, []);
 
   useEffect(() => {
     if (!selectedCard?.source_article_id) {
@@ -195,13 +230,37 @@ export default function KnowledgePage({ onEditDate, onNavigate, initialCardId, i
     setSaveState("idle");
   };
 
+  const parsedTags = useMemo(
+    () => normalizeTags(draft.tagsText.split(",").map((tag) => tag.trim()).filter(Boolean)),
+    [draft.tagsText]
+  );
+
+  const addTag = (raw?: string) => {
+    const input = (raw ?? tagInput).trim().replace(/^#/, "");
+    const parts = input.split(",").map((part) => part.trim()).filter(Boolean);
+    if (!parts.length) return;
+    const next = [...parsedTags];
+    for (const part of parts) {
+      const tag = normalizeTags([part])[0];
+      if (tag && !next.includes(tag)) next.push(tag);
+    }
+    updateDraft({ tagsText: next.join(", ") });
+    setTagInput("");
+  };
+
+  const removeTag = (tag: string) => {
+    updateDraft({ tagsText: parsedTags.filter((item) => item !== tag).join(", ") });
+  };
+
+  const tagSuggestions = useMemo(
+    () => tagCounts.filter(({ tag }) => !parsedTags.includes(tag)).slice(0, 8),
+    [tagCounts, parsedTags]
+  );
+
   const openCard = (card: KnowledgeCard) => {
     setSelectedId(card.id);
     setDraft(toDraft(card));
-    setRelatedText(((card.declared_related_ids?.length ? card.declared_related_ids : card.related_ids) || [])
-      .map((id) => allCards.find((item) => item.id === id)?.title || "")
-      .filter(Boolean)
-      .join(", "));
+    setDraftRelatedIds(card.declared_related_ids?.length ? card.declared_related_ids : card.related_ids || []);
     setDirty(false);
     setNotice("");
     setSaveState("idle");
@@ -244,29 +303,28 @@ export default function KnowledgePage({ onEditDate, onNavigate, initialCardId, i
   }, [selectedId]);
 
   const relatedChips = useMemo(
-    () => (selectedCard?.related_ids || [])
+    () => draftRelatedIds
       .map((id) => allCards.find((card) => card.id === id))
       .filter((card): card is KnowledgeCard => !!card),
-    [allCards, selectedCard]
+    [allCards, draftRelatedIds]
   );
+
+  const relatedCandidates = useMemo(() => {
+    const q = relatedQuery.trim().toLowerCase();
+    return allCards
+      .filter((card) => card.id !== selectedId && !draftRelatedIds.includes(card.id))
+      .filter((card) => !q || card.title.toLowerCase().includes(q))
+      .slice(0, 8);
+  }, [allCards, selectedId, draftRelatedIds, relatedQuery]);
 
   const startNew = () => {
     setSelectedId(null);
     setDraft({ ...emptyDraft, status: activeStatus });
+    setDraftRelatedIds([]);
+    setRelatedQuery("");
     setDirty(false);
     setNotice("");
     setSaveState("idle");
-  };
-
-  // 关联卡标题 → id 解析
-  const resolveRelatedIds = (text: string): string[] => {
-    const titles = text.split(",").map((title) => title.trim()).filter(Boolean);
-    const ids: string[] = [];
-    for (const title of titles) {
-      const matched = allCards.find((card) => card.id !== selectedId && card.title === title);
-      if (matched && !ids.includes(matched.id)) ids.push(matched.id);
-    }
-    return ids;
   };
 
   const saveNewCard = async () => {
@@ -278,8 +336,8 @@ export default function KnowledgePage({ onEditDate, onNavigate, initialCardId, i
     setSaving(true);
     try {
       const saved = selectedId
-        ? await api.updateKnowledgeCard(selectedId, { ...payload, related_ids: resolveRelatedIds(relatedText) })
-        : await api.createKnowledgeCard({ ...payload, related_ids: resolveRelatedIds(relatedText) });
+        ? await api.updateKnowledgeCard(selectedId, { ...payload, related_ids: draftRelatedIds })
+        : await api.createKnowledgeCard({ ...payload, related_ids: draftRelatedIds });
       await loadCards(true);
       setSelectedId(saved.id);
       setDraft(toDraft(saved));
@@ -359,18 +417,15 @@ export default function KnowledgePage({ onEditDate, onNavigate, initialCardId, i
           </h2>
           <p className="mt-1 text-sm text-gray-400 dark:text-gray-400">把真实记录沉淀成可追溯、可确认的知识卡片</p>
         </div>
-        <div className="ui-segment grid w-full grid-cols-3 md:w-[420px]">
-          {statusOptions.map(([status, label]) => (
-            <button
-              key={status}
-              type="button"
-              onClick={() => setActiveStatus(status)}
-              className={["ui-segment-item", activeStatus === status ? "ui-segment-item-active" : ""].join(" ")}
-            >
-              {label} <span className="font-mono text-[11px] opacity-70">{counts[status]}</span>
-            </button>
-          ))}
-        </div>
+        <Tabs value={activeStatus} onValueChange={(v) => setActiveStatus(v as KnowledgeCardStatus)} className="md:w-[420px]">
+          <TabsList className="grid w-full grid-cols-3">
+            {statusOptions.map(([status, label]) => (
+              <TabsTrigger key={status} value={status}>
+                {label} <span className="font-mono text-[11px] opacity-70">{counts[status]}</span>
+              </TabsTrigger>
+            ))}
+          </TabsList>
+        </Tabs>
       </header>
 
       {error && <div className="ui-alert-bad mb-4">{error}</div>}
@@ -423,6 +478,35 @@ export default function KnowledgePage({ onEditDate, onNavigate, initialCardId, i
               <FilterButton active={!usageFilter} onClick={() => setUsageFilter("")}>全部卡片</FilterButton>
               <FilterButton active={usageFilter === "never_used"} onClick={() => setUsageFilter(usageFilter === "never_used" ? "" : "never_used")}>从未使用</FilterButton>
             </div>
+          </div>
+          <div className="mt-4">
+            <div className="mb-2 flex items-center justify-between">
+              <div className="text-[11px] font-semibold uppercase tracking-wide text-gray-400 dark:text-gray-500">标签</div>
+              {tagFilter && (
+                <button type="button" onClick={() => setTagFilter("")} className="text-[11px] font-medium text-accent hover:underline">清除</button>
+              )}
+            </div>
+            {tagCounts.length === 0 ? (
+              <p className="text-xs text-gray-400 dark:text-gray-500">暂无标签</p>
+            ) : (
+              <div className="flex max-h-44 flex-wrap gap-1.5 overflow-y-auto">
+                {tagCounts.map(({ tag, count }) => (
+                  <button
+                    key={tag}
+                    type="button"
+                    onClick={() => setTagFilter(tagFilter === tag ? "" : tag)}
+                    className={[
+                      "inline-flex items-center gap-1 rounded-lg border px-2 py-1 text-xs font-medium transition-colors",
+                      tagFilter === tag
+                        ? "border-accent/30 bg-accent-light text-accent dark:bg-accent-light/20"
+                        : "border-gray-200/70 bg-white text-gray-500 hover:bg-gray-50 dark:border-white/10 dark:bg-white/[0.04] dark:text-gray-400 dark:hover:bg-white/10",
+                    ].join(" ")}
+                  >
+                    #{tag} <span className="opacity-60">{count}</span>
+                  </button>
+                ))}
+              </div>
+            )}
           </div>
           <button type="button" onClick={startNew} className="ui-button-primary mt-4 w-full">
             <Plus size={14} /> 新建卡片
@@ -496,7 +580,7 @@ export default function KnowledgePage({ onEditDate, onNavigate, initialCardId, i
               </div>
             </div>
           ) : (
-            <div className="space-y-1 pr-1 xl:min-h-0 xl:flex-1 xl:overflow-y-auto">
+            <div ref={listParent} className="space-y-1 pr-1 xl:min-h-0 xl:flex-1 xl:overflow-y-auto">
               {cards.map((card) => (
                 <button
                   key={card.id}
@@ -585,16 +669,92 @@ export default function KnowledgePage({ onEditDate, onNavigate, initialCardId, i
               <Picker label="类型" value={draft.card_type} options={typeOptions} onChange={(value) => updateDraft({ card_type: value as KnowledgeCardType })} />
               <Picker label="状态" value={draft.status} options={statusOptions} onChange={(value) => updateDraft({ status: value as KnowledgeCardStatus })} />
             </div>
-            <textarea
-              value={draft.content}
-              onChange={(e) => updateDraft({ content: e.target.value })}
-              placeholder="沉淀事实、方法、概念、决策依据或案例..."
-              className="ui-textarea min-h-[150px] font-mono text-sm leading-7"
-            />
-            <input value={draft.tagsText} onChange={(e) => updateDraft({ tagsText: e.target.value })} placeholder="标签，用逗号分隔" className="ui-field h-10" />
-            {selectedId && (
-              <input value={relatedText} onChange={(e) => { setRelatedText(e.target.value); setDirty(true); setSaveState("idle"); }} placeholder="关联卡片（逗号分隔的标题）" className="ui-field h-10" />
-            )}
+            <div className="ui-editor-surface overflow-hidden">
+              <CodeMirror
+                value={draft.content}
+                onChange={(value) => updateDraft({ content: value })}
+                extensions={[markdown()]}
+                placeholder="沉淀事实、方法、概念、决策依据或案例..."
+                theme={dark ? "dark" : "light"}
+                height="200px"
+                basicSetup={{ lineNumbers: false, foldGutter: false, highlightActiveLine: false }}
+              />
+            </div>
+            <div>
+              <div className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-gray-400 dark:text-gray-500">标签</div>
+              <div className="flex flex-wrap items-center gap-1.5 rounded-lg border border-gray-200 bg-white px-2 py-1.5 dark:border-white/10 dark:bg-gray-950/30">
+                {parsedTags.map((tag) => (
+                  <button
+                    key={tag}
+                    type="button"
+                    onClick={() => removeTag(tag)}
+                    className="ui-chip border-accent/20 bg-accent-light text-accent hover:bg-accent-light/80 dark:bg-accent-light/20"
+                    title="点击移除标签"
+                  >
+                    #{tag} <X size={12} />
+                  </button>
+                ))}
+                <input
+                  value={tagInput}
+                  onChange={(e) => setTagInput(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" || e.key === ",") {
+                      e.preventDefault();
+                      addTag();
+                    }
+                    if (e.key === "Backspace" && !tagInput && parsedTags.length) {
+                      removeTag(parsedTags[parsedTags.length - 1]);
+                    }
+                  }}
+                  onBlur={() => addTag()}
+                  placeholder={parsedTags.length ? "添加标签" : "添加标签"}
+                  className="h-8 min-w-[120px] flex-1 border-0 bg-transparent px-1 text-sm outline-hidden"
+                />
+              </div>
+              {tagSuggestions.length > 0 && (
+                <div className="mt-2 flex flex-wrap items-center gap-1.5">
+                  <span className="text-[11px] text-gray-400">建议</span>
+                  {tagSuggestions.map(({ tag }) => (
+                    <button
+                      key={tag}
+                      type="button"
+                      onClick={() => addTag(tag)}
+                      className="rounded-md bg-gray-100 px-2 py-0.5 text-[11px] font-medium text-gray-600 hover:bg-gray-200 dark:bg-white/[0.06] dark:text-gray-300 dark:hover:bg-white/10"
+                    >
+                      #{tag}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+            <Command shouldFilter={false} className="relative">
+              <Command.Input
+                value={relatedQuery}
+                onValueChange={setRelatedQuery}
+                placeholder="搜索并添加关联卡片…"
+                className="ui-field h-10 w-full"
+              />
+              {relatedQuery.trim() && (
+                <Command.List className="absolute left-0 right-0 top-full z-30 mt-1 max-h-48 overflow-y-auto rounded-xl border border-gray-100 bg-white p-1 shadow-modal dark:border-white/10 dark:bg-gray-900">
+                  <Command.Empty className="px-3 py-2 text-sm text-gray-400">无匹配卡片</Command.Empty>
+                  {relatedCandidates.map((card) => (
+                    <Command.Item
+                      key={card.id}
+                      value={card.title}
+                      onSelect={() => {
+                        setDraftRelatedIds((ids) => (ids.includes(card.id) ? ids : [...ids, card.id]));
+                        setRelatedQuery("");
+                        setDirty(true);
+                        setSaveState("idle");
+                      }}
+                      className="flex cursor-pointer items-center rounded-lg px-3 py-2 text-sm text-gray-700 data-[selected=true]:bg-accent-light data-[selected=true]:text-accent dark:text-gray-200"
+                    >
+                      <span className="truncate">{card.title}</span>
+                    </Command.Item>
+                  ))}
+                </Command.List>
+              )}
+            </Command>
           </div>
 
           {selectedCard && (relatedChips.length > 0 || reviewHistory.length > 1) && (
@@ -603,14 +763,26 @@ export default function KnowledgePage({ onEditDate, onNavigate, initialCardId, i
                 <div className="flex flex-wrap items-center gap-1.5">
                   <span className="text-[11px] font-semibold uppercase tracking-wide text-gray-400 dark:text-gray-500">关联</span>
                   {relatedChips.map((chip) => (
-                    <button
+                    <span
                       key={chip.id}
-                      type="button"
-                      onClick={() => openCard(chip)}
-                      className="max-w-[180px] truncate rounded-md bg-accent-light px-2 py-0.5 text-[11px] font-medium text-accent transition-colors hover:bg-accent-light/70 dark:bg-accent-light/20"
+                      className="inline-flex max-w-[220px] items-center gap-1 rounded-md bg-accent-light px-2 py-0.5 text-[11px] font-medium text-accent dark:bg-accent-light/20"
                     >
-                      {chip.title}
-                    </button>
+                      <button type="button" onClick={() => openCard(chip)} className="truncate transition-colors hover:underline">
+                        {chip.title}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setDraftRelatedIds((ids) => ids.filter((id) => id !== chip.id));
+                          setDirty(true);
+                          setSaveState("idle");
+                        }}
+                        className="text-accent/50 transition-colors hover:text-accent"
+                        title="移除关联"
+                      >
+                        <X size={11} />
+                      </button>
+                    </span>
                   ))}
                 </div>
               )}
@@ -637,7 +809,7 @@ export default function KnowledgePage({ onEditDate, onNavigate, initialCardId, i
               <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-gray-400 dark:text-gray-500">预览</div>
               <div className="min-h-[280px] flex-1 rounded-lg bg-gray-50 p-4 dark:bg-white/[0.035]">
                 {draft.content ? (
-                  <MarkdownContent content={draft.content} />
+                  <MarkdownContent content={draft.content} onWikiLink={onWikiLink} />
                 ) : (
                   <KnowledgeEmptyPreview />
                 )}
@@ -660,7 +832,7 @@ export default function KnowledgePage({ onEditDate, onNavigate, initialCardId, i
                   value={draft.source_excerpt}
                   onChange={(e) => updateDraft({ source_excerpt: e.target.value })}
                   placeholder="支撑这张卡片的原文片段"
-                  className="mt-3 min-h-[120px] flex-1 w-full resize-none rounded-lg border border-gray-200 bg-white px-3 py-2 text-xs leading-5 text-gray-600 outline-none focus:border-accent/40 dark:border-white/10 dark:bg-gray-950/30 dark:text-gray-300"
+                  className="mt-3 min-h-[120px] flex-1 w-full resize-none rounded-lg border border-gray-200 bg-white px-3 py-2 text-xs leading-5 text-gray-600 outline-hidden focus:border-accent/40 dark:border-white/10 dark:bg-gray-950/30 dark:text-gray-300"
                 />
                 <div className="mt-2 grid gap-2">
                   <input value={draft.source_date} onChange={(e) => updateDraft({ source_date: e.target.value })} placeholder="来源日期 YYYY-MM-DD" className="ui-field h-9 text-xs" />
@@ -790,37 +962,22 @@ function Picker<T extends string>({
 
 function IntervalChart({ history }: { history: api.ReviewHistoryEntry[] }) {
   if (history.length < 2) return null;
-  const max = Math.max(1, ...history.map((entry) => entry.interval_days));
-  const points = history
-    .map((entry, index) => {
-      const x = (index / (history.length - 1)) * 100;
-      const y = 26 - (entry.interval_days / max) * 24;
-      return `${x.toFixed(1)},${y.toFixed(1)}`;
-    })
-    .join(" ");
-  const last = history[history.length - 1];
-  const lastX = 100;
-  const lastY = 26 - (last.interval_days / max) * 24;
+  const data = history.map((entry, index) => ({
+    index: index + 1,
+    days: entry.interval_days,
+  }));
   return (
-    <svg
-      viewBox="0 0 100 30"
-      preserveAspectRatio="none"
-      role="img"
-      aria-label={`复习间隔趋势：最近复习间隔 ${last.interval_days.toFixed(0)} 天`}
-      className="h-9 w-full"
-    >
-      <title>{`复习间隔趋势 · 最近 ${last.interval_days.toFixed(0)} 天 · 共 ${history.length} 次复习`}</title>
-      <polyline
-        points={points}
-        fill="none"
-        stroke="currentColor"
-        strokeWidth="1.2"
-        strokeLinejoin="round"
-        strokeLinecap="round"
-        className="text-accent/70"
-      />
-      <circle cx={lastX} cy={lastY} r="1.6" className="fill-accent" />
-      <line x1="0" y1="30" x2="100" y2="30" stroke="currentColor" strokeWidth="0.4" className="text-gray-200 dark:text-white/10" />
-    </svg>
+    <div className="h-16">
+      <ResponsiveContainer width="100%" height="100%">
+        <LineChart data={data} margin={{ top: 4, right: 8, left: 0, bottom: 0 }}>
+          <Tooltip
+            contentStyle={{ borderRadius: 8, border: "1px solid rgba(0,0,0,0.08)", fontSize: 12 }}
+            formatter={(value) => [`${Number(value).toFixed(0)} 天`, "间隔"]}
+            labelFormatter={(label) => `第 ${label} 次复习`}
+          />
+          <Line type="monotone" dataKey="days" stroke="#6366f1" strokeWidth={1.5} dot={{ r: 2 }} />
+        </LineChart>
+      </ResponsiveContainer>
+    </div>
   );
 }

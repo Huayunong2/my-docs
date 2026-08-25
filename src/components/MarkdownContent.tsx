@@ -2,6 +2,7 @@ import { memo, useEffect, useId, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import rehypeSanitize from "rehype-sanitize";
 import remarkGfm from "remark-gfm";
+import remarkWikiLink from "remark-wiki-link";
 
 function textFromNode(node: unknown): string {
   if (typeof node === "string" || typeof node === "number") return String(node);
@@ -52,7 +53,7 @@ function CopyButton({ text }: { text: string }) {
 
 function PlainCodeBlock({ code, language }: { code: string; language: string }) {
   return (
-    <div className="group my-4 overflow-hidden rounded-xl border border-gray-200 bg-gray-950 shadow-sm dark:border-gray-700">
+    <div className="group my-4 overflow-hidden rounded-xl border border-gray-200 bg-gray-950 shadow-xs dark:border-gray-700">
       <div className="flex min-h-9 items-center justify-between gap-3 border-b border-white/10 bg-white/5 px-3">
         <span className="text-[11px] font-medium uppercase tracking-wide text-gray-400">
           {language || "code"}
@@ -90,7 +91,7 @@ function MermaidBlock({ chart }: { chart: string }) {
           htmlLabels: true,
           theme: document.documentElement.classList.contains("dark") ? "dark" : "default",
           themeVariables: {
-            fontFamily: "Inter, system-ui, -apple-system, Segoe UI, Roboto, sans-serif",
+            fontFamily: "Inter, system-ui, -apple-system, Segoe UI, Roboto, PingFang SC, Hiragino Sans GB, Microsoft YaHei, Noto Sans SC, Source Han Sans SC, sans-serif",
             fontSize: "12px",
           },
           flowchart: {
@@ -116,7 +117,7 @@ function MermaidBlock({ chart }: { chart: string }) {
   }, [chart, id]);
 
   return (
-    <div className="my-4 overflow-hidden rounded-lg border border-gray-200 bg-white shadow-sm dark:border-gray-700 dark:bg-gray-900">
+    <div className="my-4 overflow-hidden rounded-lg border border-gray-200 bg-white shadow-xs dark:border-gray-700 dark:bg-gray-900">
       <div className="flex min-h-9 flex-wrap items-center justify-between gap-2 border-b border-gray-100 bg-gray-50 px-3 py-1.5 dark:border-gray-800 dark:bg-gray-800/70">
         <span className="text-[11px] font-medium uppercase tracking-wide text-gray-500 dark:text-gray-400">
           mermaid
@@ -182,7 +183,7 @@ function CodeBlock({ children }: { children: unknown }) {
   return <PlainCodeBlock code={code} language={language} />;
 }
 
-function MarkdownContent({ content }: { content: string }) {
+function MarkdownContent({ content, onWikiLink }: { content: string; onWikiLink?: (title: string) => void }) {
   if (!content.trim()) {
     return <p className="text-gray-300 dark:text-gray-500 italic text-sm">输入 Markdown 内容以预览...</p>;
   }
@@ -190,7 +191,17 @@ function MarkdownContent({ content }: { content: string }) {
   return (
     <div className="text-[15px] leading-7 text-gray-700 dark:text-gray-300">
       <ReactMarkdown
-        remarkPlugins={[remarkGfm]}
+        remarkPlugins={[
+          remarkGfm,
+          [
+            remarkWikiLink,
+            {
+              aliasDivider: "|",
+              pageResolver: (name: string) => [name],
+              hrefTemplate: (permalink: string) => `wiki:${permalink}`,
+            },
+          ],
+        ]}
         rehypePlugins={[rehypeSanitize]}
         components={{
         h1: ({ children }) => <h1 className="mb-5 text-3xl font-bold leading-tight text-gray-950 dark:text-gray-50">{children}</h1>,
@@ -217,11 +228,25 @@ function MarkdownContent({ content }: { content: string }) {
           );
         },
         pre: ({ children }) => <CodeBlock>{children}</CodeBlock>,
-        a: ({ href, children }) => (
-          <a href={href} className="text-accent underline" target="_blank" rel="noopener noreferrer">
-            {children}
-          </a>
-        ),
+        a: ({ href, children }) => {
+          if (href?.startsWith("wiki:")) {
+            const title = decodeURIComponent(href.slice(5));
+            return (
+              <button
+                type="button"
+                onClick={() => onWikiLink?.(title)}
+                className="rounded bg-accent-light/60 px-1 py-0.5 font-medium text-accent underline decoration-accent/40 underline-offset-2 hover:bg-accent-light dark:bg-accent-light/20"
+              >
+                {children}
+              </button>
+            );
+          }
+          return (
+            <a href={href} className="text-accent underline" target="_blank" rel="noopener noreferrer">
+              {children}
+            </a>
+          );
+        },
         img: ({ src, alt }) => (
           <img src={src || ""} alt={alt || ""} className="rounded-lg max-w-full my-2" loading="lazy" />
         ),

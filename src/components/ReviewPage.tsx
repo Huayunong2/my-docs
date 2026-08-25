@@ -16,7 +16,8 @@ import type { KnowledgeCard, ReviewGrade } from "../lib/api";
 import { cardTypeLabels, reviewStateLabels } from "../lib/cardLabels";
 import type { Page } from "../App";
 import MarkdownContent from "./MarkdownContent";
-import { EmptyState, InlineError, LoadingState, Toast } from "./ui/Feedback";
+import { EmptyState, InlineError, LoadingState } from "./ui/Feedback";
+import { toast } from "sonner";
 
 const gradeOptions: Array<{
   grade: ReviewGrade;
@@ -68,7 +69,6 @@ export default function ReviewPage({
   const [loading, setLoading] = useState(true);
   const [grading, setGrading] = useState(false);
   const [error, setError] = useState("");
-  const [toast, setToast] = useState("");
   const [editing, setEditing] = useState<KnowledgeCard | null>(null);
   const [editTitle, setEditTitle] = useState("");
   const [editContent, setEditContent] = useState("");
@@ -118,14 +118,14 @@ export default function ReviewPage({
         if (value === "again") {
           // 当天重来：放回队列尾部，稍后再遇到；今日 due 数不减
           setCards([...remaining, updated]);
-          setToast("已安排今天稍后再次复习");
+          toast.success("已安排今天稍后再次复习");
         } else {
           setCards(remaining);
           if (remaining.length === 0) {
             // 队列已空：重新拉取以刷新统计与完成态
             void load();
           }
-          setToast("已记录，继续下一张");
+          toast.success("已记录，继续下一张");
         }
         setRevealed(false);
         setStats((s) => (s
@@ -215,7 +215,7 @@ export default function ReviewPage({
       setCards((prev) => prev.map((card) => (card.id === saved.id ? saved : card)));
       setAllCards((prev) => prev.map((card) => (card.id === saved.id ? saved : card)));
       setEditing(null);
-      setToast("卡片已更新");
+      toast.success("卡片已更新");
     } catch (e) {
       setError(api.getErrorMessage(e));
     } finally {
@@ -240,7 +240,7 @@ export default function ReviewPage({
         </div>
         {stats && (
           <div className="flex gap-2">
-            <StatChip label="今日到期" value={stats.due} highlight={stats.due > 0} />
+            <StatChip label="今日到期" value={stats.due > 0 ? stats.due : "已清空"} highlight={stats.due > 0} />
             <StatChip label="已复习" value={stats.reviewed_today} />
             <StatChip label="已沉淀" value={stats.total_confirmed} />
           </div>
@@ -438,7 +438,7 @@ export default function ReviewPage({
         ) : null}
       </div>
 
-      {toast && <Toast message={toast} tone="good" autoHideMs={5000} onClose={() => setToast("")} />}
+
 
       <AnimatePresence>
         {editing && (
@@ -510,7 +510,7 @@ export default function ReviewPage({
   );
 }
 
-function StatChip({ label, value, highlight }: { label: string; value: number; highlight?: boolean }) {
+function StatChip({ label, value, highlight }: { label: string; value: number | string; highlight?: boolean }) {
   return (
     <div className="ui-panel flex items-center gap-2 px-3 py-1.5">
       <span className="text-xs text-gray-400 dark:text-gray-500">{label}</span>

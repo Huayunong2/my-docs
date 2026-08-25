@@ -1,6 +1,91 @@
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
+@import "tailwindcss";
+
+@custom-variant dark (&:where(.dark, .dark *));
+
+@theme {
+  /* ── 颜色 ── */
+  --color-surface: #fafafa;
+  --color-surface-dark: #0f0f12;
+  --color-sidebar: rgba(250, 250, 250, 0.78);
+  --color-sidebar-dark: rgba(15, 15, 18, 0.82);
+  --color-accent: #6366f1;
+  --color-accent-hover: #4f46e5;
+  --color-accent-light: rgba(99, 102, 241, 0.08);
+  --color-warm: #f59e0b;
+  --color-warm-light: rgba(245, 158, 11, 0.1);
+
+  /* ── 阴影 ── */
+  --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.04), 0 2px 8px rgba(0, 0, 0, 0.04);
+  --shadow-card-hover: 0 1px 2px rgba(0, 0, 0, 0.06), 0 4px 16px rgba(0, 0, 0, 0.06);
+  --shadow-card-dark: 0 1px 2px rgba(0, 0, 0, 0.3), 0 2px 8px rgba(0, 0, 0, 0.2);
+  --shadow-card-dark-hover: 0 1px 2px rgba(0, 0, 0, 0.4), 0 4px 16px rgba(0, 0, 0, 0.3);
+  --shadow-modal: 0 0 0 1px rgba(0, 0, 0, 0.05), 0 8px 32px rgba(0, 0, 0, 0.12);
+
+  /* ── 字体 ── */
+  --font-sans: 'Inter', system-ui, -apple-system, 'Segoe UI', Roboto, 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans SC', 'Source Han Sans SC', sans-serif;
+
+  /* ── 圆角 ── */
+  --radius-xl: 12px;
+  --radius-2xl: 16px;
+  --radius-3xl: 20px;
+
+  /* ── 字号 ── */
+  --text-2xs: 11px;
+  --text-2xs--line-height: 16px;
+
+  /* ── 字距 ── */
+  --tracking-tight-heading: -0.02em;
+
+  /* ── 动画 ── */
+  --animate-fade-in: fadeIn 0.2s ease-out;
+  --animate-slide-up: slideUp 0.25s ease-out;
+  --animate-scale-in: scaleIn 0.15s ease-out;
+  --animate-shimmer: shimmer 1.5s infinite;
+
+  @keyframes fadeIn {
+    0% { opacity: 0; }
+    100% { opacity: 1; }
+  }
+  @keyframes slideUp {
+    0% { opacity: 0; transform: translateY(8px); }
+    100% { opacity: 1; transform: translateY(0); }
+  }
+  @keyframes scaleIn {
+    0% { opacity: 0; transform: scale(0.96); }
+    100% { opacity: 1; transform: scale(1); }
+  }
+  @keyframes shimmer {
+    0% { background-position: -200% 0; }
+    100% { background-position: 200% 0; }
+  }
+}
+
+/* ── 主题色（accent 可切换）── */
+:root[data-theme="violet"] {
+  --color-accent: #8b5cf6;
+  --color-accent-hover: #7c3aed;
+  --color-accent-light: rgba(139, 92, 246, 0.08);
+}
+:root[data-theme="blue"] {
+  --color-accent: #3b82f6;
+  --color-accent-hover: #2563eb;
+  --color-accent-light: rgba(59, 130, 246, 0.08);
+}
+:root[data-theme="emerald"] {
+  --color-accent: #10b981;
+  --color-accent-hover: #059669;
+  --color-accent-light: rgba(16, 185, 129, 0.08);
+}
+:root[data-theme="rose"] {
+  --color-accent: #f43f5e;
+  --color-accent-hover: #e11d48;
+  --color-accent-light: rgba(244, 63, 94, 0.08);
+}
+:root[data-theme="cyan"] {
+  --color-accent: #06b6d4;
+  --color-accent-hover: #0891b2;
+  --color-accent-light: rgba(6, 182, 212, 0.08);
+}
 
 @layer base {
   :root {
@@ -10,8 +95,7 @@
   * { margin: 0; padding: 0; box-sizing: border-box; }
 
   body {
-    font-family: 'Inter', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
-    @apply bg-surface text-gray-800 dark:bg-surface-dark dark:text-gray-200;
+    @apply font-sans bg-surface text-gray-800 dark:bg-surface-dark dark:text-gray-200;
     overflow: hidden; height: 100vh; min-height: 100dvh;
     -webkit-tap-highlight-color: transparent;
   }
@@ -53,15 +137,15 @@
   }
 
   .ui-field {
-    @apply w-full rounded-xl border border-gray-200/70 bg-white px-3.5 py-2.5 text-sm text-gray-800 outline-none transition-all placeholder:text-gray-400 focus:border-accent/40 focus:ring-2 focus:ring-accent/15 dark:border-white/10 dark:bg-white/[0.06] dark:text-gray-100 dark:placeholder:text-gray-500;
+    @apply w-full rounded-xl border border-gray-200/70 bg-white px-3.5 py-2.5 text-sm text-gray-800 outline-hidden transition-all placeholder:text-gray-400 focus:border-accent/40 focus:ring-2 focus:ring-accent/15 dark:border-white/10 dark:bg-white/[0.06] dark:text-gray-100 dark:placeholder:text-gray-500;
   }
 
   .ui-textarea {
-    @apply w-full resize-none rounded-xl border border-gray-200/70 bg-white px-3.5 py-2.5 text-sm leading-6 text-gray-800 outline-none transition-all placeholder:text-gray-400 focus:border-accent/40 focus:ring-2 focus:ring-accent/15 dark:border-white/10 dark:bg-white/[0.06] dark:text-gray-100 dark:placeholder:text-gray-500;
+    @apply w-full resize-none rounded-xl border border-gray-200/70 bg-white px-3.5 py-2.5 text-sm leading-6 text-gray-800 outline-hidden transition-all placeholder:text-gray-400 focus:border-accent/40 focus:ring-2 focus:ring-accent/15 dark:border-white/10 dark:bg-white/[0.06] dark:text-gray-100 dark:placeholder:text-gray-500;
   }
 
   .ui-editor-surface {
-    @apply rounded-xl border border-gray-200/70 bg-white shadow-card outline-none transition-all dark:border-white/10 dark:bg-white/[0.055] dark:shadow-card-dark;
+    @apply rounded-xl border border-gray-200/70 bg-white shadow-card outline-hidden transition-all dark:border-white/10 dark:bg-white/[0.055] dark:shadow-card-dark;
   }
 
   .ui-alert {
@@ -89,7 +173,7 @@
   }
 
   .ui-button-primary {
-    @apply inline-flex h-10 items-center justify-center gap-1.5 rounded-lg bg-accent px-3.5 text-xs font-semibold text-white shadow-sm transition-colors hover:bg-accent-hover disabled:opacity-50 sm:h-9;
+    @apply inline-flex h-10 items-center justify-center gap-1.5 rounded-lg bg-gradient-to-b from-accent to-accent-hover px-3.5 text-xs font-semibold text-white shadow-xs transition-all hover:brightness-105 disabled:opacity-50 sm:h-9;
   }
 
   .ui-button-secondary {
@@ -113,15 +197,42 @@
   }
 
   .ui-segment-item-active {
-    @apply bg-white text-accent shadow-sm dark:bg-white/[0.08] dark:text-gray-100;
+    @apply bg-white text-accent shadow-xs dark:bg-white/[0.08] dark:text-gray-100;
   }
 
   .ui-chip {
-    @apply inline-flex h-7 items-center gap-1 rounded-full border border-gray-200/70 bg-white px-2.5 text-xs font-medium text-gray-600 shadow-sm dark:border-white/10 dark:bg-white/[0.06] dark:text-gray-300;
+    @apply inline-flex h-7 items-center gap-1 rounded-full border border-gray-200/70 bg-white px-2.5 text-xs font-medium text-gray-600 shadow-xs dark:border-white/10 dark:bg-white/[0.06] dark:text-gray-300;
   }
 
   .ui-reader {
     @apply mx-auto w-full max-w-[760px] text-[15px] leading-7;
+  }
+
+  .ui-skeleton {
+    @apply relative overflow-hidden rounded-md bg-gray-200/80 dark:bg-white/10;
+  }
+
+  .ui-skeleton::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.55), transparent);
+    background-size: 200% 100%;
+    animation: shimmer 1.5s linear infinite;
+  }
+
+  .dark .ui-skeleton::after {
+    background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.08), transparent);
+    background-size: 200% 100%;
+  }
+
+  /* 可交互卡片：浮起 + 细腻阴影过渡 */
+  .card-interactive {
+    @apply cursor-pointer transition-all duration-300;
+    transition-timing-function: cubic-bezier(0.22, 1, 0.36, 1);
+  }
+  .card-interactive:hover {
+    @apply -translate-y-1 border-accent/25 shadow-card-hover dark:shadow-card-dark-hover;
   }
 }
 
@@ -129,6 +240,42 @@
 .glass {
   backdrop-filter: blur(var(--sidebar-blur));
   -webkit-backdrop-filter: blur(var(--sidebar-blur));
+}
+
+/* ── 21st.dev 风格组件 ── */
+
+/* 动画徽章：柔和呼吸 */
+.badge-pulse {
+  animation: badgePulse 2s ease-in-out infinite;
+}
+@keyframes badgePulse {
+  0%, 100% { transform: scale(1); }
+  50% { transform: scale(1.12); }
+}
+
+/* 渐变描边（Aceternity 风格） */
+.gradient-border {
+  border: 1px solid transparent;
+  background:
+    linear-gradient(#ffffff, #ffffff) padding-box,
+    linear-gradient(135deg, var(--color-accent), var(--color-accent-hover)) border-box;
+}
+.dark .gradient-border {
+  background:
+    linear-gradient(#0f0f12, #0f0f12) padding-box,
+    linear-gradient(135deg, var(--color-accent), var(--color-accent-hover)) border-box;
+}
+
+/* 毛玻璃卡片 */
+.glass-card {
+  background: rgba(255, 255, 255, 0.6);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid rgba(255, 255, 255, 0.5);
+}
+.dark .glass-card {
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.08);
 }
 
 /* Mobile bottom safe area */
@@ -159,13 +306,31 @@
 
 .mermaid-diagram .nodeLabel,
 .mermaid-diagram .edgeLabel {
-  font-family: 'Inter', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  font-family: 'Inter', system-ui, -apple-system, 'Segoe UI', Roboto, 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans SC', 'Source Han Sans SC', sans-serif;
   font-size: 12px;
 }
 
 .mermaid-diagram .label,
 .mermaid-diagram .edgeLabel {
   line-height: 1.25;
+}
+
+/* react-day-picker 暗色适配 */
+.dark .rdp-root {
+  --rdp-accent-color: #818cf8;
+  --rdp-accent-background-color: rgba(99, 102, 241, 0.2);
+  --rdp-today-color: #a5b4fc;
+}
+.dark .rdp-root,
+.dark .rdp-month_caption,
+.dark .rdp-nav {
+  color: #d1d5db;
+}
+.dark .rdp-day:not(.rdp-selected):not(.rdp-disabled) {
+  color: #e5e7eb;
+}
+.dark .rdp-day:not(.rdp-selected):not(.rdp-disabled):hover {
+  background-color: rgba(255, 255, 255, 0.08);
 }
 
 /* Mobile: main content gets bottom padding for tab bar */

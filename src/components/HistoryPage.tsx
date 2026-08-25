@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState, useCallback } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { CalendarDays, Edit3, FileText, SearchX, Trash2 } from "lucide-react";
+import { CalendarDays, Edit3, FileText, PenLine, SearchX, Trash2 } from "lucide-react";
 import * as api from "../lib/api";
 import type { Article, ArticleSummary } from "../lib/api";
 import ArticleDetail from "./ArticleDetail";
@@ -171,7 +171,20 @@ export default function HistoryPage({ onEditDate }: { onEditDate: (date: string)
           <EmptyState
             icon={SearchX}
             title="还没有任何记录"
-            description="去「记录」页写点东西吧。"
+            description="从今天开始，写下第一条吧。"
+            action={
+              <button
+                type="button"
+                onClick={() => {
+                  const d = new Date();
+                  const date = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+                  onEditDate(date);
+                }}
+                className="ui-button-primary"
+              >
+                <PenLine size={14} /> 去记录
+              </button>
+            }
           />
         )}
       </div>
@@ -265,7 +278,7 @@ function HistoryCard({
       animate={{ opacity: 1, y: 0 }}
       transition={{ delay: delay < 8 ? delay * 0.018 : 0, duration: 0.2 }}
       onClick={onOpen}
-      className={`ui-panel cursor-pointer group p-4 transition-all duration-200 hover:border-accent/25 hover:shadow-card-hover dark:hover:shadow-card-dark-hover ${selected ? "ring-2 ring-accent/50 border-accent/50" : ""}`}
+      className={`ui-panel card-interactive group p-4 ${selected ? "ring-2 ring-accent/50 border-accent/50" : ""}`}
     >
       <div className="flex h-full flex-col gap-3">
         <div className="flex items-start justify-between gap-3">

@@ -156,7 +156,7 @@ export default function ArchivePage({ onEditDate }: { onEditDate: (date: string)
                     initial={{ opacity: 0, y: 6 }}
                     animate={{ opacity: 1, y: 0 }}
                     onClick={() => openArticle(a.id)}
-                    className="p-3 rounded-xl cursor-pointer border border-gray-100 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-700/30 hover:shadow-sm transition-all duration-150"
+                    className="p-3 rounded-xl cursor-pointer border border-gray-100 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-700/30 hover:shadow-xs transition-all duration-150"
                   >
                     <div className="flex items-center gap-2">
                       <span className="text-xs text-gray-400 dark:text-gray-400 font-mono">{a.date}</span>

@@ -76,10 +76,10 @@ function DesktopSidebar({ page, onNavigate, onPrefetch, dark, onToggleDark, dueC
     <>
       <div className="px-5 pt-6 pb-4">
         <div className="flex items-center gap-2">
-          <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-accent text-white shadow-sm shadow-accent/20">
+          <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-gradient-to-br from-accent to-accent-hover text-white shadow-xs shadow-accent/25">
             <FileText size={18} strokeWidth={2.2} />
           </span>
-          <h1 className="text-lg font-bold text-gray-800 dark:text-gray-100 tracking-tight">
+          <h1 className="bg-gradient-to-r from-accent to-accent-hover bg-clip-text text-lg font-bold tracking-tight text-transparent">
             每日总结
           </h1>
         </div>
@@ -101,7 +101,7 @@ function DesktopSidebar({ page, onNavigate, onPrefetch, dark, onToggleDark, dueC
               <Icon className="mr-3" size={18} strokeWidth={page === item.id ? 2.4 : 2.1} />
               {item.label}
               {item.id === "review" && dueCount && dueCount > 0 && (
-                <span className="ml-auto rounded-full bg-accent px-1.5 py-0.5 text-[10px] font-bold leading-none text-white">
+                <span className="badge-pulse ml-auto rounded-full bg-accent px-1.5 py-0.5 text-[10px] font-bold leading-none text-white">
                   {dueCount > 99 ? "99+" : dueCount}
                 </span>
               )}
@@ -150,7 +150,7 @@ function NavButton({
         transition-colors duration-200 relative
         ${
           active
-            ? "text-accent bg-accent-light dark:bg-accent-light/20 shadow-sm"
+            ? "text-accent bg-accent-light dark:bg-accent-light/20 shadow-xs"
             : "text-gray-500 dark:text-gray-400 hover:bg-gray-100/70 dark:hover:bg-white/10"
         }
       `}
@@ -198,7 +198,7 @@ function MobileNavButton({
       <Icon size={17} strokeWidth={active ? 2.35 : 2} />
       <span className="max-w-full truncate text-[10px] font-medium leading-none">{item.label}</span>
       {badge !== undefined && badge > 0 && (
-        <span className="absolute right-0.5 top-0.5 flex h-3.5 min-w-3.5 items-center justify-center rounded-full bg-accent px-0.5 text-[9px] font-bold leading-none text-white shadow-sm">
+        <span className="absolute right-0.5 top-0.5 flex h-3.5 min-w-3.5 items-center justify-center rounded-full bg-accent px-0.5 text-[9px] font-bold leading-none text-white shadow-xs">
           {badge > 99 ? "99+" : badge}
         </span>
       )}

@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Bar, BarChart, Cell, ResponsiveContainer, Tooltip } from "recharts";
 import type { MouseEvent } from "react";
 import { motion } from "framer-motion";
-import { Activity, BarChart3, BookOpenText, Brain, CalendarCheck, CalendarClock, CalendarDays, CalendarRange, CheckCircle2, CircleHelp, Clock, Coffee, FileText, Flame, Heart, HeartPulse, LineChart, LoaderCircle, PencilLine, Plane, Repeat, ShieldCheck, Sparkles, Target, TrendingUp, Trophy, Umbrella } from "lucide-react";
+import { Activity, BarChart3, BookOpenText, Brain, CalendarCheck, CalendarClock, CalendarDays, CalendarRange, CheckCircle2, ChevronLeft, ChevronRight, CircleHelp, Clock, Coffee, FileText, Flame, Heart, HeartPulse, LineChart, LoaderCircle, PencilLine, Plane, Repeat, ShieldCheck, Sparkles, Target, TrendingUp, Trophy, Umbrella } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import * as api from "../lib/api";
 import type { MonthDayStats, Review, ReviewKind, StatsOverview, WeekReview } from "../lib/api";
@@ -10,7 +11,34 @@ import { normalizeReviewContent } from "../lib/reviewContent";
 import { generateReviewVersion, upsertReviewVersion } from "../lib/reviewGeneration";
 import type { ReviewGenerationStep } from "../lib/reviewGeneration";
 import { loadStatsSnapshot } from "../lib/statsSnapshot";
+import { useCountUp } from "../lib/useCountUp";
 import { ReviewStatusPill } from "./reviews/ReviewShared";
+
+function ChartTooltip({ active, payload, label }: {
+  active?: boolean;
+  payload?: Array<{ value?: number | string; name?: string; color?: string }>;
+  label?: string | number;
+}) {
+  if (!active || !payload || payload.length === 0) return null;
+  const p = payload[0];
+  return (
+    <div className="rounded-lg border border-gray-100 bg-white/95 px-3 py-2 text-xs shadow-card backdrop-blur dark:border-white/10 dark:bg-gray-900/95 dark:shadow-card-dark">
+      {label != null && label !== "" && (
+        <div className="mb-1 font-medium text-gray-500 dark:text-gray-400">{label}</div>
+      )}
+      <div className="flex items-center gap-2">
+        <span
+          className="h-2 w-2 shrink-0 rounded-full"
+          style={{ backgroundColor: p.color || "var(--color-accent)" }}
+        />
+        {p.name ? (
+          <span className="text-gray-600 dark:text-gray-300">{p.name}</span>
+        ) : null}
+        <span className="ml-auto font-semibold text-gray-800 dark:text-gray-100">{p.value}</span>
+      </div>
+    </div>
+  );
+}
 
 function formatDate(d: Date): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
@@ -103,6 +131,7 @@ export default function StatsPage({
   const exemptedDays = overview?.exempted_days || 0;
   const coveredDays = writtenDays + exemptedDays;
   const completion = bounds.daysInMonth > 0 ? Math.round((coveredDays / bounds.daysInMonth) * 100) : 0;
+  const animatedCompletion = useCountUp(loading ? null : completion);
   const today = todayDate();
   const selectedWeeklyReview = chooseCurrentReview(weeklyReviews);
   const selectedMonthlyReview = chooseCurrentReview(monthlyReviews);
@@ -112,7 +141,33 @@ export default function StatsPage({
     [activeDays]
   );
   const latestDay = useMemo(() => [...activeDays].reverse()[0] || null, [activeDays]);
-  const maxDayWords = Math.max(1, ...days.map((day) => day.word_count));
+  const rhythmData = useMemo(
+    () =>
+      days.map((day) => {
+        let color = "#d1d5db";
+        let value = 0;
+        let status = "空缺";
+        if (day.has_article) {
+          color = "var(--color-accent)";
+          value = day.word_count;
+          status = `${day.word_count} 字`;
+        } else if (day.exemption) {
+          const reason = day.exemption.reason;
+          color =
+            reason === "休息" || reason === "放假"
+              ? "#34d399"
+              : reason === "生病"
+                ? "#fb7185"
+                : reason === "出差"
+                  ? "#38bdf8"
+                  : "#fbbf24";
+          value = 1;
+          status = `豁免：${reason}`;
+        }
+        return { date: day.date, value, color, status };
+      }),
+    [days]
+  );
   const exemptionReasonCounts = useMemo(
     () =>
       days.reduce<Record<string, number>>((acc, day) => {
@@ -337,7 +392,7 @@ export default function StatsPage({
             className="ui-icon-button h-8 w-8"
             title="上个月"
           >
-            ‹
+            <ChevronLeft size={16} />
           </button>
           <button
             onClick={goCurrentMonth}
@@ -350,7 +405,7 @@ export default function StatsPage({
             className="ui-icon-button h-8 w-8"
             title="下个月"
           >
-            ›
+            <ChevronRight size={16} />
           </button>
         </div>
       </div>
@@ -367,21 +422,23 @@ export default function StatsPage({
       )}
 
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 md:gap-3 mb-4 md:mb-6">
-        <StatCard icon={CalendarDays} label="记录天数" value={loading ? "..." : `${writtenDays} 天`} tone="accent" />
+        <StatCard icon={CalendarDays} label="记录天数" value={loading ? "..." : `${writtenDays} 天`} tone="accent" animate />
         <StatCard
           icon={TrendingUp}
           label="连续覆盖"
           value={loading ? "..." : `${overview?.current_streak || 0} 天`}
           meta={overview?.streak_exempted_days ? `含 ${overview.streak_exempted_days} 天豁免` : "不含豁免"}
           tone="sky"
+          animate
         />
-        <StatCard icon={FileText} label="总字数" value={loading ? "..." : `${overview?.total_words || 0}`} tone="amber" />
+        <StatCard icon={FileText} label="总字数" value={loading ? "..." : `${overview?.total_words || 0}`} tone="amber" animate />
         <StatCard
           icon={ShieldCheck}
           label="豁免天数"
           value={loading ? "..." : `${exemptedDays} 天`}
           meta={dominantExemptionReason ? `主要：${dominantExemptionReason}` : undefined}
           tone={exemptionMetricTone}
+          animate
         />
       </div>
 
@@ -400,7 +457,7 @@ export default function StatsPage({
               <button
                 type="button"
                 onClick={() => onNavigate("review")}
-                className="inline-flex h-8 items-center gap-1 rounded-lg bg-accent px-3 text-xs font-semibold text-white shadow-sm shadow-accent/20 transition-colors hover:bg-accent/90"
+                className="inline-flex h-8 items-center gap-1 rounded-lg bg-accent px-3 text-xs font-semibold text-white shadow-xs shadow-accent/20 transition-colors hover:bg-accent/90"
               >
                 去复习 {reviewStats.due} 张 →
               </button>
@@ -410,30 +467,30 @@ export default function StatsPage({
             <CompactMetric icon={Repeat} label="累计复习" value={String(reviewStats.total_reviews)} unit="次" tone="accent" />
             <CompactMetric icon={Flame} label="连续复习" value={String(reviewStats.streak_days)} unit="天" tone="amber" />
             <CompactMetric icon={CheckCircle2} label="今日已复习" value={String(reviewStats.reviewed_today)} unit="张" tone="green" />
-            <CompactMetric icon={CalendarClock} label="待复习" value={String(reviewStats.due)} unit="张" tone={reviewStats.due > 0 ? "rose" : "gray"} />
+            <CompactMetric icon={CalendarClock} label="待复习" value={reviewStats.due > 0 ? String(reviewStats.due) : "无"} unit={reviewStats.due > 0 ? "张" : ""} tone={reviewStats.due > 0 ? "rose" : "gray"} />
           </div>
           <div className="mt-4">
             <div className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-gray-400 dark:text-gray-500">
               近 30 天复习趋势
             </div>
             {reviewStats.daily.some((d) => d.count > 0) ? (
-              <div className="flex h-16 items-end gap-[3px]">
-                {reviewStats.daily.map((d) => {
-                  const max = Math.max(1, ...reviewStats.daily.map((item) => item.count));
-                  return (
-                    <div
-                      key={d.date}
-                      title={`${d.date} · ${d.count} 次`}
-                      className={[
-                        "flex-1 rounded-t-[3px] transition-colors",
-                        d.count > 0
-                          ? "bg-accent/35 hover:bg-accent/60 dark:bg-accent/40 dark:hover:bg-accent/70"
-                          : "bg-gray-100 dark:bg-white/[0.04]",
-                      ].join(" ")}
-                      style={{ height: d.count > 0 ? `${Math.max(14, (d.count / max) * 100)}%` : "4px" }}
+              <div className="h-24">
+                <ResponsiveContainer width="100%" height="100%">
+                  <BarChart data={reviewStats.daily} margin={{ top: 4, right: 0, left: 0, bottom: 0 }}>
+                    <defs>
+                      <linearGradient id="accentGradient" x1="0" y1="0" x2="0" y2="1">
+                        <stop offset="0%" stopColor="var(--color-accent)" />
+                        <stop offset="100%" stopColor="var(--color-accent-hover)" />
+                      </linearGradient>
+                    </defs>
+                    <Tooltip
+                      cursor={{ fill: "var(--color-accent-light)" }}
+                      content={<ChartTooltip />}
+                      formatter={(value) => [`${value} 次`, "复习"]}
                     />
-                  );
-                })}
+                    <Bar dataKey="count" radius={[4, 4, 0, 0]} fill="url(#accentGradient)" />
+                  </BarChart>
+                </ResponsiveContainer>
               </div>
             ) : (
               <p className="rounded-lg bg-gray-50 px-3 py-4 text-center text-xs text-gray-400 dark:bg-white/[0.035] dark:text-gray-500">
@@ -512,7 +569,7 @@ export default function StatsPage({
 
       <div className="space-y-4 md:space-y-6">
         <div className="grid items-start gap-4 xl:grid-cols-[minmax(0,1.55fr)_minmax(360px,0.85fr)]">
-        <section className="min-w-0 h-[644px] sm:h-[684px] xl:h-[724px]">
+        <section className="min-w-0 h-[644px] sm:h-[684px] xl:h-[760px]">
           <div className="ui-panel flex h-full flex-col overflow-hidden">
             <div className="flex items-center justify-between gap-3 px-3 sm:px-4 py-3 border-b border-gray-100 dark:border-gray-700">
               <div>
@@ -524,10 +581,10 @@ export default function StatsPage({
               <div className="w-24 shrink-0 sm:w-36">
                 <div className="flex justify-between text-[11px] text-gray-400 dark:text-gray-400 mb-1">
                   <span>覆盖度</span>
-                  <span>{completion}%</span>
+                  <span>{animatedCompletion}%</span>
                 </div>
                 <div className="h-2 rounded-full bg-gray-100 dark:bg-gray-700 overflow-hidden">
-                  <div className="h-full rounded-full bg-accent" style={{ width: `${completion}%` }} />
+                  <div className="h-full rounded-full bg-accent transition-[width] duration-500 ease-out" style={{ width: `${animatedCompletion}%` }} />
                 </div>
               </div>
             </div>
@@ -576,7 +633,7 @@ export default function StatsPage({
           </div>
         </section>
 
-          <section className="ui-panel h-[644px] min-w-0 overflow-y-auto p-3 sm:h-[684px] sm:p-4 xl:h-[724px]">
+          <section className="ui-panel h-[644px] min-w-0 overflow-y-auto p-3 sm:h-[684px] sm:p-4 xl:h-[760px]">
             <div className="mb-4 flex items-start justify-between gap-3">
               <div>
                 <h3 className="flex items-center gap-2 text-sm font-semibold text-gray-700 dark:text-gray-200">
@@ -592,7 +649,7 @@ export default function StatsPage({
 
             <div className="grid gap-4 rounded-xl border border-gray-100 bg-gray-50/70 p-3 dark:border-white/5 dark:bg-white/[0.03] sm:grid-cols-[150px_1fr]">
               <div className="flex items-center justify-center">
-                <div className="relative h-32 w-32">
+                <div className="relative h-24 w-24">
                   <svg className="h-full w-full -rotate-90" viewBox="0 0 120 120">
                     <circle cx="60" cy="60" r="52" fill="none" strokeWidth="10" className="stroke-gray-100 dark:stroke-white/10" />
                     <circle
@@ -602,18 +659,18 @@ export default function StatsPage({
                       fill="none"
                       strokeWidth="10"
                       strokeLinecap="round"
-                      className="stroke-accent"
-                      strokeDasharray={`${Math.min(100, Math.max(0, completion)) * 3.267} 326.7`}
+                      className="stroke-accent transition-[stroke-dasharray] duration-500 ease-out"
+                      strokeDasharray={`${Math.min(100, Math.max(0, animatedCompletion)) * 3.267} 326.7`}
                     />
                   </svg>
                   <div className="absolute inset-0 flex flex-col items-center justify-center">
-                    <span className="text-3xl font-bold text-gray-800 dark:text-gray-100">{completion}%</span>
+                    <span className="text-2xl font-bold text-gray-800 dark:text-gray-100">{animatedCompletion}%</span>
                     <span className="mt-0.5 text-xs text-gray-400 dark:text-gray-500">覆盖度</span>
                   </div>
                 </div>
               </div>
 
-              <div className="grid grid-cols-2 gap-2 2xl:grid-cols-3">
+              <div className="grid grid-cols-3 gap-2">
                 <CompactMetric icon={CalendarCheck} label="覆盖" value={`${coveredDays}`} unit="天" tone="accent" />
                 <CompactMetric icon={Clock} label="剩余" value={`${remainingDays}`} unit="天" tone="gray" />
                 <CompactMetric icon={TrendingUp} label="连续" value={`${overview?.current_streak || 0}`} unit="天" tone="sky" />
@@ -623,39 +680,39 @@ export default function StatsPage({
               </div>
             </div>
 
-            <div className="mt-4 rounded-xl border border-gray-100 bg-gray-50 p-3 dark:border-white/5 dark:bg-white/[0.04]">
-              <div className="mb-3 flex items-center justify-between gap-2">
+            <div className="mt-3 rounded-xl border border-gray-100 bg-gray-50 p-3 dark:border-white/5 dark:bg-white/[0.04]">
+              <div className="mb-2 flex items-center justify-between gap-2">
                 <h4 className="flex items-center gap-1.5 text-xs font-semibold text-gray-500 dark:text-gray-400">
                   <Activity size={14} /> 本月节奏
                 </h4>
                 <span className="text-[11px] text-gray-400 dark:text-gray-500">记录 / 豁免 / 空缺</span>
               </div>
-              <div className="flex h-20 items-end gap-[3px]">
-                {days.map((day) => {
-                  const height = day.has_article ? Math.max(14, Math.round((day.word_count / maxDayWords) * 100)) : day.exemption ? 18 : 8;
-                  const status = day.has_article ? `${day.word_count} 字` : day.exemption ? `豁免：${day.exemption.reason}` : "空缺";
-                  return (
-                    <button
-                      key={day.date}
-                      type="button"
-                      onClick={() => onEditDate(day.date)}
-                      title={`${day.date} · ${status}`}
-                      className="group flex h-full min-w-0 flex-1 items-end justify-center rounded-sm focus:outline-none focus:ring-2 focus:ring-accent/30"
+              <div className="h-20">
+                <ResponsiveContainer width="100%" height="100%">
+                  <BarChart data={rhythmData} margin={{ top: 4, right: 0, left: 0, bottom: 0 }}>
+                    <Tooltip
+                      cursor={{ fill: "var(--color-accent-light)" }}
+                      content={<ChartTooltip />}
+                      formatter={(_value, _name, item) => {
+                        const payload = item?.payload as { status?: string } | undefined;
+                        return [payload?.status ?? "", "状态"];
+                      }}
+                    />
+                    <Bar
+                      dataKey="value"
+                      radius={[4, 4, 0, 0]}
+                      cursor="pointer"
+                      onClick={(data) => {
+                        const d = data as { date?: string };
+                        if (d?.date) onEditDate(d.date);
+                      }}
                     >
-                      <span
-                        className={[
-                          "block min-h-[4px] w-full rounded-t-[3px] transition-all group-hover:opacity-80",
-                          day.has_article
-                            ? "bg-accent shadow-sm shadow-accent/20"
-                            : day.exemption
-                              ? getExemptionTone(day.exemption.reason).bar
-                              : "bg-gray-200 dark:bg-white/20",
-                        ].join(" ")}
-                        style={{ height: `${height}%` }}
-                      />
-                    </button>
-                  );
-                })}
+                      {rhythmData.map((d, i) => (
+                        <Cell key={i} fill={d.color} />
+                      ))}
+                    </Bar>
+                  </BarChart>
+                </ResponsiveContainer>
               </div>
               <div className="mt-2 flex items-center justify-between text-[11px] text-gray-400 dark:text-gray-500">
                 <span>{bounds.first.slice(5)}</span>
@@ -664,14 +721,14 @@ export default function StatsPage({
               </div>
             </div>
 
-            <div className="mt-4 grid gap-2 sm:grid-cols-3">
+            <div className="mt-3 grid gap-2 sm:grid-cols-3">
               {monthHighlights.map((item) => (
                 <MonthHighlightCard key={item.label} {...item} />
               ))}
             </div>
 
-            <div className="mt-4 rounded-xl border border-gray-100 p-3 dark:border-white/5">
-              <div className="mb-3 flex items-center justify-between gap-2">
+            <div className="mt-3 rounded-xl border border-gray-100 p-3 dark:border-white/5">
+              <div className="mb-2 flex items-center justify-between gap-2">
                 <h4 className="flex items-center gap-1.5 text-xs font-semibold text-gray-500 dark:text-gray-400">
                   <Heart size={14} /> 心情分布
                 </h4>
@@ -975,9 +1032,9 @@ function CalendarDay({
       title={day.title || day.exemption?.reason || day.date}
       className={[
         "group relative box-border h-full min-h-0 overflow-hidden rounded-lg border text-left transition-all",
-        "focus:outline-none focus:ring-2 focus:ring-accent/30",
+        "focus:outline-hidden focus:ring-2 focus:ring-accent/30",
         day.has_article
-          ? "border-accent/30 bg-accent-light/80 dark:bg-accent-light/20 hover:border-accent hover:shadow-sm"
+          ? "border-accent/30 bg-accent-light/80 dark:bg-accent-light/20 hover:border-accent hover:shadow-xs"
           : day.exemption
             ? `${exemptionTone.card} ${exemptionTone.hover}`
             : "border-gray-100 dark:border-gray-700 bg-white dark:bg-gray-800/20 hover:bg-gray-50 dark:hover:bg-gray-700/30",
@@ -1037,9 +1094,9 @@ function getExemptionTone(reason?: string) {
       hover: "hover:border-emerald-300 dark:hover:border-emerald-400/50",
       pill: "bg-emerald-100 text-emerald-700 dark:bg-emerald-500/20 dark:text-emerald-200",
       note: "text-emerald-700/70 dark:text-emerald-200/70",
-      bar: "bg-emerald-400 shadow-sm shadow-emerald-400/20",
+      bar: "bg-emerald-400 shadow-xs shadow-emerald-400/20",
       option: "border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100 dark:border-emerald-500/40 dark:bg-emerald-500/10 dark:text-emerald-100 dark:hover:bg-emerald-500/20",
-      solid: "border-emerald-400 bg-emerald-500 text-white shadow-sm shadow-emerald-500/25",
+      solid: "border-emerald-400 bg-emerald-500 text-white shadow-xs shadow-emerald-500/25",
     };
   }
   if (reason === "生病") {
@@ -1048,9 +1105,9 @@ function getExemptionTone(reason?: string) {
       hover: "hover:border-rose-300 dark:hover:border-rose-400/50",
       pill: "bg-rose-100 text-rose-700 dark:bg-rose-500/20 dark:text-rose-200",
       note: "text-rose-700/70 dark:text-rose-200/70",
-      bar: "bg-rose-400 shadow-sm shadow-rose-400/20",
+      bar: "bg-rose-400 shadow-xs shadow-rose-400/20",
       option: "border-rose-200 bg-rose-50 text-rose-700 hover:bg-rose-100 dark:border-rose-500/40 dark:bg-rose-500/10 dark:text-rose-100 dark:hover:bg-rose-500/20",
-      solid: "border-rose-400 bg-rose-500 text-white shadow-sm shadow-rose-500/25",
+      solid: "border-rose-400 bg-rose-500 text-white shadow-xs shadow-rose-500/25",
     };
   }
   if (reason === "出差") {
@@ -1059,9 +1116,9 @@ function getExemptionTone(reason?: string) {
       hover: "hover:border-sky-300 dark:hover:border-sky-400/50",
       pill: "bg-sky-100 text-sky-700 dark:bg-sky-500/20 dark:text-sky-200",
       note: "text-sky-700/70 dark:text-sky-200/70",
-      bar: "bg-sky-400 shadow-sm shadow-sky-400/20",
+      bar: "bg-sky-400 shadow-xs shadow-sky-400/20",
       option: "border-sky-200 bg-sky-50 text-sky-700 hover:bg-sky-100 dark:border-sky-500/40 dark:bg-sky-500/10 dark:text-sky-100 dark:hover:bg-sky-500/20",
-      solid: "border-sky-400 bg-sky-500 text-white shadow-sm shadow-sky-500/25",
+      solid: "border-sky-400 bg-sky-500 text-white shadow-xs shadow-sky-500/25",
     };
   }
   return {
@@ -1069,9 +1126,9 @@ function getExemptionTone(reason?: string) {
     hover: "hover:border-amber-300 dark:hover:border-amber-400/50",
     pill: "bg-amber-100 text-amber-700 dark:bg-amber-500/20 dark:text-amber-200",
     note: "text-amber-700/70 dark:text-amber-200/70",
-    bar: "bg-amber-400 shadow-sm shadow-amber-400/20",
+    bar: "bg-amber-400 shadow-xs shadow-amber-400/20",
     option: "border-amber-200 bg-amber-50 text-amber-700 hover:bg-amber-100 dark:border-amber-500/40 dark:bg-amber-500/10 dark:text-amber-100 dark:hover:bg-amber-500/20",
-    solid: "border-amber-400 bg-amber-500 text-white shadow-sm shadow-amber-500/25",
+    solid: "border-amber-400 bg-amber-500 text-white shadow-xs shadow-amber-500/25",
   };
 }
 
@@ -1269,7 +1326,7 @@ function ReviewDatePicker({
       <button
         type="button"
         onClick={() => onOpenChange(!open)}
-        className="flex h-9 w-full items-center justify-between rounded-lg border border-gray-200 bg-white px-3 font-mono text-xs font-semibold text-gray-700 outline-none transition-colors hover:border-accent/30 dark:border-white/10 dark:bg-gray-950/30 dark:text-gray-100"
+        className="flex h-9 w-full items-center justify-between rounded-lg border border-gray-200 bg-white px-3 font-mono text-xs font-semibold text-gray-700 outline-hidden transition-colors hover:border-accent/30 dark:border-white/10 dark:bg-gray-950/30 dark:text-gray-100"
       >
         {value.replace(/-/g, "/")}
         <CalendarRange size={13} className="text-gray-400" />
@@ -1277,9 +1334,9 @@ function ReviewDatePicker({
       {open && (
         <div className="absolute right-0 top-full z-40 mt-2 w-[280px] rounded-xl border border-gray-100 bg-white p-3 shadow-modal dark:border-white/10 dark:bg-gray-900">
           <div className="mb-3 flex items-center justify-between">
-            <button type="button" onClick={() => setViewDate(new Date(year, month - 1, 1))} className="ui-icon-button h-8 w-8">‹</button>
+            <button type="button" onClick={() => setViewDate(new Date(year, month - 1, 1))} className="ui-icon-button h-8 w-8"><ChevronLeft size={16} /></button>
             <div className="text-sm font-semibold text-gray-800 dark:text-gray-100">{year} 年 {month + 1} 月</div>
-            <button type="button" onClick={() => setViewDate(new Date(year, month + 1, 1))} className="ui-icon-button h-8 w-8">›</button>
+            <button type="button" onClick={() => setViewDate(new Date(year, month + 1, 1))} className="ui-icon-button h-8 w-8"><ChevronRight size={16} /></button>
           </div>
           <div className="grid grid-cols-7 gap-1 text-center text-[11px] font-medium text-gray-400 dark:text-gray-500">
             {weekdays.map((day) => <div key={day} className="py-1">{day}</div>)}
@@ -1314,19 +1371,30 @@ function ReviewDatePicker({
   );
 }
 
+function splitLeadingNumber(value: string): { number: number; suffix: string } | null {
+  const match = /^(\d[\d,]*)(.*)$/.exec(value);
+  if (!match) return null;
+  return { number: Number(match[1].replace(/,/g, "")), suffix: match[2] };
+}
+
 function StatCard({
   icon: Icon,
   label,
   value,
   meta,
   tone,
+  animate,
 }: {
   icon: LucideIcon;
   label: string;
   value: string;
   meta?: string;
   tone: StatTone;
+  animate?: boolean;
 }) {
+  const numeric = animate ? splitLeadingNumber(value) : null;
+  const animated = useCountUp(numeric?.number ?? null);
+  const displayValue = numeric ? `${animated.toLocaleString()}${numeric.suffix}` : value;
   const toneClass = {
     accent: {
       icon: "bg-accent-light text-accent dark:bg-accent-light/20",
@@ -1367,7 +1435,9 @@ function StatCard({
             <Icon size={17} />
           </span>
         </div>
-        <p className="text-2xl font-bold leading-none text-gray-800 dark:text-gray-100 md:text-[26px]">{value}</p>
+        <p className="text-2xl font-bold leading-none text-gray-800 dark:text-gray-100 md:text-[26px]">
+          {value === "..." ? <span className="ui-skeleton inline-block h-7 w-20 align-middle" /> : displayValue}
+        </p>
       </div>
     </div>
   );
@@ -1492,8 +1562,10 @@ function InfoRow({ label, value }: { label: string; value: string }) {
 function LegendDot({ className, label }: { className: string; label: string }) {
   return (
     <span className="inline-flex h-6 shrink-0 items-center gap-1.5 rounded-full border border-gray-100 bg-white/70 px-2 text-[11px] font-medium text-gray-500 dark:border-white/5 dark:bg-white/[0.04] dark:text-gray-400">
-      <span className={`h-1.5 w-1.5 shrink-0 rounded-full shadow-sm ${className}`} />
+      <span className={`h-1.5 w-1.5 shrink-0 rounded-full shadow-xs ${className}`} />
       {label}
     </span>
   );
 }
+
+
