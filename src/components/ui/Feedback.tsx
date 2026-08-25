@@ -1,4 +1,6 @@
 import { useCallback, useEffect, useState, type ReactNode } from "react";
+import * as Dialog from "@radix-ui/react-dialog";
+import { AlertTriangle, RotateCw } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 
 type Tone = "neutral" | "good" | "warn" | "bad";
@@ -6,13 +8,16 @@ type Tone = "neutral" | "good" | "warn" | "bad";
 export function InlineError({ message, onRetry }: { message: string; onRetry?: () => void }) {
   if (!message) return null;
   return (
-    <div className="ui-alert-bad">
-      <span>{message}</span>
-      {onRetry && (
-        <button onClick={onRetry} className="ml-2 font-semibold underline underline-offset-2">
-          重试
-        </button>
-      )}
+    <div className="ui-alert-bad flex items-start gap-2">
+      <AlertTriangle size={15} className="mt-0.5 shrink-0" />
+      <div className="flex min-w-0 flex-1 items-center justify-between gap-3">
+        <span className="min-w-0">{message}</span>
+        {onRetry && (
+          <button onClick={onRetry} className="inline-flex shrink-0 items-center gap-1 font-semibold underline underline-offset-2 hover:opacity-80">
+            <RotateCw size={13} /> 重试
+          </button>
+        )}
+      </div>
     </div>
   );
 }
@@ -66,17 +71,18 @@ export function EmptyState({
   action?: ReactNode;
 }) {
   return (
-    <div className="ui-panel-muted flex min-h-[180px] flex-col items-center justify-center px-5 py-8 text-center">
+    <div className="ui-panel-muted relative flex min-h-[200px] flex-col items-center justify-center overflow-hidden px-5 py-10 text-center">
+      <div className="pointer-events-none absolute -top-16 left-1/2 h-32 w-72 -translate-x-1/2 rounded-full bg-accent/10 blur-3xl dark:bg-accent/15" />
       {Icon && (
-        <span className="mb-3 flex h-11 w-11 items-center justify-center rounded-xl bg-gray-100 text-gray-400 dark:bg-white/[0.06] dark:text-gray-500">
-          <Icon size={20} strokeWidth={2.1} />
+        <span className="relative mb-4 flex h-12 w-12 items-center justify-center rounded-2xl bg-gradient-to-br from-accent/15 to-accent/5 text-accent ring-1 ring-accent/15 dark:from-accent/20 dark:to-accent/5 dark:ring-accent/20">
+          <Icon size={22} strokeWidth={2} />
         </span>
       )}
-      <h3 className="text-sm font-semibold text-gray-800 dark:text-gray-100">{title}</h3>
+      <h3 className="relative text-sm font-semibold text-gray-800 dark:text-gray-100">{title}</h3>
       {description && (
-        <p className="mt-1 max-w-sm text-xs leading-5 text-gray-400 dark:text-gray-500">{description}</p>
+        <p className="relative mt-1 max-w-sm text-xs leading-5 text-gray-400 dark:text-gray-500">{description}</p>
       )}
-      {action && <div className="mt-4">{action}</div>}
+      {action && <div className="relative mt-4">{action}</div>}
     </div>
   );
 }
@@ -127,34 +133,37 @@ export function ConfirmDialog({
   onConfirm: () => void;
   onCancel: () => void;
 }) {
-  if (!open) return null;
   return (
-    <div className="fixed inset-0 z-[80] flex items-end justify-center bg-black/45 p-3 sm:items-center" onClick={onCancel}>
-      <div
-        className="ui-modal-surface max-w-sm p-4"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <h3 className="text-base font-semibold text-gray-900 dark:text-gray-100">{title}</h3>
-        <p className="mt-2 whitespace-pre-wrap text-sm leading-6 text-gray-500 dark:text-gray-400">{message}</p>
-        <div className="mt-5 flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
-          <button
-            onClick={onCancel}
-            className="ui-button-secondary h-10 px-4 text-sm"
-          >
-            {cancelText}
-          </button>
-          <button
-            onClick={onConfirm}
-            className={[
-              "inline-flex h-10 items-center justify-center rounded-lg px-4 text-sm font-semibold text-white transition-colors",
-              danger ? "bg-red-500 hover:bg-red-600" : "bg-accent hover:bg-accent-hover",
-            ].join(" ")}
-          >
-            {confirmText}
-          </button>
-        </div>
-      </div>
-    </div>
+    <Dialog.Root
+      open={open}
+      onOpenChange={(next) => {
+        if (!next) onCancel();
+      }}
+    >
+      <Dialog.Portal>
+        <Dialog.Overlay className="fixed inset-0 z-[80] bg-black/45 data-[state=open]:animate-fade-in" />
+        <Dialog.Content className="ui-modal-surface fixed left-1/2 top-1/2 z-[81] w-[calc(100%-1.5rem)] max-w-sm -translate-x-1/2 -translate-y-1/2 p-4 outline-hidden data-[state=open]:animate-fade-in">
+          <Dialog.Title className="text-base font-semibold text-gray-900 dark:text-gray-100">{title}</Dialog.Title>
+          <Dialog.Description className="mt-2 whitespace-pre-wrap text-sm leading-6 text-gray-500 dark:text-gray-400">
+            {message}
+          </Dialog.Description>
+          <div className="mt-5 flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+            <Dialog.Close asChild>
+              <button className="ui-button-secondary h-10 px-4 text-sm">{cancelText}</button>
+            </Dialog.Close>
+            <button
+              onClick={onConfirm}
+              className={[
+                "inline-flex h-10 items-center justify-center rounded-lg px-4 text-sm font-semibold text-white transition-colors",
+                danger ? "bg-red-500 hover:bg-red-600" : "bg-accent hover:bg-accent-hover",
+              ].join(" ")}
+            >
+              {confirmText}
+            </button>
+          </div>
+        </Dialog.Content>
+      </Dialog.Portal>
+    </Dialog.Root>
   );
 }
 

@@ -8,6 +8,7 @@ export const cardTypeLabels: Record<KnowledgeCardType, string> = {
   case: "案例",
   quote: "表述",
   principle: "原则",
+  snippet: "代码",
 };
 
 export const cardStatusLabels: Record<KnowledgeCardStatus, string> = {

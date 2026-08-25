@@ -20,6 +20,7 @@ import { normalizeReviewContent } from "../lib/reviewContent";
 import { ReviewViewerModal, ReviewStatusPill } from "./reviews/ReviewShared";
 import MarkdownContent from "./MarkdownContent";
 import { EmptyState, LoadingState, useConfirmDialog } from "./ui/Feedback";
+import { Tabs, TabsList, TabsTrigger } from "./ui/tabs";
 
 type KindFilter = "all" | ReviewKind;
 type StatusFilter = "all" | ReviewStatus;
@@ -248,22 +249,24 @@ export default function ReviewsPage() {
           </button>
         </div>
         <div className="mt-3 flex flex-wrap gap-2">
-          <div className="ui-segment">
-            {(["all","weekly","monthly"] as const).map((k) => (
-              <button key={k} onClick={() => setKindFilter(k)}
-                className={`ui-segment-item h-7 px-2.5 ${kindFilter === k ? "ui-segment-item-active" : ""}`}>
-                {{all:"全部",weekly:"周复盘",monthly:"月复盘"}[k]}
-              </button>
-            ))}
-          </div>
-          <div className="ui-segment">
-            {(["all","draft","confirmed"] as const).map((s) => (
-              <button key={s} onClick={() => setStatusFilter(s)}
-                className={`ui-segment-item h-7 px-2.5 ${statusFilter === s ? "ui-segment-item-active" : ""}`}>
-                {{all:"全部",draft:"草稿",confirmed:"已确认"}[s]}
-              </button>
-            ))}
-          </div>
+          <Tabs value={kindFilter} onValueChange={(v) => setKindFilter(v as KindFilter)}>
+            <TabsList>
+              {(["all","weekly","monthly"] as const).map((k) => (
+                <TabsTrigger key={k} value={k} className="h-7 px-2.5">
+                  {{all:"全部",weekly:"周复盘",monthly:"月复盘"}[k]}
+                </TabsTrigger>
+              ))}
+            </TabsList>
+          </Tabs>
+          <Tabs value={statusFilter} onValueChange={(v) => setStatusFilter(v as StatusFilter)}>
+            <TabsList>
+              {(["all","draft","confirmed"] as const).map((s) => (
+                <TabsTrigger key={s} value={s} className="h-7 px-2.5">
+                  {{all:"全部",draft:"草稿",confirmed:"已确认"}[s]}
+                </TabsTrigger>
+              ))}
+            </TabsList>
+          </Tabs>
         </div>
       </div>
 

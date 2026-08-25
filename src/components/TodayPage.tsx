@@ -13,9 +13,12 @@ import {
   ClipboardList,
   Eye,
   LoaderCircle,
+  Maximize2,
+  Minimize2,
   MoreVertical,
   PenLine,
   Save,
+  Share2,
   Smile,
   Sparkles,
   Tag,
@@ -27,7 +30,15 @@ import type { Article } from "../lib/api";
 import { normalizeTag } from "../lib/tags";
 import { DailyRecordSession } from "../lib/dailyRecordSession";
 import MarkdownContent from "./MarkdownContent";
-import { Toast, useConfirmDialog } from "./ui/Feedback";
+import { useConfirmDialog } from "./ui/Feedback";
+import { toast } from "sonner";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "./ui/dropdown-menu";
+import { Popover, PopoverContent, PopoverTrigger } from "./ui/popover";
+import { Tabs, TabsList, TabsTrigger } from "./ui/tabs";
+import { DayPicker } from "react-day-picker";
+import "react-day-picker/style.css";
+import CodeMirror from "@uiw/react-codemirror";
+import { markdown } from "@codemirror/lang-markdown";
 
 const moods = [
   { emoji: "😊", label: "开心" },
@@ -111,10 +122,18 @@ export default function TodayPage({
   targetDate,
   targetNonce,
   onNavigate,
+  zen,
+  onToggleZen,
+  dark,
+  onWikiLink,
 }: {
   targetDate?: string;
   targetNonce?: number;
   onNavigate?: (page: "knowledge") => void;
+  zen?: boolean;
+  onToggleZen?: () => void;
+  dark?: boolean;
+  onWikiLink?: (title: string) => void;
 }) {
   const [selectedDate, setSelectedDate] = useState(() => targetDate || todayDate());
   const [article, setArticle] = useState<Article | null>(null);
@@ -126,12 +145,9 @@ export default function TodayPage({
   const [dirty, setDirty] = useState(false);
   const [saveStatus, setSaveStatus] = useState<SaveStatus>("idle");
   const [saveError, setSaveError] = useState("");
-  const [showTemplatePicker, setShowTemplatePicker] = useState(false);
-  const [showDatePicker, setShowDatePicker] = useState(false);
   const [showMobileMore, setShowMobileMore] = useState(false);
   const [metaExpanded, setMetaExpanded] = useState(false);
   const [mobilePane, setMobilePane] = useState<MobilePane>("edit");
-  const [templateNotice, setTemplateNotice] = useState("");
   const [tagSuggestions, setTagSuggestions] = useState<string[]>(DEFAULT_TAG_SUGGESTIONS);
   const [aiLoading, setAiLoading] = useState(false);
   const [aiResult, setAiResult] = useState("");
@@ -148,8 +164,6 @@ export default function TodayPage({
     update: api.updateArticle,
   }));
   const externalNonceRef = useRef(targetNonce);
-  const undoStack = useRef<string[]>([]);
-  const undoIndex = useRef(-1);
   const { confirm, dialog } = useConfirmDialog();
   const date = selectedDate;
   const quickTags = useMemo(
@@ -185,6 +199,21 @@ export default function TodayPage({
           setMood(a.mood);
           setTags(a.tags);
           setDirty(false);
+        }
+        // 消费 Web Share Target 分享进来的内容（追加到当前记录）
+        const rawShare = localStorage.getItem("pendingShare");
+        if (rawShare) {
+          localStorage.removeItem("pendingShare");
+          try {
+            const shared = JSON.parse(rawShare) as { text?: string; title?: string };
+            if (shared.text) {
+              setContent((prev) => (prev ? `${prev}\n\n${shared.text}` : shared.text || ""));
+              if (shared.title && !a?.title) setTitle(shared.title);
+              setDirty(true);
+            }
+          } catch {
+            /* 忽略损坏的分享数据 */
+          }
         }
       })
       .catch((e) => {
@@ -282,6 +311,22 @@ export default function TodayPage({
     doSave(title, content, mood, tags);
   };
 
+  const handleShare = async () => {
+    const text = `${title || date}${content ? `\n\n${content}` : ""}`.trim();
+    try {
+      if (navigator.share) {
+        await navigator.share({ title: title || date, text });
+      } else if (navigator.clipboard) {
+        await navigator.clipboard.writeText(text);
+        toast.success("已复制到剪贴板");
+      }
+    } catch (err) {
+      if ((err as Error)?.name !== "AbortError") {
+        toast.error("分享失败");
+      }
+    }
+  };
+
   const requestDateChange = useCallback(async (nextDate: string) => {
     if (!nextDate || nextDate === date) return;
     if (dirty || saveTimer.current) {
@@ -317,48 +362,10 @@ export default function TodayPage({
     autoSave(e.target.value, content, mood);
   };
 
-  const handleContentChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
-    const v = e.target.value;
-    // Push to undo stack (dedup consecutive identical entries)
-    const stack = undoStack.current;
-    const idx = undoIndex.current;
-    if (stack[idx] !== v) {
-      stack.length = idx + 1;
-      stack.push(v);
-      if (stack.length > 50) stack.shift();
-      else undoIndex.current = stack.length - 1;
-    }
-    setContent(v);
-    autoSave(title, v, mood);
+  const handleContentChange = (value: string) => {
+    setContent(value);
+    autoSave(title, value, mood);
   };
-
-  // Undo/Redo keyboard shortcuts
-  useEffect(() => {
-    const handler = (e: KeyboardEvent) => {
-      if ((e.ctrlKey || e.metaKey) && e.key === "z" && !e.shiftKey) {
-        e.preventDefault();
-        const idx = undoIndex.current;
-        if (idx > 0) {
-          undoIndex.current = idx - 1;
-          const previous = undoStack.current[idx - 1];
-          setContent(previous);
-          autoSave(title, previous, mood);
-        }
-      }
-      if (((e.ctrlKey || e.metaKey) && e.key === "z" && e.shiftKey) || ((e.ctrlKey || e.metaKey) && e.key === "y")) {
-        e.preventDefault();
-        const idx = undoIndex.current;
-        if (idx < undoStack.current.length - 1) {
-          undoIndex.current = idx + 1;
-          const next = undoStack.current[idx + 1];
-          setContent(next);
-          autoSave(title, next, mood);
-        }
-      }
-    };
-    window.addEventListener("keydown", handler);
-    return () => window.removeEventListener("keydown", handler);
-  }, [autoSave, mood, title]);
 
   const handleMoodChange = (m: string) => {
     // Click selected mood again to clear
@@ -435,10 +442,8 @@ export default function TodayPage({
     }))) return;
     const filled = tmpl.template.replace(/\{date\}/g, date);
     setContent(filled);
-    setShowTemplatePicker(false);
     setMobilePane("edit");
-    setTemplateNotice(`已套用「${tmpl.name}」`);
-    window.setTimeout(() => setTemplateNotice(""), 1800);
+    toast.success(`已套用「${tmpl.name}」`);
     if (tmpl.autoTitle) {
       const t = tmpl.autoTitle.replace(/\{date\}/g, date);
       setTitle(t);
@@ -532,24 +537,28 @@ export default function TodayPage({
     };
   }, [content, dirty, doSave, mood, tags, title]);
 
-  // Close template picker on outside click
+  // Close mobile more menu on outside click
   useEffect(() => {
-    if (!showTemplatePicker && !showDatePicker) return;
+    if (!showMobileMore) return;
     const handler = (e: MouseEvent) => {
       const target = e.target as HTMLElement;
-      if (!target.closest("[data-template-picker]")) {
-        setShowTemplatePicker(false);
-      }
-      if (!target.closest("[data-date-picker]")) {
-        setShowDatePicker(false);
-      }
       if (!target.closest("[data-mobile-more]")) {
         setShowMobileMore(false);
       }
     };
     document.addEventListener("mousedown", handler);
     return () => document.removeEventListener("mousedown", handler);
-  }, [showDatePicker, showTemplatePicker]);
+  }, [showMobileMore]);
+
+  // 专注模式下按 Esc 退出
+  useEffect(() => {
+    if (!zen) return;
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onToggleZen?.();
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [zen, onToggleZen]);
 
   // Word & char count
   const charCount = content.length;
@@ -562,9 +571,17 @@ export default function TodayPage({
       transition={{ duration: 0.3 }}
       className="h-full flex flex-col relative"
     >
+      {zen && (
+        <div className="flex items-center justify-between px-3 py-2 md:px-8 md:py-3">
+          <span className="text-xs font-medium text-gray-400 dark:text-gray-500">专注模式 · 按 Esc 退出</span>
+          <button onClick={onToggleZen} className="ui-button-secondary h-8">
+            <Minimize2 size={14} /> 退出
+          </button>
+        </div>
+      )}
       {/* Header */}
-      <div className="px-3 pb-2 pt-3 md:px-8 md:pt-4">
-        <div className="ui-panel px-2 py-2 sm:px-3">
+      <div className="px-3 pb-2 pt-3 md:px-8 md:pt-4" style={zen ? { display: "none" } : undefined}>
+        <div className="glass-card rounded-xl px-2 py-2 sm:px-3">
           <div className="flex flex-col gap-2 xl:flex-row xl:items-center xl:justify-between">
             <div className="flex min-w-0 items-center justify-between gap-2">
               <div className="flex min-w-0 items-center gap-2">
@@ -572,7 +589,9 @@ export default function TodayPage({
                 <Calendar size={16} strokeWidth={2.2} />
               </span>
               <div className="min-w-0">
-                <h2 className="text-base font-bold leading-tight text-gray-800 dark:text-gray-100">每日记录</h2>
+                <h2 className="bg-gradient-to-r from-accent to-accent-hover bg-clip-text text-base font-bold leading-tight text-transparent">
+                  每日记录
+                </h2>
                 <p className="mt-0.5 truncate text-xs text-gray-400 dark:text-gray-400">
                   {relativeDateLabel(date)} · {date}
                 </p>
@@ -599,7 +618,7 @@ export default function TodayPage({
             </div>
 
             <div className="flex flex-col gap-2 lg:flex-row lg:items-center lg:justify-end">
-              <div className="relative flex w-full items-center gap-1 rounded-xl border border-gray-200/70 bg-gray-50 p-1 dark:border-white/10 dark:bg-white/[0.04] sm:w-auto" data-date-picker>
+              <div className="relative flex w-full items-center gap-1 rounded-xl border border-gray-200/70 bg-gray-50 p-1 dark:border-white/10 dark:bg-white/[0.04] sm:w-auto">
               <button
                 type="button"
                 onClick={() => requestDateChange(shiftDate(date, -1))}
@@ -608,18 +627,7 @@ export default function TodayPage({
               >
                 <ChevronLeft size={16} />
               </button>
-              <button
-                type="button"
-                onClick={() => {
-                  setShowTemplatePicker(false);
-                  setShowDatePicker((value) => !value);
-                }}
-                className="flex h-8 min-w-0 flex-1 items-center justify-between gap-2 rounded-lg border border-gray-200 bg-white px-3 text-xs font-medium text-gray-600 outline-none transition-colors hover:border-accent/30 dark:border-white/10 dark:bg-gray-950/30 dark:text-gray-200 sm:flex-none sm:w-[148px]"
-                aria-label="选择记录日期"
-              >
-                <span className="font-mono">{date.replace(/-/g, "/")}</span>
-                <Calendar size={14} />
-              </button>
+              <DatePickerPopover selectedDate={date} onSelect={requestDateChange} />
               <button
                 type="button"
                 onClick={() => requestDateChange(shiftDate(date, 1))}
@@ -632,23 +640,11 @@ export default function TodayPage({
                 <button
                   type="button"
                   onClick={() => requestDateChange(todayDate())}
-                  className="h-8 shrink-0 rounded-lg px-2 text-xs font-semibold text-accent transition-colors hover:bg-white dark:hover:bg-white/10"
+                  className="gradient-border h-8 shrink-0 rounded-lg px-2.5 text-xs font-semibold text-accent transition-transform hover:scale-[1.04]"
                 >
                   今天
                 </button>
               )}
-              <AnimatePresence>
-                {showDatePicker && (
-                  <DatePickerPopover
-                    selectedDate={date}
-                    onSelect={(nextDate) => {
-                      setShowDatePicker(false);
-                      requestDateChange(nextDate);
-                    }}
-                    onClose={() => setShowDatePicker(false)}
-                  />
-                )}
-              </AnimatePresence>
             </div>
 
               <div className="flex flex-wrap items-center gap-1.5">
@@ -684,7 +680,7 @@ export default function TodayPage({
             </div>
           </div>
 
-          <div className="mt-2 grid grid-cols-[1fr_1fr_1fr_auto] gap-2 border-t border-gray-100 pt-2 dark:border-white/10 md:flex md:flex-wrap md:items-center xl:border-t-0 xl:pt-0">
+          <div className="mt-2 grid grid-cols-2 gap-2 border-t border-gray-100 pt-2 dark:border-white/10 md:flex md:flex-wrap md:items-center xl:border-t-0 xl:pt-0">
             <motion.button
               whileTap={{ scale: 0.95 }}
               onClick={handleManualSave}
@@ -696,92 +692,31 @@ export default function TodayPage({
             </motion.button>
 
             {/* Template picker */}
-            <div className="relative" data-template-picker>
-              <motion.button
-                whileTap={{ scale: 0.95 }}
-                onClick={() => {
-                  setShowDatePicker(false);
-                  setShowTemplatePicker(!showTemplatePicker);
-                }}
-                className="ui-button-secondary w-full md:w-auto"
-              >
+            <DropdownMenu>
+              <DropdownMenuTrigger className="ui-button-secondary w-full md:w-auto">
                 <ClipboardList size={14} /> 模板
-              </motion.button>
-              <AnimatePresence>
-                {showTemplatePicker && (
-                  <>
-                    <motion.div
-                      initial={{ opacity: 0, y: -4 }}
-                      animate={{ opacity: 1, y: 0 }}
-                      exit={{ opacity: 0, y: -4 }}
-                      transition={{ duration: 0.12 }}
-                      className="absolute left-0 top-full z-30 mt-2 hidden w-[360px] overflow-hidden rounded-xl border border-gray-100 bg-white p-2 shadow-modal dark:border-white/10 dark:bg-gray-900 sm:block"
-                    >
-                      {TEMPLATES.map((t) => (
-                        <button
-                          key={t.name}
-                          onClick={() => applyTemplate(t)}
-                          className="group w-full rounded-lg px-3 py-2.5 text-left transition-colors hover:bg-gray-50 dark:hover:bg-white/5"
-                        >
-                          <div className="flex items-center justify-between gap-3">
-                            <span className="text-sm font-semibold text-gray-800 dark:text-gray-100">{t.name}</span>
-                            {t.autoTitle && (
-                              <span className="rounded-full bg-accent-light px-2 py-0.5 text-[10px] font-medium text-accent dark:bg-accent-light/20">
-                                自动标题
-                              </span>
-                            )}
-                          </div>
-                          <p className="mt-1 line-clamp-2 text-xs leading-5 text-gray-400 dark:text-gray-500">
-                            {t.description}
-                          </p>
-                        </button>
-                      ))}
-                    </motion.div>
-                    <motion.div
-                      initial={{ opacity: 0 }}
-                      animate={{ opacity: 1 }}
-                      exit={{ opacity: 0 }}
-                      className="fixed inset-0 z-50 flex items-end bg-black/30 p-3 sm:hidden"
-                      onClick={() => setShowTemplatePicker(false)}
-                    >
-                      <motion.div
-                        initial={{ y: 24, opacity: 0 }}
-                        animate={{ y: 0, opacity: 1 }}
-                        exit={{ y: 24, opacity: 0 }}
-                        className="max-h-[55vh] w-full overflow-y-auto rounded-t-2xl border border-gray-100 bg-white shadow-modal dark:border-gray-700 dark:bg-gray-900"
-                        onClick={(e) => e.stopPropagation()}
-                      >
-                        <div className="flex items-center justify-between border-b border-gray-100 px-4 py-3 dark:border-gray-800">
-                          <h3 className="text-sm font-semibold text-gray-800 dark:text-gray-100">选择模板</h3>
-                          <button
-                            type="button"
-                            onClick={() => setShowTemplatePicker(false)}
-                            className="ui-icon-button h-8 w-8"
-                          >
-                            <X size={15} />
-                          </button>
-                        </div>
-                        <div className="grid max-h-[58vh] grid-cols-1 gap-2 overflow-y-auto p-3">
-                          {TEMPLATES.map((t) => (
-                            <button
-                              key={t.name}
-                              onClick={() => applyTemplate(t)}
-                              className="w-full rounded-xl bg-gray-50 px-4 py-3 text-left dark:bg-gray-800"
-                            >
-                              <div className="text-sm font-semibold text-gray-700 dark:text-gray-100">{t.name}</div>
-                              <div className="mt-1 text-xs leading-5 text-gray-400 dark:text-gray-500">{t.description}</div>
-                            </button>
-                          ))}
-                        </div>
-                      </motion.div>
-                    </motion.div>
-                  </>
-                )}
-              </AnimatePresence>
-            </div>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="start" className="w-[360px] p-2">
+                {TEMPLATES.map((t) => (
+                  <DropdownMenuItem
+                    key={t.name}
+                    onSelect={() => applyTemplate(t)}
+                    className="flex-col items-start gap-1 px-3 py-2.5"
+                  >
+                    <div className="flex w-full items-center justify-between gap-3">
+                      <span className="text-sm font-semibold text-gray-800 dark:text-gray-100">{t.name}</span>
+                      {t.autoTitle && (
+                        <span className="rounded-full bg-accent-light px-2 py-0.5 text-[10px] font-medium text-accent dark:bg-accent-light/20">自动标题</span>
+                      )}
+                    </div>
+                    <p className="line-clamp-2 text-xs leading-5 text-gray-400 dark:text-gray-500">{t.description}</p>
+                  </DropdownMenuItem>
+                ))}
+              </DropdownMenuContent>
+            </DropdownMenu>
 
-            {/* AI 总结 + 提取卡片（移动端均分一行，桌面端并排） */}
-            <div className="flex w-full gap-2 md:w-auto">
+            {/* AI 总结 + 提取卡片（移动端占满一行，桌面端并排） */}
+            <div className="col-span-2 flex w-full gap-2 md:col-span-1 md:w-auto">
               <motion.button
                 whileTap={{ scale: 0.95 }}
                 onClick={handleAISummary}
@@ -806,9 +741,25 @@ export default function TodayPage({
             </div>
 
             <button
+              onClick={handleShare}
+              className="ui-button-ghost hidden md:inline-flex"
+              title="分享当前记录"
+            >
+              <Share2 size={14} /> 分享
+            </button>
+
+            <button
+              onClick={onToggleZen}
+              className="ui-button-ghost hidden md:inline-flex"
+              title="专注模式（隐藏侧栏与干扰）"
+            >
+              <Maximize2 size={14} /> 专注
+            </button>
+
+            <button
               type="button"
               onClick={() => setMetaExpanded((value) => !value)}
-              className="ui-button-secondary col-span-3 w-full md:hidden"
+              className="ui-button-secondary col-span-2 w-full md:hidden"
             >
               <Smile size={14} />
               心情/标签
@@ -834,6 +785,16 @@ export default function TodayPage({
                     transition={{ duration: 0.12 }}
                     className="absolute right-0 top-full z-30 mt-2 w-36 rounded-xl border border-gray-100 bg-white p-1.5 shadow-modal dark:border-white/10 dark:bg-gray-900"
                   >
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setShowMobileMore(false);
+                          handleShare();
+                        }}
+                        className="flex h-9 w-full items-center gap-2 rounded-lg px-2.5 text-xs font-medium text-gray-600 hover:bg-gray-100 dark:text-gray-300 dark:hover:bg-white/10"
+                      >
+                        <Share2 size={14} /> 分享记录
+                      </button>
                       <button
                         type="button"
                         onClick={() => {
@@ -958,7 +919,7 @@ export default function TodayPage({
                   )}
                   {aiError ? aiError : (
                     <div className="mx-auto max-w-[760px]">
-                      <MarkdownPreview content={aiResult} />
+                      <MarkdownPreview content={aiResult} onWikiLink={onWikiLink} />
                     </div>
                   )}
                 </div>
@@ -984,7 +945,7 @@ export default function TodayPage({
         </AnimatePresence>
       </div>
 
-      <div className={`${metaExpanded ? "block" : "hidden"} px-3 pb-3 md:block md:px-8`}>
+      <div className={`${metaExpanded ? "block" : "hidden"} px-3 pb-3 md:block md:px-8`} style={zen ? { display: "none" } : undefined}>
         <div className="ui-panel-muted grid gap-3 p-2.5 lg:grid-cols-[minmax(260px,0.9fr)_1.1fr]">
           <div className="min-w-0">
             <div className="mb-2 flex items-center gap-2 px-1 text-[11px] font-semibold uppercase tracking-wide text-gray-400 dark:text-gray-500">
@@ -998,7 +959,7 @@ export default function TodayPage({
                   onClick={() => handleMoodChange(m.emoji)}
                   className={`relative flex h-8 shrink-0 items-center gap-1.5 rounded-lg border px-2 text-sm leading-none transition-all duration-200 ${
                     mood === m.emoji
-                      ? "border-accent/30 bg-accent-light text-accent shadow-sm dark:bg-accent-light/20"
+                      ? "border-accent/30 bg-accent-light text-accent shadow-xs dark:bg-accent-light/20"
                       : "border-transparent text-gray-500 hover:bg-white dark:text-gray-400 dark:hover:bg-white/10"
                   }`}
                   title={m.label}
@@ -1059,159 +1020,125 @@ export default function TodayPage({
       </div>
 
       {/* Title input */}
-      <div className="px-3 md:px-8 pb-2">
+      <div className={`px-3 pb-2 md:px-8 ${zen ? "mx-auto w-full max-w-2xl" : ""}`}>
         <input
           type="text"
           value={title}
           onChange={handleTitleChange}
           placeholder="标题..."
-          className="w-full bg-transparent text-2xl font-semibold text-gray-800 outline-none border-none placeholder-gray-300 dark:text-gray-100 dark:placeholder-gray-600 md:text-2xl"
+          className="w-full bg-transparent text-2xl font-semibold text-gray-800 outline-hidden border-none placeholder-gray-300 dark:text-gray-100 dark:placeholder-gray-600 md:text-2xl"
         />
       </div>
 
-      <div className="px-3 pb-2 md:hidden">
-        <div className="ui-segment grid w-full grid-cols-2">
-          <button
-            type="button"
-            onClick={() => setMobilePane("edit")}
-            className={["ui-segment-item", mobilePane === "edit" ? "ui-segment-item-active" : ""].join(" ")}
-          >
-            <PenLine size={14} /> 编辑
-          </button>
-          <button
-            type="button"
-            onClick={() => setMobilePane("preview")}
-            className={["ui-segment-item", mobilePane === "preview" ? "ui-segment-item-active" : ""].join(" ")}
-          >
-            <Eye size={14} /> 预览
-          </button>
-        </div>
+      <div className="px-3 pb-2 md:hidden" style={zen ? { display: "none" } : undefined}>
+        <Tabs value={mobilePane} onValueChange={(v) => setMobilePane(v as "edit" | "preview")}>
+          <TabsList className="grid w-full grid-cols-2">
+            <TabsTrigger value="edit">
+              <PenLine size={14} /> 编辑
+            </TabsTrigger>
+            <TabsTrigger value="preview">
+              <Eye size={14} /> 预览
+            </TabsTrigger>
+          </TabsList>
+        </Tabs>
       </div>
 
       {/* Split editor */}
-      <div className="grid flex-1 grid-cols-1 gap-4 px-3 pb-28 md:grid-cols-[minmax(0,1.08fr)_minmax(360px,0.92fr)] md:px-8 md:pb-6 min-h-0">
+      <div className={`grid flex-1 grid-cols-1 gap-4 px-3 pb-28 md:px-8 md:pb-6 min-h-0 ${zen ? "" : "md:grid-cols-[minmax(0,1.08fr)_minmax(360px,0.92fr)]"}`}>
         <div className={`${mobilePane === "edit" ? "flex" : "hidden"} min-w-0 flex-col md:flex`}>
           <div className="mb-2 flex items-center justify-between gap-3 text-2xs font-semibold uppercase tracking-widest text-gray-400 dark:text-gray-500">
             <span>编辑</span>
             <span className="font-mono normal-case tracking-normal">{wordCount} 字</span>
           </div>
-          <textarea
-            value={content}
-            onChange={handleContentChange}
-            placeholder={`开始写 ${date} 的总结...\n\n点击上方“模板”快速填充`}
-            className="ui-editor-surface h-[56dvh] min-h-0 w-full resize-none overflow-y-auto px-4 py-4 font-mono text-[15px] leading-7 text-gray-700 placeholder-gray-300 focus:border-accent/40 focus:ring-2 focus:ring-accent/20 dark:text-gray-200 dark:placeholder-gray-600 dark:focus:bg-white/[0.075] md:h-auto md:flex-1 md:p-5 md:text-sm"
-          />
+          <div className="ui-editor-surface h-[56dvh] min-h-0 w-full overflow-hidden md:h-auto md:flex-1">
+            <CodeMirror
+              value={content}
+              onChange={handleContentChange}
+              extensions={[markdown()]}
+              placeholder={`开始写 ${date} 的总结...`}
+              theme={dark ? "dark" : "light"}
+              height="100%"
+              style={{ height: "100%" }}
+              basicSetup={{ lineNumbers: false, foldGutter: false, highlightActiveLine: false }}
+            />
+          </div>
           <div className="h-24 md:hidden" />
         </div>
 
-        <div className={`${mobilePane === "preview" ? "flex" : "hidden"} min-w-0 flex-col md:flex`}>
+        <div className={`${mobilePane === "preview" ? "flex" : "hidden"} min-w-0 flex-col md:flex`} style={zen ? { display: "none" } : undefined}>
           <div className="mb-2 flex items-center justify-between gap-3 text-2xs font-semibold uppercase tracking-widest text-gray-400 dark:text-gray-500">
             <span>预览</span>
             <span className="font-mono normal-case tracking-normal">{charCount} 字符</span>
           </div>
           <div className="ui-editor-surface h-[56dvh] min-h-0 overflow-y-auto p-4 md:h-auto md:flex-1 md:p-5">
             <div className="mx-auto max-w-[760px]">
-              <MarkdownPreview content={content} />
+              <MarkdownPreview content={content} onWikiLink={onWikiLink} />
             </div>
           </div>
           <div className="h-24 md:hidden" />
         </div>
       </div>
-      <Toast message={templateNotice} tone="good" onClose={() => setTemplateNotice("")} />
       {dialog}
     </motion.div>
   );
 }
 
-function MarkdownPreview({ content }: { content: string }) {
-  return <MarkdownContent content={content} />;
+function MarkdownPreview({ content, onWikiLink }: { content: string; onWikiLink?: (title: string) => void }) {
+  return <MarkdownContent content={content} onWikiLink={onWikiLink} />;
 }
 
 function DatePickerPopover({
   selectedDate,
   onSelect,
-  onClose,
 }: {
   selectedDate: string;
   onSelect: (date: string) => void;
-  onClose: () => void;
 }) {
-  const [viewDate, setViewDate] = useState(() => new Date(`${selectedDate}T12:00:00`));
-  const year = viewDate.getFullYear();
-  const month = viewDate.getMonth();
-  const first = new Date(year, month, 1);
-  const daysInMonth = new Date(year, month + 1, 0).getDate();
-  const cells = [
-    ...Array.from({ length: first.getDay() }, () => ""),
-    ...Array.from({ length: daysInMonth }, (_, index) => {
-      const day = index + 1;
-      return `${year}-${String(month + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
-    }),
-  ];
-
-  const shiftMonth = (delta: number) => {
-    setViewDate(new Date(year, month + delta, 1));
-  };
+  const [open, setOpen] = useState(false);
+  const selected = useMemo(() => new Date(`${selectedDate}T12:00:00`), [selectedDate]);
+  const format = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 
   return (
-    <motion.div
-      initial={{ opacity: 0, y: -4, scale: 0.98 }}
-      animate={{ opacity: 1, y: 0, scale: 1 }}
-      exit={{ opacity: 0, y: -4, scale: 0.98 }}
-      transition={{ duration: 0.12 }}
-      className="absolute right-0 top-full z-40 mt-2 w-[310px] rounded-xl border border-gray-100 bg-white p-3 shadow-modal dark:border-white/10 dark:bg-gray-900"
-    >
-      <div className="mb-3 flex items-center justify-between">
-        <button type="button" onClick={() => shiftMonth(-1)} className="ui-icon-button h-8 w-8">
-          <ChevronLeft size={15} />
-        </button>
-        <div className="text-sm font-semibold text-gray-800 dark:text-gray-100">
-          {year} 年 {month + 1} 月
-        </div>
-        <button type="button" onClick={() => shiftMonth(1)} className="ui-icon-button h-8 w-8">
-          <ChevronRight size={15} />
-        </button>
-      </div>
-      <div className="grid grid-cols-7 gap-1 text-center text-[11px] font-medium text-gray-400 dark:text-gray-500">
-        {["日", "一", "二", "三", "四", "五", "六"].map((day) => <div key={day} className="py-1">{day}</div>)}
-      </div>
-      <div className="mt-1 grid grid-cols-7 gap-1">
-        {cells.map((cell, index) => {
-          const active = cell === selectedDate;
-          const isToday = cell === todayDate();
-          return cell ? (
-            <button
-              key={cell}
-              type="button"
-              onClick={() => onSelect(cell)}
-              className={[
-                "h-9 rounded-lg text-xs font-semibold transition-colors",
-                active
-                  ? "bg-accent text-white shadow-sm"
-                  : isToday
-                    ? "bg-accent-light text-accent dark:bg-accent-light/20"
-                    : "text-gray-600 hover:bg-gray-100 dark:text-gray-300 dark:hover:bg-white/10",
-              ].join(" ")}
-            >
-              {Number(cell.slice(-2))}
-            </button>
-          ) : (
-            <div key={`blank-${index}`} />
-          );
-        })}
-      </div>
-      <div className="mt-3 flex items-center justify-between border-t border-gray-100 pt-3 dark:border-white/10">
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
         <button
           type="button"
-          onClick={() => onSelect(todayDate())}
-          className="h-8 rounded-lg bg-accent-light px-3 text-xs font-semibold text-accent hover:bg-accent-light/80 dark:bg-accent-light/20"
+          className="flex h-8 min-w-0 flex-1 items-center justify-between gap-2 rounded-lg border border-gray-200 bg-white px-3 text-xs font-medium text-gray-600 outline-hidden transition-colors hover:border-accent/30 dark:border-white/10 dark:bg-gray-950/30 dark:text-gray-200 sm:flex-none sm:w-[148px]"
+          aria-label="选择记录日期"
         >
-          回到今天
+          <span className="font-mono">{selectedDate.replace(/-/g, "/")}</span>
+          <Calendar size={14} />
         </button>
-        <button type="button" onClick={onClose} className="h-8 rounded-lg px-3 text-xs text-gray-400 hover:bg-gray-100 dark:hover:bg-white/10">
-          关闭
-        </button>
-      </div>
-    </motion.div>
+      </PopoverTrigger>
+      <PopoverContent align="end" className="w-auto p-3">
+        <DayPicker
+          mode="single"
+          required
+          selected={selected}
+          defaultMonth={selected}
+          onSelect={(date) => {
+            if (date) {
+              onSelect(format(date));
+              setOpen(false);
+            }
+          }}
+        />
+        <div className="mt-2 flex items-center justify-between border-t border-gray-100 pt-2 dark:border-white/10">
+          <button
+            type="button"
+            onClick={() => {
+              onSelect(todayDate());
+              setOpen(false);
+            }}
+            className="h-8 rounded-lg bg-accent-light px-3 text-xs font-semibold text-accent hover:bg-accent-light/80 dark:bg-accent-light/20"
+          >
+            回到今天
+          </button>
+          <button type="button" onClick={() => setOpen(false)} className="h-8 rounded-lg px-3 text-xs text-gray-400 hover:bg-gray-100 dark:hover:bg-white/10">
+            关闭
+          </button>
+        </div>
+      </PopoverContent>
+    </Popover>
   );
 }

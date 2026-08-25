@@ -224,7 +224,7 @@ export function searchArticles(query: string) {
 
 // ── Knowledge cards ─────────────────────────────────
 
-export type KnowledgeCardType = "fact" | "method" | "concept" | "decision" | "case" | "quote" | "principle";
+export type KnowledgeCardType = "fact" | "method" | "concept" | "decision" | "case" | "quote" | "principle" | "snippet";
 export type KnowledgeCardStatus = "draft" | "confirmed" | "outdated";
 
 export interface KnowledgeCard {
@@ -253,18 +253,28 @@ export interface KnowledgeCard {
   first_reviewed_at?: string;
 }
 
+export interface KnowledgeTagCount {
+  tag: string;
+  count: number;
+}
+
 function mapKnowledgeCard(card: KnowledgeCard): KnowledgeCard {
   return { ...card, tags: readTagList(card.tags) };
 }
 
-export function listKnowledgeCards(filters: { card_type?: string; status?: string; q?: string; usage?: "never_used" } = {}) {
+export function listKnowledgeCards(filters: { card_type?: string; status?: string; q?: string; usage?: "never_used"; tag?: string } = {}) {
   const params = new URLSearchParams();
   if (filters.card_type) params.set("card_type", filters.card_type);
   if (filters.status) params.set("status", filters.status);
   if (filters.q) params.set("q", filters.q);
   if (filters.usage) params.set("usage", filters.usage);
+  if (filters.tag) params.set("tag", filters.tag);
   const query = params.toString();
   return httpRequest<KnowledgeCard[]>(`/knowledge-cards${query ? `?${query}` : ""}`).then((items) => items.map(mapKnowledgeCard));
+}
+
+export function listKnowledgeTags() {
+  return httpRequest<KnowledgeTagCount[]>("/knowledge-cards/tags");
 }
 
 export function createKnowledgeCard(payload: {

@@ -6,6 +6,7 @@ import type { Article, ArticleSummary, KnowledgeCard } from "../lib/api";
 import { cardStatusLabels, cardTypeLabels } from "../lib/cardLabels";
 import ArticleDetail from "./ArticleDetail";
 import { useConfirmDialog } from "./ui/Feedback";
+import { Tabs, TabsList, TabsTrigger } from "./ui/tabs";
 
 type SearchTab = "articles" | "cards";
 
@@ -172,22 +173,16 @@ export default function SearchPage({
       </h2>
 
       {/* Tab switch */}
-      <div className="ui-segment mb-4 grid w-full max-w-xs grid-cols-2">
-        <button
-          type="button"
-          onClick={() => switchTab("articles")}
-          className={["ui-segment-item", tab === "articles" ? "ui-segment-item-active" : ""].join(" ")}
-        >
-          <FileText size={13} className="mr-1 inline" /> 文章
-        </button>
-        <button
-          type="button"
-          onClick={() => switchTab("cards")}
-          className={["ui-segment-item", tab === "cards" ? "ui-segment-item-active" : ""].join(" ")}
-        >
-          <BookMarked size={13} className="mr-1 inline" /> 知识卡片
-        </button>
-      </div>
+      <Tabs value={tab} onValueChange={(v) => switchTab(v as SearchTab)} className="mb-4">
+        <TabsList className="grid w-full max-w-xs grid-cols-2">
+          <TabsTrigger value="articles">
+            <FileText size={13} className="mr-1" /> 文章
+          </TabsTrigger>
+          <TabsTrigger value="cards">
+            <BookMarked size={13} className="mr-1" /> 知识卡片
+          </TabsTrigger>
+        </TabsList>
+      </Tabs>
 
       {/* Search input */}
       <motion.div
@@ -290,7 +285,7 @@ export default function SearchPage({
                   animate={{ opacity: 1, y: 0 }}
                   transition={{ delay: i * 0.04 }}
                   onClick={() => openDetail(a.id)}
-                  className="p-4 rounded-xl cursor-pointer border border-gray-100/80 dark:border-white/5 bg-white dark:bg-white/[0.04] hover:border-gray-200 dark:hover:border-white/10 hover:shadow-card-hover transition-all duration-200"
+                  className="p-4 rounded-xl card-interactive border border-gray-100/80 dark:border-white/5 bg-white dark:bg-white/[0.04]"
                 >
                   <div className="flex items-center gap-2 mb-1">
                     <span className="text-xs text-gray-400 dark:text-gray-400 font-mono">
@@ -346,7 +341,7 @@ export default function SearchPage({
                   animate={{ opacity: 1, y: 0 }}
                   transition={{ delay: i * 0.04 }}
                   onClick={() => onOpenKnowledgeCard(card.id)}
-                  className="p-4 rounded-xl cursor-pointer border border-gray-100/80 dark:border-white/5 bg-white dark:bg-white/[0.04] hover:border-gray-200 dark:hover:border-white/10 hover:shadow-card-hover transition-all duration-200"
+                  className="p-4 rounded-xl card-interactive border border-gray-100/80 dark:border-white/5 bg-white dark:bg-white/[0.04]"
                 >
                   <div className="flex flex-wrap items-center gap-2 mb-1">
                     <span className="rounded-md bg-accent-light px-1.5 py-0.5 text-[11px] font-semibold text-accent dark:bg-accent-light/20">
