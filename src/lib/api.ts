@@ -251,6 +251,7 @@ export interface KnowledgeCard {
   related_ids?: string[];
   declared_related_ids?: string[];
   first_reviewed_at?: string;
+  projects?: string[];
 }
 
 export interface KnowledgeTagCount {
@@ -259,16 +260,17 @@ export interface KnowledgeTagCount {
 }
 
 function mapKnowledgeCard(card: KnowledgeCard): KnowledgeCard {
-  return { ...card, tags: readTagList(card.tags) };
+  return { ...card, tags: readTagList(card.tags), projects: Array.isArray(card.projects) ? card.projects : [] };
 }
 
-export function listKnowledgeCards(filters: { card_type?: string; status?: string; q?: string; usage?: "never_used"; tag?: string } = {}) {
+export function listKnowledgeCards(filters: { card_type?: string; status?: string; q?: string; usage?: "never_used"; tag?: string; project?: string } = {}) {
   const params = new URLSearchParams();
   if (filters.card_type) params.set("card_type", filters.card_type);
   if (filters.status) params.set("status", filters.status);
   if (filters.q) params.set("q", filters.q);
   if (filters.usage) params.set("usage", filters.usage);
   if (filters.tag) params.set("tag", filters.tag);
+  if (filters.project) params.set("project", filters.project);
   const query = params.toString();
   return httpRequest<KnowledgeCard[]>(`/knowledge-cards${query ? `?${query}` : ""}`).then((items) => items.map(mapKnowledgeCard));
 }
@@ -277,12 +279,28 @@ export function listKnowledgeTags() {
   return httpRequest<KnowledgeTagCount[]>("/knowledge-cards/tags");
 }
 
+export function listKnowledgeProjects() {
+  return httpRequest<KnowledgeTagCount[]>("/knowledge-cards/projects");
+}
+
+export function batchKnowledgeCards(payload: {
+  ids: string[];
+  action: "confirm" | "add_tags" | "add_projects" | "delete";
+  values?: string[];
+}) {
+  return httpRequest<{ updated: number }>("/knowledge-cards/batch", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
 export function createKnowledgeCard(payload: {
   card_type: KnowledgeCardType;
   status?: KnowledgeCardStatus;
   title: string;
   content: string;
   tags?: string[];
+  projects?: string[];
   source_article_id?: string;
   source_review_id?: string;
   source_date?: string;
@@ -311,6 +329,7 @@ export function updateKnowledgeCard(id: string, payload: Partial<{
   title: string;
   content: string;
   tags: string[];
+  projects: string[];
   source_article_id: string;
   source_review_id: string;
   source_date: string;

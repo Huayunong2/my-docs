@@ -196,6 +196,7 @@ fn review_and_knowledge_http_shapes_hide_storage_serialization() {
         related_ids: vec![],
         declared_related_ids: vec![],
         first_reviewed_at: "".into(),
+        projects: vec![],
     };
 
     let review_json = serde_json::to_value(review).expect("serialize review");
@@ -238,6 +239,7 @@ fn invalid_knowledge_batch_persists_nothing() {
         source_date: "2026-07-16".into(),
         source_excerpt: "evidence".into(),
         related_ids: vec![],
+        projects: vec![],
     };
 
     assert!(db
@@ -259,6 +261,7 @@ fn card_draft(status: &str) -> KnowledgeCardDraft {
         source_date: "2026-07-16".into(),
         source_excerpt: "evidence".into(),
         related_ids: vec![],
+        projects: vec![],
     }
 }
 

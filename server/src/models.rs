@@ -154,6 +154,8 @@ pub(crate) struct KnowledgeCard {
     pub(crate) declared_related_ids: Vec<String>,
     #[serde(default)]
     pub(crate) first_reviewed_at: String,
+    #[serde(default)]
+    pub(crate) projects: Vec<String>,
 }
 
 fn default_review_ease() -> f64 {
@@ -340,6 +342,7 @@ pub(crate) struct KnowledgeListQuery {
     pub(crate) q: Option<String>,
     pub(crate) usage: Option<String>,
     pub(crate) tag: Option<String>,
+    pub(crate) project: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -369,6 +372,7 @@ pub(crate) struct CreateKnowledgeCardPayload {
     pub(crate) source_date: Option<String>,
     pub(crate) source_excerpt: Option<String>,
     pub(crate) related_ids: Option<Vec<String>>,
+    pub(crate) projects: Option<Vec<String>>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -383,6 +387,16 @@ pub(crate) struct UpdateKnowledgeCardPayload {
     pub(crate) source_date: Option<String>,
     pub(crate) source_excerpt: Option<String>,
     pub(crate) related_ids: Option<Vec<String>>,
+    pub(crate) projects: Option<Vec<String>>,
+}
+
+/// 批量操作：对一组卡片执行确认归档 / 打标签 / 改项目 / 删除。
+#[derive(Debug, Deserialize)]
+pub(crate) struct BatchKnowledgeCardsPayload {
+    pub(crate) ids: Vec<String>,
+    pub(crate) action: String,
+    #[serde(default)]
+    pub(crate) values: Vec<String>,
 }
 
 #[derive(Debug, Deserialize)]
