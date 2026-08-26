@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { BookMarked, X } from "lucide-react";
+import { BookMarked, ChevronDown, X } from "lucide-react";
 import type { Review } from "../../lib/api";
 import { normalizeReviewContent } from "../../lib/reviewContent";
 import MarkdownContent from "../MarkdownContent";
@@ -47,6 +47,7 @@ export function ReviewViewerModal({
   onClose: () => void;
 }) {
   const [editing, setEditing] = useState(false);
+  const [metaExpanded, setMetaExpanded] = useState(false);
   const sourceCount = review.kind === "weekly"
     ? review.source_article_ids.length
     : review.source_review_ids.length;
@@ -86,7 +87,35 @@ export function ReviewViewerModal({
           </button>
         </div>
 
-        <div className="grid grid-cols-2 gap-2 border-b border-gray-100 bg-gray-50/70 px-5 py-3 dark:border-white/5 dark:bg-white/[0.03] sm:grid-cols-3">
+        {/* 移动端：元信息默认折叠成一行摘要，正文优先 */}
+        <div className="border-b border-gray-100 bg-gray-50/70 px-5 py-2.5 dark:border-white/5 dark:bg-white/[0.03] sm:hidden">
+          <button
+            type="button"
+            onClick={() => setMetaExpanded(!metaExpanded)}
+            className="flex w-full items-center justify-between gap-2 text-left"
+          >
+            <span className="min-w-0 truncate text-xs text-gray-400 dark:text-gray-500">
+              {review.kind === "weekly" ? "周复盘" : "月复盘"} · {review.period_start} 至 {review.period_end} · v{review.version} · 来源 {sourceCount}
+            </span>
+            <span className="flex shrink-0 items-center gap-0.5 text-xs font-medium text-accent">
+              {metaExpanded ? "收起" : "详情"}
+              <ChevronDown size={14} className={`transition-transform ${metaExpanded ? "rotate-180" : ""}`} />
+            </span>
+          </button>
+          {metaExpanded && (
+            <div className="mt-2.5 grid grid-cols-2 gap-2">
+              {metaItems.map((item) => (
+                <div key={item.label} className="min-w-0">
+                  <div className="text-[11px] text-gray-400 dark:text-gray-500">{item.label}</div>
+                  <div className="mt-0.5 truncate text-xs font-medium text-gray-700 dark:text-gray-200">{item.value}</div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
+        {/* 桌面端：保持 6 项元信息网格不变 */}
+        <div className="hidden grid-cols-2 gap-2 border-b border-gray-100 bg-gray-50/70 px-5 py-3 dark:border-white/5 dark:bg-white/[0.03] sm:grid sm:grid-cols-3">
           {metaItems.map((item) => (
             <div key={item.label} className="min-w-0">
               <div className="text-[11px] text-gray-400 dark:text-gray-500">{item.label}</div>
