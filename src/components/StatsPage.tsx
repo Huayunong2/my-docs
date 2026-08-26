@@ -1048,7 +1048,7 @@ function CalendarDay({
         {dateNum}
       </span>
 
-      <span className="absolute right-1.5 top-1.5 z-20 flex items-center gap-0.5 sm:right-2 sm:top-2">
+      <span className="absolute right-1.5 top-1.5 z-20 hidden items-center gap-0.5 sm:flex sm:right-2 sm:top-2">
         {day.has_article && (
           <span className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-md bg-white/70 text-accent dark:bg-gray-900/30">
             <FileText size={11} />
@@ -1063,19 +1063,19 @@ function CalendarDay({
 
       {day.has_article ? (
         <div className="absolute inset-x-1.5 bottom-1.5 sm:inset-x-2 sm:bottom-2">
-          <div className="mb-1 h-1 overflow-hidden rounded-full bg-white/80 dark:bg-gray-700 sm:h-1.5">
+          <div className="mb-1 h-0.5 overflow-hidden rounded-full bg-white/80 dark:bg-gray-700 sm:h-1.5">
             <div className="h-full rounded-full bg-emerald-500" style={{ width: `${words}%` }} />
           </div>
-          <div className="flex items-center justify-between gap-1 text-[10px] leading-none text-gray-500 dark:text-gray-400">
+          <div className="hidden items-center justify-between gap-1 text-[10px] leading-none text-gray-500 dark:text-gray-400 sm:flex">
             <span className="truncate">{day.word_count} 字</span>
             {day.mood && <span className="shrink-0">{day.mood}</span>}
           </div>
         </div>
       ) : day.exemption ? (
         <div className="absolute inset-x-1.5 top-1/2 flex -translate-y-1/2 justify-center sm:inset-x-2">
-          <span className={`inline-flex max-w-full items-center gap-1 truncate rounded-full px-1.5 py-0.5 text-[10px] font-medium ${exemptionTone.pill}`}>
+          <span className={`inline-flex max-w-full items-center gap-1 truncate rounded-full px-1 py-0.5 text-[10px] font-medium sm:px-1.5 ${exemptionTone.pill}`}>
             <ExemptionIcon size={12} />
-            {day.exemption.reason}
+            <span className="hidden sm:inline">{day.exemption.reason}</span>
           </span>
         </div>
       ) : (

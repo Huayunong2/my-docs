@@ -834,7 +834,7 @@ export default function KnowledgePage({ onEditDate, onNavigate, initialCardId, i
             </div>
           </div>
 
-          <div className="grid gap-3">
+          <div className="grid gap-4">
             <input value={draft.title} onChange={(e) => updateDraft({ title: e.target.value })} placeholder="卡片标题" className="ui-field h-10" />
             <div className="grid gap-3 2xl:grid-cols-[1fr_auto]">
               <Picker label="类型" value={draft.card_type} options={typeOptions} onChange={(value) => updateDraft({ card_type: value as KnowledgeCardType })} />
@@ -1035,24 +1035,29 @@ export default function KnowledgePage({ onEditDate, onNavigate, initialCardId, i
             </div>
             <div className="flex min-w-0 flex-col">
               <div className="mb-2 flex items-center justify-between gap-2">
-                <div className="text-xs font-semibold uppercase tracking-wide text-gray-400 dark:text-gray-500">来源</div>
+                <div className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-gray-400 dark:text-gray-500">
+                  <ExternalLink size={12} /> 来源追溯
+                </div>
                 {(draft.source_date || sourceArticle?.date) && (
                   <button type="button" onClick={openSource} className="inline-flex h-7 items-center gap-1 rounded-md px-2 text-xs font-semibold text-accent hover:bg-accent-light dark:hover:bg-accent-light/20">
-                    <ExternalLink size={12} /> 查看来源
+                    <ExternalLink size={12} /> 定位原文
                   </button>
                 )}
               </div>
-              <div className="flex min-h-[280px] flex-1 flex-col rounded-lg border border-gray-100 bg-gray-50 p-3 dark:border-white/10 dark:bg-white/[0.035]">
-                <div className="text-xs font-medium text-gray-500 dark:text-gray-400">
-                  {sourceLoading ? "加载来源..." : sourceArticle?.title || (draft.source_date ? `${draft.source_date} · ${currentSourceType}` : "暂无来源")}
+              <div className="flex min-h-[280px] flex-1 flex-col overflow-hidden rounded-xl border border-gray-100 bg-white shadow-xs dark:border-white/10 dark:bg-white/[0.035]">
+                <div className="flex items-center gap-2 border-b border-gray-100 px-3 py-2 dark:border-white/10">
+                  <FileText size={13} className="shrink-0 text-gray-400" />
+                  <div className="min-w-0 flex-1 truncate text-xs font-medium text-gray-600 dark:text-gray-300">
+                    {sourceLoading ? "加载来源..." : sourceArticle?.title || (draft.source_date ? `${draft.source_date} · ${currentSourceType}` : "暂无来源")}
+                  </div>
                 </div>
                 <textarea
                   value={draft.source_excerpt}
                   onChange={(e) => updateDraft({ source_excerpt: e.target.value })}
                   placeholder="支撑这张卡片的原文片段"
-                  className="mt-3 min-h-[120px] flex-1 w-full resize-none rounded-lg border border-gray-200 bg-white px-3 py-2 text-xs leading-5 text-gray-600 outline-hidden focus:border-accent/40 dark:border-white/10 dark:bg-gray-950/30 dark:text-gray-300"
+                  className="min-h-[120px] flex-1 w-full resize-none border-0 bg-transparent px-3 py-2 text-xs leading-5 text-gray-700 outline-hidden placeholder:text-gray-400 dark:text-gray-200 dark:placeholder:text-gray-500"
                 />
-                <div className="mt-2 grid gap-2">
+                <div className="grid gap-2 border-t border-gray-100 p-3 pt-2 dark:border-white/10">
                   <input value={draft.source_date} onChange={(e) => updateDraft({ source_date: e.target.value })} placeholder="来源日期 YYYY-MM-DD" className="ui-field h-9 text-xs" />
                   <input value={draft.source_article_id || draft.source_review_id} readOnly placeholder="来源 ID" className="ui-field h-9 bg-gray-50 text-xs text-gray-400 dark:bg-white/[0.035]" />
                 </div>
