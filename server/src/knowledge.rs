@@ -106,6 +106,7 @@ pub(crate) async fn list_cards(
     let status_filter = q.status.unwrap_or_default();
     let usage_filter = q.usage.unwrap_or_default();
     let tag_filter = q.tag.unwrap_or_default();
+    let project_filter = q.project.unwrap_or_default();
     let mut cards = Vec::new();
     for card in rows {
         if !card_type_filter.is_empty() && card.card_type != card_type_filter {
@@ -118,6 +119,9 @@ pub(crate) async fn list_cards(
             continue;
         }
         if !tag_filter.is_empty() && !card.tags.iter().any(|t| t == &tag_filter) {
+            continue;
+        }
+        if !project_filter.is_empty() && !card.projects.iter().any(|p| p == &project_filter) {
             continue;
         }
         if !query.is_empty() {
@@ -155,6 +159,31 @@ pub(crate) async fn list_tags(
         .collect();
     tags.sort_by(|a, b| b.count.cmp(&a.count).then_with(|| a.tag.cmp(&b.tag)));
     Ok(Json(tags))
+}
+
+/// 返回所有已用项目/领域及其计数，按使用频次降序、同频次按名称排序。
+pub(crate) async fn list_projects(
+    State(db): State<AppState>,
+) -> Result<Json<Vec<KnowledgeTagCount>>, (StatusCode, String)> {
+    let mut db = db
+        .lock()
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let rows = db
+        .knowledge()
+        .list()
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let mut counts: BTreeMap<String, i64> = BTreeMap::new();
+    for card in rows {
+        for project in card.projects {
+            *counts.entry(project).or_default() += 1;
+        }
+    }
+    let mut projects: Vec<KnowledgeTagCount> = counts
+        .into_iter()
+        .map(|(tag, count)| KnowledgeTagCount { tag, count })
+        .collect();
+    projects.sort_by(|a, b| b.count.cmp(&a.count).then_with(|| a.tag.cmp(&b.tag)));
+    Ok(Json(projects))
 }
 
 pub(crate) async fn extract_cards(
@@ -236,6 +265,7 @@ JSON 格式：
             source_date: source_date.clone(),
             source_excerpt,
             related_ids: vec![],
+            projects: vec![],
         });
     }
     let mut db = db
@@ -374,6 +404,7 @@ pub(crate) async fn create_card(
             source_date: payload.source_date.unwrap_or_default(),
             source_excerpt: payload.source_excerpt.unwrap_or_default(),
             related_ids: payload.related_ids.unwrap_or_default(),
+            projects: payload.projects.unwrap_or_default(),
         })
         .map(Json)
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))
@@ -435,6 +466,7 @@ pub(crate) async fn update_card(
     let source_date = payload.source_date.unwrap_or(existing.source_date);
     let source_excerpt = payload.source_excerpt.unwrap_or(existing.source_excerpt);
     let related_ids = payload.related_ids.unwrap_or(existing.related_ids);
+    let projects = payload.projects.unwrap_or(existing.projects);
     db.knowledge()
         .update(
             &id,
@@ -449,6 +481,7 @@ pub(crate) async fn update_card(
                 source_date,
                 source_excerpt,
                 related_ids,
+                projects,
             },
         )
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
@@ -471,6 +504,88 @@ pub(crate) async fn delete_card(
         return Err((StatusCode::NOT_FOUND, "Knowledge card not found".into()));
     }
     Ok(StatusCode::NO_CONTENT)
+}
+
+fn card_to_draft(card: &KnowledgeCard) -> KnowledgeCardDraft {
+    KnowledgeCardDraft {
+        card_type: card.card_type.clone(),
+        status: card.status.clone(),
+        title: card.title.clone(),
+        content: card.content.clone(),
+        tags: card.tags.clone(),
+        source_article_id: card.source_article_id.clone(),
+        source_review_id: card.source_review_id.clone(),
+        source_date: card.source_date.clone(),
+        source_excerpt: card.source_excerpt.clone(),
+        related_ids: card.related_ids.clone(),
+        projects: card.projects.clone(),
+    }
+}
+
+/// 批量操作：confirm（确认归档）/ add_tags（追加标签）/ add_projects（追加项目）/ delete（删除）。
+pub(crate) async fn batch_cards(
+    State(db): State<AppState>,
+    Json(payload): Json<BatchKnowledgeCardsPayload>,
+) -> Result<Json<Value>, (StatusCode, String)> {
+    if payload.ids.is_empty() {
+        return Err((StatusCode::BAD_REQUEST, "ids is required".into()));
+    }
+    let action = payload.action.as_str();
+    if !matches!(action, "confirm" | "add_tags" | "add_projects" | "delete") {
+        return Err((StatusCode::BAD_REQUEST, "Invalid action".into()));
+    }
+    let mut db = db
+        .lock()
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let mut updated: i64 = 0;
+    for id in &payload.ids {
+        if action == "delete" {
+            if db
+                .knowledge()
+                .delete(id)
+                .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+            {
+                updated += 1;
+            }
+            continue;
+        }
+        let Some(mut card) = db
+            .knowledge()
+            .find(id)
+            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+        else {
+            continue;
+        };
+        match action {
+            "confirm" => {
+                if card.status != "confirmed" {
+                    card.status = "confirmed".to_string();
+                }
+            }
+            "add_tags" => {
+                for value in &payload.values {
+                    let value = value.trim().to_string();
+                    if !value.is_empty() && !card.tags.contains(&value) {
+                        card.tags.push(value);
+                    }
+                }
+            }
+            "add_projects" => {
+                for value in &payload.values {
+                    let value = value.trim().to_string();
+                    if !value.is_empty() && !card.projects.contains(&value) {
+                        card.projects.push(value);
+                    }
+                }
+            }
+            _ => unreachable!(),
+        }
+        db.knowledge()
+            .update(id, card_to_draft(&card))
+            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        updated += 1;
+    }
+    Ok(Json(serde_json::json!({ "updated": updated })))
 }
 
 #[cfg(test)]
