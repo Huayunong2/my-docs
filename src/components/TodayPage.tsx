@@ -38,6 +38,7 @@ import { Tabs, TabsList, TabsTrigger } from "./ui/tabs";
 import { DayPicker } from "react-day-picker";
 import "react-day-picker/style.css";
 import CodeMirror from "@uiw/react-codemirror";
+import { EditorView } from "@codemirror/view";
 import { markdown } from "@codemirror/lang-markdown";
 
 const moods = [
@@ -1054,7 +1055,7 @@ export default function TodayPage({
             <CodeMirror
               value={content}
               onChange={handleContentChange}
-              extensions={[markdown()]}
+              extensions={[markdown(), EditorView.lineWrapping]}
               placeholder={`开始写 ${date} 的总结...`}
               theme={dark ? "dark" : "light"}
               height="100%"

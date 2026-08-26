@@ -2,15 +2,18 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { motion } from "framer-motion";
 import { useAutoAnimate } from "@formkit/auto-animate/react";
 import CodeMirror from "@uiw/react-codemirror";
+import { EditorView } from "@codemirror/view";
 import { markdown } from "@codemirror/lang-markdown";
 import { Line, LineChart, ResponsiveContainer, Tooltip } from "recharts";
 import { Command } from "cmdk";
 import {
   BookMarked,
   CheckCircle2,
+  ChevronDown,
   ChevronRight,
   ExternalLink,
   FileText,
+  Folder,
   Lightbulb,
   LoaderCircle,
   MoreHorizontal,
@@ -40,6 +43,7 @@ const emptyDraft = {
   title: "",
   content: "",
   tagsText: "",
+  projectsText: "",
   source_date: "",
   source_article_id: "",
   source_review_id: "",
@@ -56,6 +60,7 @@ function toDraft(card: KnowledgeCard): DraftState {
     title: card.title,
     content: card.content,
     tagsText: card.tags.join(", "),
+    projectsText: (card.projects || []).join(", "),
     source_date: card.source_date,
     source_article_id: card.source_article_id,
     source_review_id: card.source_review_id,
@@ -70,6 +75,7 @@ function payloadFromDraft(draft: DraftState) {
     title: draft.title.trim(),
     content: draft.content.trim(),
     tags: normalizeTags(draft.tagsText.split(",").map((tag) => tag.trim()).filter(Boolean)),
+    projects: normalizeTags(draft.projectsText.split(",").map((tag) => tag.trim()).filter(Boolean)),
     source_date: draft.source_date.trim(),
     source_article_id: draft.source_article_id.trim(),
     source_review_id: draft.source_review_id.trim(),
@@ -101,6 +107,13 @@ export default function KnowledgePage({ onEditDate, onNavigate, initialCardId, i
   const [tagFilter, setTagFilter] = useState("");
   const [tagCounts, setTagCounts] = useState<api.KnowledgeTagCount[]>([]);
   const [tagInput, setTagInput] = useState("");
+  const [projectFilter, setProjectFilter] = useState("");
+  const [projectCounts, setProjectCounts] = useState<api.KnowledgeTagCount[]>([]);
+  const [projectInput, setProjectInput] = useState("");
+  const [newProjectName, setNewProjectName] = useState("");
+  const [batchMode, setBatchMode] = useState<"" | "tag" | "project">("");
+  const [batchValue, setBatchValue] = useState("");
+  const [showFilters, setShowFilters] = useState(false);
   const [query, setQuery] = useState("");
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -154,7 +167,7 @@ export default function KnowledgePage({ onEditDate, onNavigate, initialCardId, i
     setError("");
     try {
       const [list, fullList] = await Promise.all([
-        api.listKnowledgeCards({ card_type: typeFilter, status: activeStatus, q: query.trim(), usage: usageFilter || undefined, tag: tagFilter || undefined }),
+        api.listKnowledgeCards({ card_type: typeFilter, status: activeStatus, q: query.trim(), usage: usageFilter || undefined, tag: tagFilter || undefined, project: projectFilter || undefined }),
         api.listKnowledgeCards(),
       ]);
       setCards(list);
@@ -173,13 +186,21 @@ export default function KnowledgePage({ onEditDate, onNavigate, initialCardId, i
     }
   };
 
-  useEffect(() => { loadCards(false); }, [activeStatus, typeFilter, usageFilter, tagFilter]);
+  useEffect(() => { loadCards(false); }, [activeStatus, typeFilter, usageFilter, tagFilter, projectFilter]);
 
   useEffect(() => {
     let cancelled = false;
     api.listKnowledgeTags()
       .then((tags) => { if (!cancelled) setTagCounts(tags); })
       .catch(() => { if (!cancelled) setTagCounts([]); });
+    return () => { cancelled = true; };
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    api.listKnowledgeProjects()
+      .then((projects) => { if (!cancelled) setProjectCounts(projects); })
+      .catch(() => { if (!cancelled) setProjectCounts([]); });
     return () => { cancelled = true; };
   }, []);
 
@@ -251,6 +272,44 @@ export default function KnowledgePage({ onEditDate, onNavigate, initialCardId, i
   const removeTag = (tag: string) => {
     updateDraft({ tagsText: parsedTags.filter((item) => item !== tag).join(", ") });
   };
+
+  const parsedProjects = useMemo(
+    () => normalizeTags(draft.projectsText.split(",").map((project) => project.trim()).filter(Boolean)),
+    [draft.projectsText]
+  );
+
+  const addProject = (raw?: string) => {
+    const input = (raw ?? projectInput).trim();
+    const parts = input.split(",").map((part) => part.trim()).filter(Boolean);
+    if (!parts.length) return;
+    const next = [...parsedProjects];
+    for (const part of parts) {
+      const project = normalizeTags([part])[0];
+      if (project && !next.includes(project)) next.push(project);
+    }
+    updateDraft({ projectsText: next.join(", ") });
+    setProjectInput("");
+  };
+
+  const removeProject = (project: string) => {
+    updateDraft({ projectsText: parsedProjects.filter((item) => item !== project).join(", ") });
+  };
+
+  const createProject = () => {
+    const name = newProjectName.trim();
+    if (!name) return;
+    setProjectCounts((prev) => {
+      if (prev.some((project) => project.tag === name)) return prev;
+      return [...prev, { tag: name, count: 0 }].sort((a, b) => b.count - a.count);
+    });
+    setProjectFilter(name);
+    setNewProjectName("");
+  };
+
+  const projectSuggestions = useMemo(
+    () => projectCounts.filter(({ tag }) => !parsedProjects.includes(tag)).slice(0, 6),
+    [projectCounts, parsedProjects]
+  );
 
   const tagSuggestions = useMemo(
     () => tagCounts.filter(({ tag }) => !parsedTags.includes(tag)).slice(0, 8),
@@ -394,6 +453,25 @@ export default function KnowledgePage({ onEditDate, onNavigate, initialCardId, i
   };
   const clearSelection = () => setSelectedIds([]);
 
+  const applyBatch = async () => {
+    const values = batchValue.split(",").map((value) => value.trim()).filter(Boolean);
+    if (!values.length || !selectedIds.length || !batchMode) return;
+    setSaving(true);
+    try {
+      await api.batchKnowledgeCards({ ids: selectedIds, action: batchMode === "tag" ? "add_tags" : "add_projects", values });
+      const ids = selectedIds.length;
+      setSelectedIds([]);
+      setBatchMode("");
+      setBatchValue("");
+      await loadCards(false);
+      setNotice(batchMode === "tag" ? `已为 ${ids} 张卡片添加标签。` : `已为 ${ids} 张卡片归入项目。`);
+    } catch (e) {
+      setNotice(api.getErrorMessage(e));
+    } finally {
+      setSaving(false);
+    }
+  };
+
   const openSource = () => {
     if (draft.source_review_id || selectedCard?.source_review_id) {
       onNavigate("reviews");
@@ -445,69 +523,139 @@ export default function KnowledgePage({ onEditDate, onNavigate, initialCardId, i
           <button type="button" onClick={() => loadCards(false)} className="ui-button-secondary mt-2 w-full">
             搜索
           </button>
-          <div className="mt-3 grid grid-cols-3 gap-1.5">
-            {statusOptions.map(([status, label]) => (
-              <button
-                key={status}
-                type="button"
-                onClick={() => setActiveStatus(status)}
-                className={[
-                  "rounded-lg border px-2 py-2 text-left transition-colors",
-                  activeStatus === status
-                    ? "border-accent/30 bg-accent-light text-accent dark:bg-accent-light/20"
-                    : "border-gray-200/70 bg-gray-50 text-gray-500 dark:border-white/10 dark:bg-white/[0.035] dark:text-gray-400",
-                ].join(" ")}
-              >
-                <div className="text-[10px] leading-none">{label}</div>
-                <div className="mt-1 font-mono text-sm font-bold">{counts[status]}</div>
-              </button>
-            ))}
-          </div>
+          {/* 项目导航（一级，突出） */}
           <div className="mt-4">
-            <div className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-gray-400 dark:text-gray-500">类型</div>
-            <div className="grid grid-cols-2 gap-1.5 xl:grid-cols-1">
-              <FilterButton active={!typeFilter} onClick={() => setTypeFilter("")}>全部类型</FilterButton>
-              {typeOptions.map(([value, label]) => (
-                <FilterButton key={value} active={typeFilter === value} onClick={() => setTypeFilter(value)}>{label}</FilterButton>
-              ))}
-            </div>
-          </div>
-          <div className="mt-4">
-            <div className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-gray-400 dark:text-gray-500">使用</div>
-            <div className="grid grid-cols-2 gap-1.5 xl:grid-cols-1">
-              <FilterButton active={!usageFilter} onClick={() => setUsageFilter("")}>全部卡片</FilterButton>
-              <FilterButton active={usageFilter === "never_used"} onClick={() => setUsageFilter(usageFilter === "never_used" ? "" : "never_used")}>从未使用</FilterButton>
-            </div>
-          </div>
-          <div className="mt-4">
-            <div className="mb-2 flex items-center justify-between">
-              <div className="text-[11px] font-semibold uppercase tracking-wide text-gray-400 dark:text-gray-500">标签</div>
-              {tagFilter && (
-                <button type="button" onClick={() => setTagFilter("")} className="text-[11px] font-medium text-accent hover:underline">清除</button>
+            <div className="mb-1.5 flex items-center justify-between px-1">
+              <div className="text-[11px] font-semibold uppercase tracking-wide text-gray-400 dark:text-gray-500">项目</div>
+              {projectFilter && (
+                <button type="button" onClick={() => setProjectFilter("")} className="text-[11px] font-medium text-accent hover:underline">显示全部</button>
               )}
             </div>
-            {tagCounts.length === 0 ? (
-              <p className="text-xs text-gray-400 dark:text-gray-500">暂无标签</p>
-            ) : (
-              <div className="flex max-h-44 flex-wrap gap-1.5 overflow-y-auto">
-                {tagCounts.map(({ tag, count }) => (
-                  <button
-                    key={tag}
-                    type="button"
-                    onClick={() => setTagFilter(tagFilter === tag ? "" : tag)}
-                    className={[
-                      "inline-flex items-center gap-1 rounded-lg border px-2 py-1 text-xs font-medium transition-colors",
-                      tagFilter === tag
-                        ? "border-accent/30 bg-accent-light text-accent dark:bg-accent-light/20"
-                        : "border-gray-200/70 bg-white text-gray-500 hover:bg-gray-50 dark:border-white/10 dark:bg-white/[0.04] dark:text-gray-400 dark:hover:bg-white/10",
-                    ].join(" ")}
-                  >
-                    #{tag} <span className="opacity-60">{count}</span>
-                  </button>
-                ))}
+            <div className="flex flex-col gap-0.5">
+              <button
+                type="button"
+                onClick={() => setProjectFilter("")}
+                className={[
+                  "flex items-center justify-between rounded-lg px-2.5 py-2 text-[13px] font-medium transition-colors",
+                  !projectFilter ? "bg-accent text-white shadow-xs" : "text-gray-600 hover:bg-gray-100 dark:text-gray-300 dark:hover:bg-white/5",
+                ].join(" ")}
+              >
+                <span className="flex items-center gap-2"><Folder size={15} /> 全部卡片</span>
+              </button>
+              {projectCounts.map(({ tag, count }) => (
+                <button
+                  key={tag}
+                  type="button"
+                  onClick={() => setProjectFilter(projectFilter === tag ? "" : tag)}
+                  className={[
+                    "flex items-center justify-between rounded-lg px-2.5 py-2 text-[13px] font-medium transition-colors",
+                    projectFilter === tag ? "bg-accent text-white shadow-xs" : "text-gray-600 hover:bg-gray-100 dark:text-gray-300 dark:hover:bg-white/5",
+                  ].join(" ")}
+                >
+                  <span className="flex min-w-0 items-center gap-2">
+                    <Folder size={15} className={projectFilter === tag ? "text-white/90" : "opacity-70"} />
+                    <span className="truncate">{tag}</span>
+                  </span>
+                  <span className={`ml-2 shrink-0 rounded-full px-1.5 py-0.5 text-[11px] font-semibold leading-none ${projectFilter === tag ? "bg-white/20 text-white" : "bg-gray-100 text-gray-400 dark:bg-white/10 dark:text-gray-500"}`}>{count}</span>
+                </button>
+              ))}
+              {projectCounts.length === 0 && (
+                <p className="px-2 py-1 text-xs text-gray-400 dark:text-gray-500">暂无项目，创建一个</p>
+              )}
+            </div>
+            <div className="mt-1.5 flex gap-1.5">
+              <input
+                value={newProjectName}
+                onChange={(e) => setNewProjectName(e.target.value)}
+                onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); createProject(); } }}
+                placeholder="新建项目..."
+                className="h-8 min-w-0 flex-1 rounded-lg border border-dashed border-gray-200 bg-transparent px-2 text-xs text-gray-800 outline-hidden placeholder:text-gray-400 focus:border-accent/40 dark:border-white/15 dark:text-gray-100 dark:placeholder:text-gray-500"
+              />
+              <button type="button" onClick={createProject} className="h-8 shrink-0 rounded-lg bg-accent-light px-2 text-xs font-semibold text-accent hover:bg-accent-light/80 dark:bg-accent-light/20">
+                <Plus size={13} />
+              </button>
+            </div>
+          </div>
+
+          {/* 筛选与状态（折叠） */}
+          <div className="mt-4 border-t border-gray-100 pt-2 dark:border-white/10">
+            <button
+              type="button"
+              onClick={() => setShowFilters(!showFilters)}
+              className="flex w-full items-center justify-between rounded-lg px-1 py-1.5 text-[11px] font-semibold uppercase tracking-wide text-gray-400 transition-colors hover:text-gray-600 dark:text-gray-500 dark:hover:text-gray-300"
+            >
+              <span>筛选与状态</span>
+              <ChevronDown size={14} className={`transition-transform ${showFilters ? "rotate-180" : ""}`} />
+            </button>
+            {showFilters && (
+              <div className="mt-2 space-y-4">
+                <div className="grid grid-cols-3 gap-1.5">
+                  {statusOptions.map(([status, label]) => (
+                    <button
+                      key={status}
+                      type="button"
+                      onClick={() => setActiveStatus(status)}
+                      className={[
+                        "rounded-lg border px-2 py-2 text-left transition-colors",
+                        activeStatus === status
+                          ? "border-accent/30 bg-accent-light text-accent dark:bg-accent-light/20"
+                          : "border-gray-200/70 bg-gray-50 text-gray-500 dark:border-white/10 dark:bg-white/[0.035] dark:text-gray-400",
+                      ].join(" ")}
+                    >
+                      <div className="text-[10px] leading-none">{label}</div>
+                      <div className="mt-1 font-mono text-sm font-bold">{counts[status]}</div>
+                    </button>
+                  ))}
+                </div>
+                <div>
+                  <div className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-gray-400 dark:text-gray-500">类型</div>
+                  <div className="grid grid-cols-2 gap-1.5 xl:grid-cols-1">
+                    <FilterButton active={!typeFilter} onClick={() => setTypeFilter("")}>全部类型</FilterButton>
+                    {typeOptions.map(([value, label]) => (
+                      <FilterButton key={value} active={typeFilter === value} onClick={() => setTypeFilter(value)}>{label}</FilterButton>
+                    ))}
+                  </div>
+                </div>
+                <div>
+                  <div className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-gray-400 dark:text-gray-500">使用</div>
+                  <div className="grid grid-cols-2 gap-1.5 xl:grid-cols-1">
+                    <FilterButton active={!usageFilter} onClick={() => setUsageFilter("")}>全部卡片</FilterButton>
+                    <FilterButton active={usageFilter === "never_used"} onClick={() => setUsageFilter(usageFilter === "never_used" ? "" : "never_used")}>从未使用</FilterButton>
+                  </div>
+                </div>
+                <div>
+                  <div className="mb-2 flex items-center justify-between">
+                    <div className="text-[11px] font-semibold uppercase tracking-wide text-gray-400 dark:text-gray-500">标签</div>
+                    {tagFilter && (
+                      <button type="button" onClick={() => setTagFilter("")} className="text-[11px] font-medium text-accent hover:underline">清除</button>
+                    )}
+                  </div>
+                  {tagCounts.length === 0 ? (
+                    <p className="text-xs text-gray-400 dark:text-gray-500">暂无标签</p>
+                  ) : (
+                    <div className="flex max-h-44 flex-wrap gap-1.5 overflow-y-auto">
+                      {tagCounts.map(({ tag, count }) => (
+                        <button
+                          key={tag}
+                          type="button"
+                          onClick={() => setTagFilter(tagFilter === tag ? "" : tag)}
+                          className={[
+                            "inline-flex items-center gap-1 rounded-lg border px-2 py-1 text-xs font-medium transition-colors",
+                            tagFilter === tag
+                              ? "border-accent/30 bg-accent-light text-accent dark:bg-accent-light/20"
+                              : "border-gray-200/70 bg-white text-gray-500 hover:bg-gray-50 dark:border-white/10 dark:bg-white/[0.04] dark:text-gray-400 dark:hover:bg-white/10",
+                          ].join(" ")}
+                        >
+                          #{tag} <span className="opacity-60">{count}</span>
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
               </div>
             )}
           </div>
+
           <button type="button" onClick={startNew} className="ui-button-primary mt-4 w-full">
             <Plus size={14} /> 新建卡片
           </button>
@@ -542,21 +690,44 @@ export default function KnowledgePage({ onEditDate, onNavigate, initialCardId, i
             )}
             </div>
             {selectedIds.length > 0 && (
-              <div className="mt-1 flex flex-wrap items-center justify-between gap-1.5 rounded-lg border border-accent/15 bg-accent-light/40 px-2 py-1.5 dark:bg-accent-light/10">
-                <span className="text-xs font-medium text-accent">已选 {selectedIds.length}</span>
-                <div className="flex flex-wrap items-center gap-1.5">
-                {activeStatus === "draft" && (
-                  <button type="button" onClick={() => updateStatus("confirmed", selectedIds)} className="h-8 rounded-lg px-2 text-xs font-semibold text-emerald-600 hover:bg-emerald-50 dark:text-emerald-300 dark:hover:bg-emerald-500/10">
-                    批量确认
+              <div className="mt-1 flex flex-col gap-1.5 rounded-lg border border-accent/15 bg-accent-light/40 px-2 py-1.5 dark:bg-accent-light/10">
+                <div className="flex flex-wrap items-center justify-between gap-1.5">
+                  <span className="text-xs font-medium text-accent">已选 {selectedIds.length}</span>
+                  <div className="flex flex-wrap items-center gap-1.5">
+                  {activeStatus === "draft" && (
+                    <button type="button" onClick={() => updateStatus("confirmed", selectedIds)} className="h-8 rounded-lg px-2 text-xs font-semibold text-emerald-600 hover:bg-emerald-50 dark:text-emerald-300 dark:hover:bg-emerald-500/10">
+                      批量确认
+                    </button>
+                  )}
+                  <button type="button" onClick={() => { setBatchMode(batchMode === "tag" ? "" : "tag"); setBatchValue(""); }} className={`h-8 rounded-lg px-2 text-xs font-semibold ${batchMode === "tag" ? "bg-accent text-white" : "text-accent hover:bg-white dark:hover:bg-white/10"}`}>
+                    打标签
                   </button>
-                )}
-                <button type="button" onClick={() => deleteCards(selectedIds)} className="h-8 rounded-lg px-2 text-xs font-semibold text-red-600 hover:bg-red-50 dark:text-red-300 dark:hover:bg-red-500/10">
-                  批量删除
-                </button>
-                <button type="button" onClick={clearSelection} className="h-8 rounded-lg px-2 text-xs font-medium text-gray-500 hover:bg-white dark:text-gray-400 dark:hover:bg-white/10">
-                  清空
-                </button>
+                  <button type="button" onClick={() => { setBatchMode(batchMode === "project" ? "" : "project"); setBatchValue(""); }} className={`h-8 rounded-lg px-2 text-xs font-semibold ${batchMode === "project" ? "bg-accent text-white" : "text-accent hover:bg-white dark:hover:bg-white/10"}`}>
+                    改项目
+                  </button>
+                  <button type="button" onClick={() => deleteCards(selectedIds)} className="h-8 rounded-lg px-2 text-xs font-semibold text-red-600 hover:bg-red-50 dark:text-red-300 dark:hover:bg-red-500/10">
+                    批量删除
+                  </button>
+                  <button type="button" onClick={clearSelection} className="h-8 rounded-lg px-2 text-xs font-medium text-gray-500 hover:bg-white dark:text-gray-400 dark:hover:bg-white/10">
+                    清空
+                  </button>
+                  </div>
                 </div>
+                {batchMode && (
+                  <div className="flex w-full items-center gap-1.5">
+                    <input
+                      value={batchValue}
+                      onChange={(e) => setBatchValue(e.target.value)}
+                      onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); applyBatch(); } }}
+                      placeholder={batchMode === "tag" ? "输入标签，逗号分隔多个" : "输入项目名"}
+                      className="h-8 min-w-0 flex-1 rounded-lg border border-accent/25 bg-white px-2 text-xs text-gray-800 outline-hidden placeholder:text-gray-400 focus:border-accent/60 dark:bg-gray-950/40 dark:text-gray-100 dark:placeholder:text-gray-500"
+                      autoFocus
+                    />
+                    <button type="button" onClick={applyBatch} disabled={saving} className="h-8 shrink-0 rounded-lg bg-accent px-2.5 text-xs font-semibold text-white hover:bg-accent-hover disabled:opacity-50">
+                      应用
+                    </button>
+                  </div>
+                )}
               </div>
             )}
           </div>
@@ -673,7 +844,7 @@ export default function KnowledgePage({ onEditDate, onNavigate, initialCardId, i
               <CodeMirror
                 value={draft.content}
                 onChange={(value) => updateDraft({ content: value })}
-                extensions={[markdown()]}
+                extensions={[markdown(), EditorView.lineWrapping]}
                 placeholder="沉淀事实、方法、概念、决策依据或案例..."
                 theme={dark ? "dark" : "light"}
                 height="200px"
@@ -708,7 +879,7 @@ export default function KnowledgePage({ onEditDate, onNavigate, initialCardId, i
                   }}
                   onBlur={() => addTag()}
                   placeholder={parsedTags.length ? "添加标签" : "添加标签"}
-                  className="h-8 min-w-[120px] flex-1 border-0 bg-transparent px-1 text-sm outline-hidden"
+                  className="h-8 min-w-[120px] flex-1 border-0 bg-transparent px-1 text-sm text-gray-800 outline-hidden placeholder:text-gray-400 dark:text-gray-100 dark:placeholder:text-gray-500"
                 />
               </div>
               {tagSuggestions.length > 0 && (
@@ -722,6 +893,53 @@ export default function KnowledgePage({ onEditDate, onNavigate, initialCardId, i
                       className="rounded-md bg-gray-100 px-2 py-0.5 text-[11px] font-medium text-gray-600 hover:bg-gray-200 dark:bg-white/[0.06] dark:text-gray-300 dark:hover:bg-white/10"
                     >
                       #{tag}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+            <div>
+              <div className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-gray-400 dark:text-gray-500">项目</div>
+              <div className="flex flex-wrap items-center gap-1.5 rounded-lg border border-gray-200 bg-white px-2 py-1.5 dark:border-white/10 dark:bg-gray-950/30">
+                {parsedProjects.map((project) => (
+                  <button
+                    key={project}
+                    type="button"
+                    onClick={() => removeProject(project)}
+                    className="ui-chip border-accent/20 bg-accent-light text-accent hover:bg-accent-light/80 dark:bg-accent-light/20"
+                    title="点击移除项目"
+                  >
+                    <Folder size={12} /> {project} <X size={12} />
+                  </button>
+                ))}
+                <input
+                  value={projectInput}
+                  onChange={(e) => setProjectInput(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" || e.key === ",") {
+                      e.preventDefault();
+                      addProject();
+                    }
+                    if (e.key === "Backspace" && !projectInput && parsedProjects.length) {
+                      removeProject(parsedProjects[parsedProjects.length - 1]);
+                    }
+                  }}
+                  onBlur={() => addProject()}
+                  placeholder="归入项目（可多个）"
+                  className="h-8 min-w-[120px] flex-1 border-0 bg-transparent px-1 text-sm text-gray-800 outline-hidden placeholder:text-gray-400 dark:text-gray-100 dark:placeholder:text-gray-500"
+                />
+              </div>
+              {projectSuggestions.length > 0 && (
+                <div className="mt-2 flex flex-wrap items-center gap-1.5">
+                  <span className="text-[11px] text-gray-400">建议</span>
+                  {projectSuggestions.map(({ tag }) => (
+                    <button
+                      key={tag}
+                      type="button"
+                      onClick={() => addProject(tag)}
+                      className="rounded-md bg-gray-100 px-2 py-0.5 text-[11px] font-medium text-gray-600 hover:bg-gray-200 dark:bg-white/[0.06] dark:text-gray-300 dark:hover:bg-white/10"
+                    >
+                      <Folder size={11} className="mr-0.5 inline" />{tag}
                     </button>
                   ))}
                 </div>
