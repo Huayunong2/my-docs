@@ -4,8 +4,8 @@ export type Tone = "neutral" | "good" | "warn" | "bad";
 
 export const SectionTitle = ({ children, desc }: { children: string; desc?: string }) => (
   <div className="mb-3">
-    <h3 className="text-xs font-semibold uppercase tracking-widest text-gray-400 dark:text-gray-500">{children}</h3>
-    {desc && <p className="mt-1 text-xs text-gray-400 dark:text-gray-500">{desc}</p>}
+    <h3 className="text-xs font-semibold uppercase tracking-widest text-[var(--ui-text-subtle)]">{children}</h3>
+    {desc && <p className="mt-1 text-xs text-[var(--ui-text-subtle)]">{desc}</p>}
   </div>
 );
 
@@ -30,26 +30,26 @@ export const TextArea = (props: TextareaHTMLAttributes<HTMLTextAreaElement>) => 
 );
 
 export const PrimaryBtn = ({ children, ...props }: ButtonHTMLAttributes<HTMLButtonElement>) => (
-  <button {...props} className={`ui-button-primary h-10 w-full px-4 text-sm sm:w-auto ${props.className || ""}`}>{children}</button>
+  <button type="button" {...props} className={`ui-button-primary h-10 w-full px-4 text-sm sm:w-auto ${props.className || ""}`}>{children}</button>
 );
 
 export const SecondaryBtn = ({ children, ...props }: ButtonHTMLAttributes<HTMLButtonElement>) => (
-  <button {...props} className={`ui-button-secondary h-10 w-full px-4 text-sm sm:w-auto ${props.className || ""}`}>{children}</button>
+  <button type="button" {...props} className={`ui-button-secondary h-10 w-full px-4 text-sm sm:w-auto ${props.className || ""}`}>{children}</button>
 );
 
 export const DangerBtn = ({ children, ...props }: ButtonHTMLAttributes<HTMLButtonElement>) => (
-  <button {...props} className={`ui-button-danger h-10 w-full px-4 text-sm sm:w-auto ${props.className || ""}`}>{children}</button>
+  <button type="button" {...props} className={`ui-button-danger h-10 w-full px-4 text-sm sm:w-auto ${props.className || ""}`}>{children}</button>
 );
 
 export function StatusBox({ message, tone = "neutral" }: { message: string; tone?: Tone }) {
   if (!message) return null;
   const cls = {
-    neutral: "ui-alert border-gray-100 bg-gray-50 text-gray-600 dark:border-white/10 dark:bg-white/[0.04] dark:text-gray-300",
+    neutral: "ui-status-muted ui-alert",
     good: "ui-alert-good",
     warn: "ui-alert-warn",
     bad: "ui-alert-bad",
   }[tone];
-  return <div className={`whitespace-pre-wrap ${cls}`}>{message}</div>;
+  return <div role={tone === "bad" ? "alert" : "status"} aria-live={tone === "bad" ? "assertive" : "polite"} className={`whitespace-pre-wrap ${cls}`}>{message}</div>;
 }
 
 export function formatSize(bytes: number) {

@@ -16,7 +16,7 @@ use crate::stats;
 
 use axum::{extract::State, http::StatusCode, middleware, response::Json, Router};
 use std::sync::{Arc, Mutex};
-use tower_http::services::ServeDir;
+use tower_http::services::{ServeDir, ServeFile};
 
 type AppState = Arc<Mutex<Database>>;
 
@@ -270,8 +270,28 @@ fn build_router(db: Database) -> Router {
             axum::routing::get(knowledge::list_tags),
         )
         .route(
+            "/knowledge-cards/summary",
+            axum::routing::get(knowledge::summary),
+        )
+        .route(
+            "/knowledge-cards/trash",
+            axum::routing::get(knowledge::list_trash),
+        )
+        .route(
+            "/knowledge-cards/query",
+            axum::routing::get(knowledge::query_cards),
+        )
+        .route(
             "/knowledge-cards/projects",
-            axum::routing::get(knowledge::list_projects),
+            axum::routing::get(knowledge::list_projects).post(knowledge::create_project),
+        )
+        .route(
+            "/knowledge-cards/views",
+            axum::routing::get(knowledge::list_saved_views).post(knowledge::create_saved_view),
+        )
+        .route(
+            "/knowledge-cards/views/:id",
+            axum::routing::put(knowledge::update_saved_view).delete(knowledge::delete_saved_view),
         )
         .route(
             "/knowledge-cards/batch",
@@ -291,7 +311,15 @@ fn build_router(db: Database) -> Router {
             "/knowledge-cards/:id/touch",
             axum::routing::post(review::touch_card),
         )
+        .route(
+            "/review/settings",
+            axum::routing::get(review::review_settings).put(review::update_review_settings),
+        )
         .route("/review/due", axum::routing::get(review::due_cards))
+        .route(
+            "/review/:id/preview",
+            axum::routing::get(review::preview_card),
+        )
         .route("/review/stats", axum::routing::get(review::review_stats))
         .route(
             "/review/heatmap",
@@ -307,6 +335,7 @@ fn build_router(db: Database) -> Router {
         .route("/articles/import", axum::routing::post(import_articles))
         .route("/articles/import-full", axum::routing::post(import_full))
         .route("/export/full", axum::routing::post(export_full))
+        .fallback(|| async { StatusCode::NOT_FOUND })
         .route_layer(middleware::from_fn(require_api_token));
 
     Router::new()
@@ -314,7 +343,10 @@ fn build_router(db: Database) -> Router {
         .nest("/api", api_router)
         .layer(configured_cors())
         .layer(middleware::from_fn(add_security_headers))
-        .fallback_service(ServeDir::new("../dist"))
+        // Browser history routes (e.g. /knowledge/<cardId>) must resolve to the
+        // SPA entry point on a direct refresh. API routes are already matched
+        // above, so this fallback only applies to static app navigation.
+        .fallback_service(ServeDir::new("../dist").fallback(ServeFile::new("../dist/index.html")))
         .with_state(state)
 }
 

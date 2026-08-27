@@ -16,7 +16,7 @@ const PopoverContent = React.forwardRef<
       align={align}
       sideOffset={sideOffset}
       className={cn(
-        "z-50 w-72 rounded-xl border border-gray-100 bg-white p-4 text-gray-700 shadow-modal outline-hidden dark:border-white/10 dark:bg-gray-900 dark:text-gray-200",
+        "ui-floating-surface z-50 w-72 rounded-xl p-4 outline-hidden",
         "data-[state=open]:animate-scale-in",
         className
       )}

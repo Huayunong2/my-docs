@@ -1,10 +1,13 @@
 import { useEffect, useMemo, useState, useCallback } from "react";
+import { useRef } from "react";
 import { motion, AnimatePresence } from "framer-motion";
+import * as Dialog from "@radix-ui/react-dialog";
 import { CalendarDays, Edit3, FileText, PenLine, SearchX, Trash2 } from "lucide-react";
 import * as api from "../lib/api";
 import type { Article, ArticleSummary } from "../lib/api";
 import ArticleDetail from "./ArticleDetail";
 import { EmptyState, InlineError, LoadingState, useConfirmDialog } from "./ui/Feedback";
+import PageHeader from "./ui/PageHeader";
 
 const PAGE_SIZE = 20;
 
@@ -16,6 +19,7 @@ export default function HistoryPage({ onEditDate }: { onEditDate: (date: string)
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [detail, setDetail] = useState<Article | null>(null);
   const [mobileDetailOpen, setMobileDetailOpen] = useState(false);
+  const detailTriggerRef = useRef<HTMLElement | null>(null);
   const { confirm, dialog } = useConfirmDialog();
   const groupedArticles = useMemo(() => groupArticlesByTime(articles), [articles]);
 
@@ -44,7 +48,8 @@ export default function HistoryPage({ onEditDate }: { onEditDate: (date: string)
     loadArticles(next);
   };
 
-  const openDetail = async (id: string) => {
+  const openDetail = async (id: string, trigger?: HTMLElement) => {
+    detailTriggerRef.current = trigger || null;
     setSelectedId(id);
     setMobileDetailOpen(true);
     try {
@@ -92,7 +97,7 @@ export default function HistoryPage({ onEditDate }: { onEditDate: (date: string)
     <motion.div
       initial={{ opacity: 0, y: 10 }}
       animate={{ opacity: 1, y: 0 }}
-      className="h-full flex flex-col md:flex-row"
+      className="page-surface page-surface-history h-full flex flex-col md:flex-row"
     >
       {/* Timeline list */}
       <div
@@ -103,30 +108,23 @@ export default function HistoryPage({ onEditDate }: { onEditDate: (date: string)
             : "flex-1 md:px-8",
         ].join(" ")}
       >
-        <div className="mb-5 flex items-center justify-between gap-3">
-          <div className="flex items-start gap-3">
-            <span className="hidden h-10 w-10 items-center justify-center rounded-xl bg-accent-light text-accent dark:bg-accent-light/20 sm:flex">
-              <CalendarDays size={19} strokeWidth={2.2} />
-            </span>
-            <div>
-              <h2 className="text-xl font-bold text-gray-800 dark:text-gray-100">历史记录</h2>
-              <p className="mt-0.5 text-sm text-gray-400 dark:text-gray-400">
-                {articles.length > 0 ? `已加载 ${articles.length} 篇记录` : "按时间回看每日记录"}
-              </p>
-            </div>
-          </div>
-        </div>
+        <PageHeader
+          icon={CalendarDays}
+          title="历史记录"
+          description={articles.length > 0 ? `已加载 ${articles.length} 篇记录` : "按时间回看每日记录"}
+          className="mb-5"
+        />
 
         <div className="space-y-5">
           <AnimatePresence>
             {groupedArticles.map((group) => (
               <section key={group.key}>
                 <div className="mb-2 flex items-center gap-2">
-                  <h3 className="text-xs font-semibold uppercase tracking-wide text-gray-400 dark:text-gray-500">
+                  <h3 className="text-xs font-semibold uppercase tracking-wide text-[var(--ui-text-subtle)]">
                     {group.label}
                   </h3>
-                  <span className="h-px flex-1 bg-gray-100 dark:bg-white/10" />
-                  <span className="text-[11px] text-gray-300 dark:text-gray-600">{group.items.length} 篇</span>
+                  <span className="ui-soft-divider h-px flex-1 border-t" />
+                  <span className="text-[11px] text-[var(--ui-text-disabled)]">{group.items.length} 篇</span>
                 </div>
                 <div className={selectedId ? "grid gap-3" : "grid gap-3 xl:grid-cols-2 2xl:grid-cols-3"}>
                   {group.items.map((a, i) => (
@@ -135,7 +133,7 @@ export default function HistoryPage({ onEditDate }: { onEditDate: (date: string)
                       article={a}
                       selected={selectedId === a.id}
                       delay={i}
-                      onOpen={() => openDetail(a.id)}
+                      onOpen={(event) => openDetail(a.id, event.currentTarget)}
                       onEdit={(e) => handleEdit(a.date, e)}
                       onDelete={(e) => handleDelete(a, e)}
                     />
@@ -148,9 +146,10 @@ export default function HistoryPage({ onEditDate }: { onEditDate: (date: string)
 
         {articles.length >= PAGE_SIZE && (
           <button
+            type="button"
             onClick={loadMore}
             disabled={loading}
-            className="w-full mt-4 py-3 rounded-xl text-sm font-medium text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-white/5 transition-colors duration-200"
+            className="ui-button-ghost mt-4 w-full"
           >
             {loading ? "加载中..." : "加载更多"}
           </button>
@@ -163,7 +162,6 @@ export default function HistoryPage({ onEditDate }: { onEditDate: (date: string)
         {error && (
           <div className="py-8">
             <InlineError message={error} onRetry={() => { setError(""); loadArticles(1); }} />
-            <button onClick={() => { setError(""); loadArticles(1); }} className="mt-3 text-sm text-accent hover:underline">重试</button>
           </div>
         )}
 
@@ -197,8 +195,8 @@ export default function HistoryPage({ onEditDate }: { onEditDate: (date: string)
             animate={{ x: 0, opacity: 1 }}
             exit={{ x: 40, opacity: 0 }}
             className="
-              hidden md:block flex-1 min-w-[440px] border-l border-gray-200/60 dark:border-white/10
-              overflow-y-auto bg-white px-6 py-5 dark:bg-surface-dark xl:px-8
+              ui-soft-divider hidden md:block flex-1 min-w-[440px] border-l
+              overflow-y-auto bg-[var(--ui-surface)] px-6 py-5 xl:px-8
             "
           >
             <ArticleDetail
@@ -211,35 +209,52 @@ export default function HistoryPage({ onEditDate }: { onEditDate: (date: string)
           </motion.div>
         )}
       </AnimatePresence>
-      <AnimatePresence>
-        {mobileDetailOpen && detail && (
-          <motion.div
-            className="fixed inset-0 z-50 bg-black/35 p-3 md:hidden"
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            transition={{ duration: 0.14 }}
-            onClick={closeDetail}
-          >
-            <motion.div
-              className="absolute inset-x-3 bottom-3 top-6 overflow-y-auto rounded-2xl border border-gray-200/60 bg-white p-4 shadow-modal dark:border-white/10 dark:bg-surface-dark"
-              initial={{ opacity: 0, y: 18 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: 12 }}
-              transition={{ duration: 0.16, ease: "easeOut" }}
-              onClick={(e) => e.stopPropagation()}
-            >
-              <ArticleDetail
-                article={detail}
-                mode="panel"
-                onClose={closeDetail}
-                onEdit={(date) => handleEdit(date)}
-                onDelete={(article) => handleDelete(article)}
-              />
-            </motion.div>
-          </motion.div>
-        )}
-      </AnimatePresence>
+      <Dialog.Root
+        open={mobileDetailOpen && !!detail}
+        onOpenChange={(open) => { if (!open) closeDetail(); }}
+      >
+        <AnimatePresence>
+          {mobileDetailOpen && detail && (
+            <Dialog.Portal>
+              <Dialog.Overlay className="ui-overlay fixed inset-0 z-50 data-[state=open]:animate-fade-in md:hidden" />
+              <Dialog.Content
+                asChild
+                onCloseAutoFocus={(event) => {
+                  event.preventDefault();
+                  detailTriggerRef.current?.focus();
+                }}
+              >
+                <motion.div
+                  className="fixed inset-0 z-50 p-3 outline-hidden md:hidden"
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  exit={{ opacity: 0 }}
+                  transition={{ duration: 0.14 }}
+                  onClick={(event) => { if (event.target === event.currentTarget) closeDetail(); }}
+                >
+                  <Dialog.Title className="sr-only">{detail.title || "每日记录详情"}</Dialog.Title>
+                  <Dialog.Description className="sr-only">查看、编辑或删除这条每日记录。</Dialog.Description>
+                  <motion.div
+                    className="ui-modal-surface absolute inset-x-3 bottom-3 top-6 overflow-y-auto p-4"
+                    initial={{ opacity: 0, y: 18 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    exit={{ opacity: 0, y: 12 }}
+                    transition={{ duration: 0.16, ease: "easeOut" }}
+                  >
+                    <ArticleDetail
+                      article={detail}
+                      mode="panel"
+                      onClose={closeDetail}
+                      onEdit={(date) => handleEdit(date)}
+                      onDelete={(article) => handleDelete(article)}
+                    />
+                  </motion.div>
+                </motion.div>
+              </Dialog.Content>
+            </Dialog.Portal>
+          )}
+        </AnimatePresence>
+      </Dialog.Root>
       {dialog}
     </motion.div>
   );
@@ -267,7 +282,7 @@ function HistoryCard({
   article: ArticleSummary;
   selected: boolean;
   delay: number;
-  onOpen: () => void;
+  onOpen: (event: React.MouseEvent<HTMLButtonElement>) => void;
   onEdit: (e: React.MouseEvent) => void;
   onDelete: (e: React.MouseEvent) => void;
 }) {
@@ -277,55 +292,63 @@ function HistoryCard({
       initial={{ opacity: 0, y: 12 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ delay: delay < 8 ? delay * 0.018 : 0, duration: 0.2 }}
-      onClick={onOpen}
-      className={`ui-panel card-interactive group p-4 ${selected ? "ring-2 ring-accent/50 border-accent/50" : ""}`}
+      className={`ui-panel card-interactive group p-4 ${selected ? "card-interactive-selected" : ""}`}
     >
-      <div className="flex h-full flex-col gap-3">
+      <button
+        type="button"
+        onClick={onOpen}
+        aria-label={`打开 ${article.date} ${article.title || "无标题"} 详情`}
+        className="flex w-full flex-col gap-3 rounded-lg text-left outline-hidden focus-visible:ring-2 focus-visible:ring-[var(--ui-focus)]/40"
+      >
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0">
             <div className="mb-1 flex flex-wrap items-center gap-2">
-              <span className="inline-flex items-center gap-1 rounded-full bg-gray-50 px-2 py-0.5 font-mono text-[11px] text-gray-500 dark:bg-white/[0.05] dark:text-gray-400">
+              <span className="ui-chip h-auto px-2 py-0.5 font-mono text-[11px]">
                 <CalendarDays size={12} /> {article.date}
               </span>
               {article.mood && <span className="text-sm">{article.mood}</span>}
-              <span className="text-[11px] text-gray-300 dark:text-gray-600">·</span>
-              <span className="text-[11px] text-gray-400 dark:text-gray-500">{article.word_count} 字</span>
+              <span className="text-[11px] text-[var(--ui-text-disabled)]">·</span>
+              <span className="text-[11px] text-[var(--ui-text-subtle)]">{article.word_count} 字</span>
             </div>
-            <h3 className="truncate text-base font-semibold text-gray-800 dark:text-gray-100">
+            <h3 className="truncate text-base font-semibold text-[var(--ui-text)]">
               {article.title || "(无标题)"}
             </h3>
           </div>
-          <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-accent-light text-accent opacity-80 dark:bg-accent-light/20">
+          <span className="ui-status-accent flex h-9 w-9 shrink-0 items-center justify-center rounded-lg opacity-80">
             <FileText size={16} />
           </span>
         </div>
-        <p className="line-clamp-3 text-sm leading-6 text-gray-500 dark:text-gray-400">
+        <p className="line-clamp-3 text-sm leading-6 text-[var(--ui-text-muted)]">
           {cleanPreview(article.preview)}
         </p>
-        <div className="mt-auto flex flex-wrap items-center justify-between gap-2 border-t border-gray-100 pt-3 dark:border-white/10">
-          <div className="flex min-w-0 flex-wrap gap-1.5">
-            {article.tags.slice(0, 4).map((tag) => (
-              <span key={tag} className="rounded-full bg-gray-100 px-2 py-0.5 text-[11px] text-gray-500 dark:bg-white/[0.06] dark:text-gray-300">
-                #{tag}
-              </span>
-            ))}
-          </div>
-          <div className="flex items-center gap-1">
-            <button
-              onClick={onEdit}
-              className="ui-icon-button h-10 w-10 opacity-100 sm:h-8 sm:w-8 sm:opacity-0 sm:group-hover:opacity-100"
-              title="编辑"
-            >
-              <Edit3 size={14} />
-            </button>
-            <button
-              onClick={onDelete}
-              className="ui-icon-button h-10 w-10 text-gray-400 hover:bg-red-50 hover:text-red-500 dark:hover:bg-red-500/10 dark:hover:text-red-300 sm:h-8 sm:w-8 sm:opacity-0 sm:group-hover:opacity-100"
-              title="删除"
-            >
-              <Trash2 size={14} />
-            </button>
-          </div>
+      </button>
+      <div className="ui-soft-divider mt-3 flex flex-wrap items-center justify-between gap-2 border-t pt-3">
+        <div className="flex min-w-0 flex-wrap gap-1.5">
+          {article.tags.slice(0, 4).map((tag) => (
+            <span key={tag} className="ui-chip h-auto px-2 py-0.5 text-[11px]">
+              #{tag}
+            </span>
+          ))}
+        </div>
+            <div className="flex items-center gap-1">
+          <button
+            type="button"
+            onClick={onEdit}
+            className="ui-icon-button h-10 w-10 opacity-100 sm:h-8 sm:w-8 sm:opacity-0 sm:group-hover:opacity-100 sm:group-focus-within:opacity-100"
+            title="编辑"
+            aria-label={`编辑 ${article.date} 的记录`}
+          >
+            <Edit3 size={14} />
+          </button>
+          <button
+            type="button"
+            onClick={onDelete}
+            className="ui-icon-button ui-icon-button-danger h-10 w-10 sm:h-8 sm:w-8 sm:opacity-0 sm:group-hover:opacity-100 sm:group-focus-within:opacity-100"
+            title="删除"
+            aria-label={`删除 ${article.date} 的记录`}
+          >
+            <Trash2 size={14} />
+          </button>
         </div>
       </div>
     </motion.div>

@@ -1,16 +1,25 @@
 use crate::models::{
-    ArchiveMonth, Article, ArticleSummary, DailyReviewCount, DayExemption, KnowledgeCard, Review,
-    ReviewHistoryEntry, ReviewStats, ReviewStatsResponse,
+    ArchiveMonth, Article, ArticleSummary, DailyReviewCount, DayExemption, KnowledgeCard,
+    KnowledgeProject, KnowledgeSavedView, KnowledgeSummary, Review, ReviewHistoryEntry,
+    ReviewSettings, ReviewStats, ReviewStatsResponse,
 };
 use chrono::{Duration, Local, NaiveDate};
-use rusqlite::types::Type;
-use rusqlite::{params, Connection, OpenFlags, OptionalExtension, Result};
+use rusqlite::types::{Type, Value as SqlValue};
+use rusqlite::{
+    params, params_from_iter, Connection, OpenFlags, OptionalExtension, Result, Transaction,
+};
 use serde::Deserialize;
 use serde_json::Value;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::path::PathBuf;
 use uuid::Uuid;
+
+pub(crate) const DEFAULT_REVIEW_NEW_DAILY_LIMIT: i64 = 20;
+pub(crate) const DEFAULT_REVIEW_SESSION_LIMIT: i64 = 20;
+
+const REVIEW_NEW_DAILY_LIMIT_KEY: &str = "review_new_daily_limit";
+const REVIEW_SESSION_LIMIT_KEY: &str = "review_session_limit";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ArticleDraft {
@@ -123,6 +132,8 @@ struct PortableArchiveInput {
     reviews: Vec<PortableReview>,
     #[serde(default)]
     knowledge_cards: Vec<PortableKnowledgeCard>,
+    #[serde(default)]
+    knowledge_projects: Vec<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -222,6 +233,19 @@ pub struct Database {
     conn: Connection,
 }
 
+fn read_setting_i64(conn: &Connection, key: &str, default: i64) -> Result<i64> {
+    let raw: Option<String> = conn
+        .query_row(
+            "SELECT value FROM app_settings WHERE key=?1",
+            params![key],
+            |row| row.get(0),
+        )
+        .optional()?;
+    Ok(raw
+        .and_then(|value| value.trim().parse::<i64>().ok())
+        .unwrap_or(default))
+}
+
 impl Database {
     pub fn new() -> Result<Self> {
         let db_path = Self::db_path();
@@ -272,6 +296,46 @@ impl Database {
         }
     }
 
+    pub(crate) fn review_settings(&self) -> Result<ReviewSettings> {
+        Ok(ReviewSettings {
+            new_cards_per_day: read_setting_i64(
+                &self.conn,
+                REVIEW_NEW_DAILY_LIMIT_KEY,
+                DEFAULT_REVIEW_NEW_DAILY_LIMIT,
+            )?
+            .clamp(0, 100),
+            session_limit: read_setting_i64(
+                &self.conn,
+                REVIEW_SESSION_LIMIT_KEY,
+                DEFAULT_REVIEW_SESSION_LIMIT,
+            )?
+            .clamp(1, 100),
+        })
+    }
+
+    pub(crate) fn update_review_settings(
+        &mut self,
+        settings: &ReviewSettings,
+    ) -> Result<ReviewSettings> {
+        let now = Local::now().format("%Y-%m-%dT%H:%M:%S").to_string();
+        let tx = self.conn.transaction()?;
+        for (key, value) in [
+            (
+                REVIEW_NEW_DAILY_LIMIT_KEY,
+                settings.new_cards_per_day.to_string(),
+            ),
+            (REVIEW_SESSION_LIMIT_KEY, settings.session_limit.to_string()),
+        ] {
+            tx.execute(
+                "INSERT INTO app_settings (key, value, updated_at) VALUES (?1, ?2, ?3)
+                 ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at",
+                params![key, value, now],
+            )?;
+        }
+        tx.commit()?;
+        self.review_settings()
+    }
+
     pub(crate) fn snapshot_to(&mut self, path: &str) -> Result<()> {
         self.conn.execute("VACUUM INTO ?1", params![path])?;
         Ok(())
@@ -308,6 +372,7 @@ impl Database {
     }
 
     fn initialize(&self) -> Result<()> {
+        self.conn.execute_batch("PRAGMA foreign_keys = ON;")?;
         // ── schema version tracker ──
         self.conn.execute_batch(
             "CREATE TABLE IF NOT EXISTS schema_version (version INTEGER NOT NULL);",
@@ -667,7 +732,10 @@ impl Database {
                 .prepare("PRAGMA table_info(knowledge_cards)")?
                 .query_map([], |row| row.get(1))?
                 .collect::<Result<_>>()?;
-            if !existing_columns.iter().any(|existing| existing == "projects") {
+            if !existing_columns
+                .iter()
+                .any(|existing| existing == "projects")
+            {
                 self.conn.execute(
                     "ALTER TABLE knowledge_cards ADD COLUMN projects TEXT NOT NULL DEFAULT '[]'",
                     [],
@@ -675,6 +743,170 @@ impl Database {
             }
             self.conn
                 .execute("INSERT INTO schema_version (version) VALUES (9)", [])?;
+        }
+
+        if current < 10 {
+            // 项目是独立的用户数据，不能只从卡片反推，否则没有卡片的项目会在刷新后消失。
+            self.conn.execute_batch(
+                "CREATE TABLE IF NOT EXISTS knowledge_projects (
+                    id         TEXT PRIMARY KEY,
+                    name       TEXT NOT NULL COLLATE NOCASE UNIQUE,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_knowledge_projects_name
+                    ON knowledge_projects(name COLLATE NOCASE);",
+            )?;
+
+            // 从已有卡片回填项目目录，保证升级不会丢失旧数据。
+            let project_json: Vec<String> = self
+                .conn
+                .prepare("SELECT projects FROM knowledge_cards")?
+                .query_map([], |row| row.get(0))?
+                .collect::<Result<_>>()?;
+            let now = Local::now().format("%Y-%m-%dT%H:%M:%S").to_string();
+            for raw in project_json {
+                for project in normalize_tags(parse_json_vec(&raw)?) {
+                    self.conn.execute(
+                        "INSERT OR IGNORE INTO knowledge_projects (id, name, created_at, updated_at)
+                         VALUES (?1, ?2, ?3, ?3)",
+                        params![Uuid::new_v4().to_string(), project, now],
+                    )?;
+                }
+            }
+            self.conn
+                .execute("INSERT INTO schema_version (version) VALUES (10)", [])?;
+        }
+
+        if current < 11 {
+            // 关系表是卡片与项目的唯一关系来源；保留 cards.projects 作为旧备份格式的兼容字段。
+            self.conn.execute_batch(
+                "CREATE TABLE IF NOT EXISTS knowledge_card_projects (
+                    card_id    TEXT NOT NULL REFERENCES knowledge_cards(id) ON DELETE CASCADE,
+                    project_id TEXT NOT NULL REFERENCES knowledge_projects(id) ON DELETE CASCADE,
+                    PRIMARY KEY (card_id, project_id)
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_knowledge_card_projects_project
+                    ON knowledge_card_projects(project_id, card_id);",
+            )?;
+            let transaction = self.conn.unchecked_transaction()?;
+            let card_projects: Vec<(String, String)> = transaction
+                .prepare("SELECT id, projects FROM knowledge_cards")?
+                .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
+                .collect::<Result<_>>()?;
+            let now = Local::now().format("%Y-%m-%dT%H:%M:%S").to_string();
+            for (card_id, raw) in card_projects {
+                for project in normalize_tags(parse_json_vec(&raw)?) {
+                    ensure_project(&transaction, &project, &now)?;
+                    let project_id: String = transaction.query_row(
+                        "SELECT id FROM knowledge_projects WHERE name=?1 COLLATE NOCASE",
+                        params![project],
+                        |row| row.get(0),
+                    )?;
+                    transaction.execute(
+                        "INSERT OR IGNORE INTO knowledge_card_projects (card_id, project_id)
+                         VALUES (?1, ?2)",
+                        params![card_id, project_id],
+                    )?;
+                }
+            }
+            transaction.execute("INSERT INTO schema_version (version) VALUES (11)", [])?;
+            transaction.commit()?;
+        }
+
+        if current < 12 {
+            // 软删除墓碑：保留正文、项目关系和复习进度，普通查询统一排除已删除卡片。
+            let existing_columns: Vec<String> = self
+                .conn
+                .prepare("PRAGMA table_info(knowledge_cards)")?
+                .query_map([], |row| row.get(1))?
+                .collect::<Result<_>>()?;
+            if !existing_columns.iter().any(|column| column == "deleted_at") {
+                self.conn.execute(
+                    "ALTER TABLE knowledge_cards ADD COLUMN deleted_at TEXT NOT NULL DEFAULT ''",
+                    [],
+                )?;
+            }
+            self.conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_knowledge_cards_deleted_at
+                 ON knowledge_cards(deleted_at, updated_at DESC)",
+                [],
+            )?;
+            self.conn
+                .execute("INSERT INTO schema_version (version) VALUES (12)", [])?;
+        }
+
+        if current < 13 {
+            // 知识搜索索引：使用外部内容表，正文仍只以 knowledge_cards 为权威来源。
+            self.conn.execute_batch(
+                "CREATE VIRTUAL TABLE IF NOT EXISTS knowledge_cards_fts USING fts5(
+                    title,
+                    content,
+                    tags,
+                    source_excerpt,
+                    content='knowledge_cards',
+                    content_rowid='rowid'
+                );
+
+                INSERT INTO knowledge_cards_fts(knowledge_cards_fts) VALUES ('rebuild');
+
+                CREATE TRIGGER IF NOT EXISTS knowledge_cards_ai AFTER INSERT ON knowledge_cards BEGIN
+                    INSERT INTO knowledge_cards_fts(rowid, title, content, tags, source_excerpt)
+                    VALUES (new.rowid, new.title, new.content, new.tags, new.source_excerpt);
+                END;
+
+                CREATE TRIGGER IF NOT EXISTS knowledge_cards_ad AFTER DELETE ON knowledge_cards BEGIN
+                    INSERT INTO knowledge_cards_fts(knowledge_cards_fts, rowid, title, content, tags, source_excerpt)
+                    VALUES ('delete', old.rowid, old.title, old.content, old.tags, old.source_excerpt);
+                END;
+
+                CREATE TRIGGER IF NOT EXISTS knowledge_cards_au AFTER UPDATE ON knowledge_cards BEGIN
+                    INSERT INTO knowledge_cards_fts(knowledge_cards_fts, rowid, title, content, tags, source_excerpt)
+                    VALUES ('delete', old.rowid, old.title, old.content, old.tags, old.source_excerpt);
+                    INSERT INTO knowledge_cards_fts(rowid, title, content, tags, source_excerpt)
+                    VALUES (new.rowid, new.title, new.content, new.tags, new.source_excerpt);
+                END;",
+            )?;
+            self.conn
+                .execute("INSERT INTO schema_version (version) VALUES (13)", [])?;
+        }
+
+        if current < 14 {
+            // 已保存的知识工作台视图是独立用户数据，不与卡片生命周期绑定。
+            self.conn.execute_batch(
+                "CREATE TABLE IF NOT EXISTS knowledge_saved_views (
+                    id           TEXT PRIMARY KEY,
+                    name         TEXT NOT NULL,
+                    filters_json TEXT NOT NULL DEFAULT '{}',
+                    created_at   TEXT NOT NULL,
+                    updated_at   TEXT NOT NULL
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_knowledge_saved_views_updated
+                    ON knowledge_saved_views(updated_at DESC, name COLLATE NOCASE ASC);",
+            )?;
+            self.conn
+                .execute("INSERT INTO schema_version (version) VALUES (14)", [])?;
+        }
+
+        if current < 15 {
+            // 复习计划设置由服务端持久化，避免只保存在浏览器导致多设备/刷新后不一致。
+            self.conn.execute_batch(
+                "CREATE TABLE IF NOT EXISTS app_settings (
+                    key        TEXT PRIMARY KEY,
+                    value      TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
+
+                INSERT OR IGNORE INTO app_settings (key, value, updated_at)
+                VALUES ('review_new_daily_limit', '20', datetime('now'));
+                INSERT OR IGNORE INTO app_settings (key, value, updated_at)
+                VALUES ('review_session_limit', '20', datetime('now'));",
+            )?;
+            self.conn
+                .execute("INSERT INTO schema_version (version) VALUES (15)", [])?;
         }
 
         Ok(())
@@ -995,7 +1227,7 @@ impl PortableArchivePersistence<'_> {
                         review_state, review_interval_days, review_ease, review_count,
                         last_reviewed_at, next_review_at, usage_count, last_used_at,
                         related_ids, first_reviewed_at, projects
-                 FROM knowledge_cards ORDER BY updated_at ASC",
+                 FROM knowledge_cards WHERE deleted_at='' ORDER BY updated_at ASC",
             )?;
             let rows = statement
                 .query_map([], |row| {
@@ -1031,11 +1263,21 @@ impl PortableArchivePersistence<'_> {
                 .collect::<Result<Vec<_>>>()?;
             rows
         };
+        let knowledge_projects = {
+            let mut statement = self
+                .conn
+                .prepare("SELECT name FROM knowledge_projects ORDER BY name COLLATE NOCASE ASC")?;
+            let rows = statement
+                .query_map([], |row| row.get::<_, String>(0))?
+                .collect::<Result<Vec<_>>>()?;
+            rows
+        };
         Ok(serde_json::json!({
             "version": 2,
             "articles": articles,
             "reviews": reviews,
             "knowledge_cards": knowledge_cards,
+            "knowledge_projects": knowledge_projects,
         }))
     }
 
@@ -1051,6 +1293,13 @@ impl PortableArchivePersistence<'_> {
             imported_knowledge_cards: archive.knowledge_cards.len(),
         };
         let tx = self.conn.transaction()?;
+
+        let now = Local::now().format("%Y-%m-%dT%H:%M:%S").to_string();
+        for project in archive.knowledge_projects {
+            if let Some(name) = normalize_tags(vec![project]).into_iter().next() {
+                ensure_project(&tx, &name, &now)?;
+            }
+        }
 
         for article in archive.articles {
             let tags = serde_json::to_string(&normalize_tags(article.tags))?;
@@ -1109,6 +1358,10 @@ impl PortableArchivePersistence<'_> {
 
         for card in archive.knowledge_cards {
             let tags = serde_json::to_string(&normalize_tags(card.tags))?;
+            let projects = normalize_tags(card.projects.clone());
+            for project in &projects {
+                ensure_project(&tx, project, &now)?;
+            }
             // 复习/使用进度是本地积累数据：导入已存在的卡时保留本地值，
             // 只覆盖卡片内容字段（旧档案缺省字段不会清零已积累的进度）。
             tx.execute(
@@ -1129,7 +1382,8 @@ impl PortableArchivePersistence<'_> {
                    source_date=excluded.source_date,
                    source_excerpt=excluded.source_excerpt,
                    related_ids=excluded.related_ids,
-                   created_at=excluded.created_at, updated_at=excluded.updated_at",
+                   created_at=excluded.created_at, updated_at=excluded.updated_at,
+                   deleted_at=''",
                 params![
                     card.id,
                     card.card_type,
@@ -1137,7 +1391,7 @@ impl PortableArchivePersistence<'_> {
                     card.title,
                     card.content,
                     tags,
-                    serde_json::to_string(&normalize_tags(card.projects.clone()))?,
+                    serde_json::to_string(&projects)?,
                     card.source_article_id,
                     card.source_review_id,
                     card.source_date,
@@ -1157,6 +1411,7 @@ impl PortableArchivePersistence<'_> {
                     card.first_reviewed_at
                 ],
             )?;
+            sync_project_links(&tx, &card.id, &projects, &now)?;
         }
 
         tx.commit()?;
@@ -1279,12 +1534,12 @@ impl ReviewPersistence<'_> {
 
 impl KnowledgePersistence<'_> {
     const SELECT_COLUMNS: &'static str = "id, card_type, status, title, content, tags, source_article_id, source_review_id, source_date, source_excerpt, created_at, updated_at, review_state, review_interval_days, review_ease, review_count, last_reviewed_at, next_review_at, usage_count, last_used_at, related_ids, first_reviewed_at, projects";
-    /// 每日新卡上限：未评过分的确认卡每天最多进入复习队列这么多张（Anki 借鉴）。
-    const NEW_DAILY_LIMIT: i64 = 20;
-
+    const SELECT_COLUMNS_WITH_ALIAS: &'static str = "c.id, c.card_type, c.status, c.title, c.content, c.tags, c.source_article_id, c.source_review_id, c.source_date, c.source_excerpt, c.created_at, c.updated_at, c.review_state, c.review_interval_days, c.review_ease, c.review_count, c.last_reviewed_at, c.next_review_at, c.usage_count, c.last_used_at, c.related_ids, c.first_reviewed_at, c.projects";
     pub(crate) fn list(&mut self) -> Result<Vec<KnowledgeCard>> {
         let mut statement = self.conn.prepare(&format!(
-            "SELECT {} FROM knowledge_cards ORDER BY updated_at DESC, created_at DESC",
+            "SELECT {} FROM knowledge_cards
+             WHERE deleted_at=''
+             ORDER BY updated_at DESC, created_at DESC",
             Self::SELECT_COLUMNS
         ))?;
         let mut cards = statement
@@ -1299,7 +1554,7 @@ impl KnowledgePersistence<'_> {
             .conn
             .query_row(
                 &format!(
-                    "SELECT {} FROM knowledge_cards WHERE id=?1",
+                    "SELECT {} FROM knowledge_cards WHERE id=?1 AND deleted_at=''",
                     Self::SELECT_COLUMNS
                 ),
                 params![id],
@@ -1312,14 +1567,311 @@ impl KnowledgePersistence<'_> {
         Ok(card)
     }
 
+    pub(crate) fn summary(&mut self) -> Result<KnowledgeSummary> {
+        let mut summary = self.conn.query_row(
+            "SELECT COUNT(*),
+                    COALESCE(SUM(CASE WHEN trim(source_date)='' AND trim(source_article_id)=''
+                                      AND trim(source_review_id)='' AND trim(source_excerpt)='' THEN 1 ELSE 0 END), 0),
+                    COALESCE(SUM(CASE WHEN NOT EXISTS (
+                        SELECT 1 FROM knowledge_card_projects AS cp WHERE cp.card_id=knowledge_cards.id
+                    ) THEN 1 ELSE 0 END), 0),
+                    COALESCE(SUM(CASE WHEN trim(tags)='' OR tags='[]' OR tags='null' THEN 1 ELSE 0 END), 0),
+                    COALESCE(SUM(CASE WHEN length(trim(content)) < 24 THEN 1 ELSE 0 END), 0)
+             FROM knowledge_cards WHERE deleted_at=''",
+            [],
+            |row| {
+                Ok(KnowledgeSummary {
+                    total: row.get(0)?,
+                    missing_source: row.get(1)?,
+                    missing_project: row.get(2)?,
+                    missing_tags: row.get(3)?,
+                    short_content: row.get(4)?,
+                    ..KnowledgeSummary::default()
+                })
+            },
+        )?;
+        let mut statement = self.conn.prepare(
+            "SELECT status, COUNT(*) FROM knowledge_cards
+             WHERE deleted_at='' GROUP BY status",
+        )?;
+        let rows = statement.query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+        })?;
+        for row in rows {
+            let (status, count) = row?;
+            match status.as_str() {
+                "draft" => summary.draft = count,
+                "confirmed" => summary.confirmed = count,
+                "outdated" => summary.outdated = count,
+                _ => {}
+            }
+        }
+        Ok(summary)
+    }
+
+    pub(crate) fn list_projects(&mut self) -> Result<Vec<KnowledgeProject>> {
+        let mut statement = self.conn.prepare(
+            "SELECT p.name, COUNT(c.id) AS card_count
+             FROM knowledge_projects AS p
+             LEFT JOIN knowledge_card_projects AS cp ON cp.project_id = p.id
+             LEFT JOIN knowledge_cards AS c ON c.id = cp.card_id AND c.deleted_at=''
+             GROUP BY p.id, p.name
+             ORDER BY card_count DESC, p.name COLLATE NOCASE ASC",
+        )?;
+        let rows = statement
+            .query_map([], |row| {
+                Ok(KnowledgeProject {
+                    name: row.get(0)?,
+                    count: row.get(1)?,
+                })
+            })?
+            .collect::<Result<Vec<_>>>()?;
+        Ok(rows)
+    }
+
+    pub(crate) fn list_trash(&mut self) -> Result<Vec<KnowledgeCard>> {
+        let mut statement = self.conn.prepare(&format!(
+            "SELECT {} FROM knowledge_cards
+             WHERE deleted_at!=''
+             ORDER BY updated_at DESC, created_at DESC",
+            Self::SELECT_COLUMNS
+        ))?;
+        let mut cards = statement
+            .query_map([], row_to_knowledge_card)?
+            .collect::<Result<Vec<_>>>()?;
+        self.resolve_related_ids(&mut cards)?;
+        Ok(cards)
+    }
+
+    pub(crate) fn list_saved_views(&mut self) -> Result<Vec<KnowledgeSavedView>> {
+        let mut statement = self.conn.prepare(
+            "SELECT id, name, filters_json, created_at, updated_at
+             FROM knowledge_saved_views
+             ORDER BY updated_at DESC, name COLLATE NOCASE ASC",
+        )?;
+        let views = statement
+            .query_map([], row_to_knowledge_saved_view)?
+            .collect::<Result<Vec<_>>>()?;
+        Ok(views)
+    }
+
+    pub(crate) fn create_saved_view(
+        &mut self,
+        name: &str,
+        filters: &Value,
+    ) -> Result<KnowledgeSavedView> {
+        let id = Uuid::new_v4().to_string();
+        let now = Local::now().format("%Y-%m-%dT%H:%M:%S").to_string();
+        self.conn.execute(
+            "INSERT INTO knowledge_saved_views (id, name, filters_json, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?4)",
+            params![
+                id,
+                name,
+                serde_json::to_string(filters).map_err(json_to_sql_error)?,
+                now
+            ],
+        )?;
+        self.find_saved_view(&id)?
+            .ok_or(rusqlite::Error::QueryReturnedNoRows)
+    }
+
+    pub(crate) fn update_saved_view(
+        &mut self,
+        id: &str,
+        name: &str,
+        filters: &Value,
+    ) -> Result<Option<KnowledgeSavedView>> {
+        let now = Local::now().format("%Y-%m-%dT%H:%M:%S").to_string();
+        let updated = self.conn.execute(
+            "UPDATE knowledge_saved_views SET name=?1, filters_json=?2, updated_at=?3 WHERE id=?4",
+            params![
+                name,
+                serde_json::to_string(filters).map_err(json_to_sql_error)?,
+                now,
+                id
+            ],
+        )?;
+        if updated == 0 {
+            return Ok(None);
+        }
+        self.find_saved_view(id)
+    }
+
+    pub(crate) fn delete_saved_view(&mut self, id: &str) -> Result<bool> {
+        Ok(self
+            .conn
+            .execute("DELETE FROM knowledge_saved_views WHERE id=?1", params![id])?
+            > 0)
+    }
+
+    fn find_saved_view(&mut self, id: &str) -> Result<Option<KnowledgeSavedView>> {
+        self.conn
+            .query_row(
+                "SELECT id, name, filters_json, created_at, updated_at
+                 FROM knowledge_saved_views WHERE id=?1",
+                params![id],
+                row_to_knowledge_saved_view,
+            )
+            .optional()
+    }
+
+    pub(crate) fn get_saved_view(&mut self, id: &str) -> Result<Option<KnowledgeSavedView>> {
+        self.find_saved_view(id)
+    }
+
+    /// 服务端全文查询的分页入口。旧的 list() 保留给复习/关联等需要完整集合的内部流程。
+    pub(crate) fn query_page(
+        &mut self,
+        query: &str,
+        card_type: Option<&str>,
+        status: Option<&str>,
+        usage: Option<&str>,
+        tag: Option<&str>,
+        project: Option<&str>,
+        quality: Option<&str>,
+        sort: &str,
+        page: i64,
+        page_size: i64,
+    ) -> Result<(Vec<KnowledgeCard>, i64)> {
+        let page = page.max(1);
+        let page_size = page_size.clamp(1, 100);
+        let mut conditions = vec!["c.deleted_at=''".to_string()];
+        let mut values = Vec::<SqlValue>::new();
+
+        let query = query.replace('\0', " ").trim().to_string();
+        if !query.is_empty() {
+            let fts_query = format!("\"{}\"", query.replace('"', "\"\""));
+            let like_query = format!("%{query}%");
+            conditions.push(
+                "(c.rowid IN (SELECT rowid FROM knowledge_cards_fts WHERE knowledge_cards_fts MATCH ?)
+                  OR c.title LIKE ? OR c.content LIKE ?
+                  OR c.tags LIKE ? OR c.source_excerpt LIKE ?)"
+                    .into(),
+            );
+            values.extend([
+                SqlValue::Text(fts_query),
+                SqlValue::Text(like_query.clone()),
+                SqlValue::Text(like_query.clone()),
+                SqlValue::Text(like_query.clone()),
+                SqlValue::Text(like_query),
+            ]);
+        }
+        if let Some(card_type) = card_type.filter(|value| !value.is_empty()) {
+            conditions.push("c.card_type=?".into());
+            values.push(SqlValue::Text(card_type.to_string()));
+        }
+        if let Some(status) = status.filter(|value| !value.is_empty() && *value != "all") {
+            conditions.push("c.status=?".into());
+            values.push(SqlValue::Text(status.to_string()));
+        }
+        if usage == Some("never_used") {
+            conditions.push("c.usage_count=0".into());
+        }
+        if let Some(tag) = tag.map(str::trim).filter(|value| !value.is_empty()) {
+            conditions.push("c.tags LIKE ?".into());
+            values.push(SqlValue::Text(format!(
+                "%\"{}\"%",
+                tag.replace('"', "\\\"")
+            )));
+        }
+        if let Some(project) = project.map(str::trim).filter(|value| !value.is_empty()) {
+            conditions.push(
+                "EXISTS (
+                    SELECT 1 FROM knowledge_card_projects AS cp
+                    INNER JOIN knowledge_projects AS p ON p.id=cp.project_id
+                    WHERE cp.card_id=c.id AND p.name=? COLLATE NOCASE
+                )"
+                .into(),
+            );
+            values.push(SqlValue::Text(project.to_string()));
+        }
+        match quality.filter(|value| !value.is_empty()) {
+            Some("missing_source") => conditions.push(
+                "trim(c.source_date)='' AND trim(c.source_article_id)='' AND trim(c.source_review_id)='' AND trim(c.source_excerpt)=''".into(),
+            ),
+            Some("missing_project") => conditions.push(
+                "NOT EXISTS (
+                    SELECT 1 FROM knowledge_card_projects AS cp WHERE cp.card_id=c.id
+                )"
+                .into(),
+            ),
+            Some("missing_tags") => {
+                conditions.push("(trim(c.tags)='' OR c.tags='[]' OR c.tags='null')".into())
+            }
+            Some("short_content") => conditions.push("length(trim(c.content)) < 24".into()),
+            _ => {}
+        }
+
+        let order_by = match sort {
+            "created" => "c.created_at DESC, c.updated_at DESC",
+            "usage" => "c.usage_count DESC, c.updated_at DESC",
+            "review" => "CASE WHEN c.next_review_at='' THEN 1 ELSE 0 END ASC, c.next_review_at ASC, c.updated_at DESC",
+            _ => "c.updated_at DESC, c.created_at DESC",
+        };
+        let where_clause = conditions.join(" AND ");
+        let count_sql = format!(
+            "SELECT COUNT(*) FROM knowledge_cards AS c
+             WHERE {where_clause}"
+        );
+        let total = self
+            .conn
+            .query_row(&count_sql, params_from_iter(values.iter()), |row| {
+                row.get(0)
+            })?;
+
+        let offset = (page - 1).saturating_mul(page_size);
+        let mut page_values = values;
+        page_values.push(SqlValue::Integer(page_size));
+        page_values.push(SqlValue::Integer(offset));
+        let page_sql = format!(
+            "SELECT {} FROM knowledge_cards AS c
+             WHERE {where_clause}
+             ORDER BY {order_by} LIMIT ? OFFSET ?",
+            Self::SELECT_COLUMNS_WITH_ALIAS
+        );
+        let mut statement = self.conn.prepare(&page_sql)?;
+        let mut cards = statement
+            .query_map(params_from_iter(page_values.iter()), row_to_knowledge_card)?
+            .collect::<Result<Vec<_>>>()?;
+        self.resolve_related_ids(&mut cards)?;
+        Ok((cards, total))
+    }
+
+    pub(crate) fn create_project(&mut self, name: &str) -> Result<Option<KnowledgeProject>> {
+        let Some(name) = normalize_tags(vec![name.to_string()]).into_iter().next() else {
+            return Ok(None);
+        };
+        let now = Local::now().format("%Y-%m-%dT%H:%M:%S").to_string();
+        self.conn.execute(
+            "INSERT OR IGNORE INTO knowledge_projects (id, name, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?3)",
+            params![Uuid::new_v4().to_string(), name, now],
+        )?;
+        self.list_projects()?
+            .into_iter()
+            .find(|project| project.name.eq_ignore_ascii_case(&name))
+            .map(Some)
+            .ok_or(rusqlite::Error::QueryReturnedNoRows)
+    }
+
     /// 把单向存储的关联展开为双向视图：A 的关联 = A 声明的边 ∪ 声明指向 A 的边。
     /// 这样 A 关联 B 后，B 的详情/复习页也会显示 A，无需写端回写。
     fn resolve_related_ids(&self, cards: &mut [KnowledgeCard]) -> Result<()> {
+        let active_ids: BTreeSet<String> = {
+            let mut statement = self
+                .conn
+                .prepare("SELECT id FROM knowledge_cards WHERE deleted_at=''")?;
+            let ids = statement
+                .query_map([], |row| row.get::<_, String>(0))?
+                .collect::<Result<BTreeSet<_>>>()?;
+            ids
+        };
         let mut reverse: BTreeMap<String, Vec<String>> = BTreeMap::new();
         {
             let mut statement = self
                 .conn
-                .prepare("SELECT id, related_ids FROM knowledge_cards")?;
+                .prepare("SELECT id, related_ids FROM knowledge_cards WHERE deleted_at=''")?;
             let rows = statement
                 .query_map([], |row| {
                     Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
@@ -1332,7 +1884,13 @@ impl KnowledgePersistence<'_> {
             }
         }
         for card in cards.iter_mut() {
-            let mut ids = card.related_ids.clone();
+            // 已删除卡片的关系仍保留在存储中，恢复后可以自动回来；普通视图不展示指向回收站的悬空边。
+            let mut ids = card
+                .related_ids
+                .iter()
+                .filter(|id| active_ids.contains(*id))
+                .cloned()
+                .collect::<Vec<_>>();
             if let Some(incoming) = reverse.get(&card.id) {
                 for other in incoming {
                     if other != &card.id && !ids.contains(other) {
@@ -1352,13 +1910,13 @@ impl KnowledgePersistence<'_> {
         let mut statement = self.conn.prepare(&format!(
             "SELECT * FROM (
                SELECT {} FROM knowledge_cards
-               WHERE status='confirmed' AND next_review_at!='' AND next_review_at <= ?1
+               WHERE deleted_at='' AND status='confirmed' AND next_review_at!='' AND next_review_at <= ?1
                ORDER BY next_review_at ASC LIMIT ?2
              )
              UNION ALL
              SELECT * FROM (
                SELECT {} FROM knowledge_cards
-               WHERE status='confirmed' AND next_review_at=''
+               WHERE deleted_at='' AND status='confirmed' AND next_review_at=''
                ORDER BY created_at ASC LIMIT ?3
              )
              LIMIT ?4",
@@ -1381,7 +1939,7 @@ impl KnowledgePersistence<'_> {
             .conn
             .query_row(
                 "SELECT COUNT(*) FROM knowledge_cards
-                 WHERE status='confirmed' AND first_reviewed_at=?1",
+                 WHERE deleted_at='' AND status='confirmed' AND first_reviewed_at=?1",
                 params![today],
                 |row| row.get(0),
             )
@@ -1390,7 +1948,13 @@ impl KnowledgePersistence<'_> {
 
     /// 今日新卡剩余额度 = 每日上限 - 今天已学新卡数（不低于 0）。
     fn remaining_new_quota(&self, today: &str) -> Result<i64> {
-        Ok((Self::NEW_DAILY_LIMIT - self.learned_new_today(today)?).max(0))
+        let daily_limit = read_setting_i64(
+            self.conn,
+            REVIEW_NEW_DAILY_LIMIT_KEY,
+            DEFAULT_REVIEW_NEW_DAILY_LIMIT,
+        )?
+        .clamp(0, 100);
+        Ok((daily_limit - self.learned_new_today(today)?).max(0))
     }
 
     /// 到期卡数（不含新卡）与已确认卡总数；供 due/stats 共用，避免语义分叉。
@@ -1400,8 +1964,8 @@ impl KnowledgePersistence<'_> {
             .query_row(
                 "SELECT
                     (SELECT COUNT(*) FROM knowledge_cards
-                     WHERE status='confirmed' AND next_review_at!='' AND next_review_at <= ?1),
-                    (SELECT COUNT(*) FROM knowledge_cards WHERE status='confirmed')",
+                     WHERE deleted_at='' AND status='confirmed' AND next_review_at!='' AND next_review_at <= ?1),
+                    (SELECT COUNT(*) FROM knowledge_cards WHERE deleted_at='' AND status='confirmed')",
                 params![today],
                 |row| Ok((row.get(0)?, row.get(1)?)),
             )
@@ -1415,21 +1979,24 @@ impl KnowledgePersistence<'_> {
             .conn
             .query_row(
                 "SELECT COUNT(*) FROM knowledge_cards
-                 WHERE status='confirmed' AND next_review_at=''",
+                 WHERE deleted_at='' AND status='confirmed' AND next_review_at=''",
                 [],
                 |row| row.get(0),
             )
             .unwrap_or(0);
+        let new_cards = new_queue.min(remaining_new);
         let reviewed_today: i64 = self
             .conn
             .query_row(
-                "SELECT COUNT(*) FROM knowledge_cards WHERE last_reviewed_at=?1",
+                "SELECT COUNT(*) FROM knowledge_cards WHERE deleted_at='' AND last_reviewed_at=?1",
                 params![today],
                 |row| row.get(0),
             )
             .unwrap_or(0);
         Ok(ReviewStats {
-            due: due_only + new_queue.min(remaining_new),
+            due: due_only + new_cards,
+            due_reviews: due_only,
+            new_cards,
             reviewed_today,
             total_confirmed,
         })
@@ -1451,7 +2018,7 @@ impl KnowledgePersistence<'_> {
              review_count=review_count+1, last_reviewed_at=?3, next_review_at=?4,
              first_reviewed_at = CASE WHEN review_count = 0 THEN ?3 ELSE first_reviewed_at END,
              review_state = CASE WHEN ?1 >= 21 THEN 'mature' ELSE 'learning' END
-             WHERE id=?5 AND status='confirmed'",
+             WHERE id=?5 AND deleted_at='' AND status='confirmed'",
             params![stability, difficulty, today, next_review_at, id],
         )?;
         if updated == 0 {
@@ -1470,9 +2037,12 @@ impl KnowledgePersistence<'_> {
         let today_date = NaiveDate::parse_from_str(today, "%Y-%m-%d")
             .unwrap_or_else(|_| NaiveDate::from_ymd_opt(1970, 1, 1).expect("epoch date"));
         let reviewed_dates: Vec<String> = {
-            let mut statement = self
-                .conn
-                .prepare("SELECT DISTINCT reviewed_at FROM review_log ORDER BY reviewed_at DESC")?;
+            let mut statement = self.conn.prepare(
+                "SELECT DISTINCT review_log.reviewed_at FROM review_log
+                     INNER JOIN knowledge_cards ON knowledge_cards.id=review_log.card_id
+                       AND knowledge_cards.deleted_at=''
+                     ORDER BY review_log.reviewed_at DESC",
+            )?;
             let rows = statement
                 .query_map([], |row| row.get::<_, String>(0))?
                 .collect::<Result<Vec<_>>>()?;
@@ -1495,8 +2065,10 @@ impl KnowledgePersistence<'_> {
         let start_key = start_date.format("%Y-%m-%d").to_string();
         let mut counts: BTreeMap<String, i64> = {
             let mut statement = self.conn.prepare(
-                "SELECT reviewed_at, COUNT(*) FROM review_log
-                 WHERE reviewed_at >= ?1 GROUP BY reviewed_at",
+                "SELECT review_log.reviewed_at, COUNT(*) FROM review_log
+                 INNER JOIN knowledge_cards ON knowledge_cards.id=review_log.card_id
+                   AND knowledge_cards.deleted_at=''
+                 WHERE review_log.reviewed_at >= ?1 GROUP BY review_log.reviewed_at",
             )?;
             let rows = statement
                 .query_map(params![start_key], |row| {
@@ -1521,7 +2093,7 @@ impl KnowledgePersistence<'_> {
                 COALESCE(SUM(review_count), 0),
                 COALESCE(SUM(CASE WHEN review_state='learning' THEN 1 ELSE 0 END), 0),
                 COALESCE(SUM(CASE WHEN review_state='mature' THEN 1 ELSE 0 END), 0)
-             FROM knowledge_cards",
+             FROM knowledge_cards WHERE deleted_at=''",
             [],
             |row| {
                 Ok((
@@ -1534,7 +2106,7 @@ impl KnowledgePersistence<'_> {
         let reviewed_today: i64 = self
             .conn
             .query_row(
-                "SELECT COUNT(*) FROM knowledge_cards WHERE last_reviewed_at=?1",
+                "SELECT COUNT(*) FROM knowledge_cards WHERE deleted_at='' AND last_reviewed_at=?1",
                 params![today],
                 |row| row.get(0),
             )
@@ -1546,7 +2118,7 @@ impl KnowledgePersistence<'_> {
             .conn
             .query_row(
                 "SELECT COUNT(*) FROM knowledge_cards
-                 WHERE status='confirmed' AND next_review_at=''",
+                 WHERE deleted_at='' AND status='confirmed' AND next_review_at=''",
                 [],
                 |row| row.get(0),
             )
@@ -1563,7 +2135,7 @@ impl KnowledgePersistence<'_> {
                 .conn
                 .query_row(
                     "SELECT COUNT(*) FROM knowledge_cards
-                     WHERE status='confirmed' AND next_review_at=?1",
+                     WHERE deleted_at='' AND status='confirmed' AND next_review_at=?1",
                     params![&key],
                     |row| row.get(0),
                 )
@@ -1588,8 +2160,12 @@ impl KnowledgePersistence<'_> {
     /// 单张卡的复习历史（间隔曲线数据源）。
     pub(crate) fn review_history(&mut self, card_id: &str) -> Result<Vec<ReviewHistoryEntry>> {
         let mut statement = self.conn.prepare(
-            "SELECT grade, interval_days, ease, next_review_at, reviewed_at
-             FROM review_log WHERE card_id=?1 ORDER BY reviewed_at ASC, id ASC",
+            "SELECT review_log.grade, review_log.interval_days, review_log.ease,
+                    review_log.next_review_at, review_log.reviewed_at
+             FROM review_log
+             INNER JOIN knowledge_cards ON knowledge_cards.id=review_log.card_id
+               AND knowledge_cards.deleted_at=''
+             WHERE review_log.card_id=?1 ORDER BY review_log.reviewed_at ASC, review_log.id ASC",
         )?;
         let rows = statement
             .query_map(params![card_id], |row| {
@@ -1617,8 +2193,10 @@ impl KnowledgePersistence<'_> {
         let start_key = start_date.format("%Y-%m-%d").to_string();
         let mut counts: BTreeMap<String, i64> = {
             let mut statement = self.conn.prepare(
-                "SELECT reviewed_at, COUNT(*) FROM review_log
-                 WHERE reviewed_at >= ?1 GROUP BY reviewed_at",
+                "SELECT review_log.reviewed_at, COUNT(*) FROM review_log
+                 INNER JOIN knowledge_cards ON knowledge_cards.id=review_log.card_id
+                   AND knowledge_cards.deleted_at=''
+                 WHERE review_log.reviewed_at >= ?1 GROUP BY review_log.reviewed_at",
             )?;
             let rows = statement
                 .query_map(params![start_key], |row| {
@@ -1643,7 +2221,8 @@ impl KnowledgePersistence<'_> {
 
     pub(crate) fn touch(&mut self, id: &str, today: &str) -> Result<Option<KnowledgeCard>> {
         let updated = self.conn.execute(
-            "UPDATE knowledge_cards SET usage_count=usage_count+1, last_used_at=?1 WHERE id=?2",
+            "UPDATE knowledge_cards SET usage_count=usage_count+1, last_used_at=?1
+             WHERE id=?2 AND deleted_at=''",
             params![today, id],
         )?;
         if updated == 0 {
@@ -1672,13 +2251,17 @@ impl KnowledgePersistence<'_> {
         for draft in drafts {
             let id = Uuid::new_v4().to_string();
             let tags = serialize_string_vec(&normalize_tags(draft.tags))?;
-            let projects = serialize_string_vec(&normalize_tags(draft.projects))?;
+            let projects = normalize_tags(draft.projects);
+            for project in &projects {
+                ensure_project(&transaction, project, &now)?;
+            }
             transaction.execute(
                 "INSERT INTO knowledge_cards (id, card_type, status, title, content, tags, projects, source_article_id, source_review_id, source_date, source_excerpt, created_at, updated_at)
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?12)",
-                params![id, draft.card_type, draft.status, draft.title, draft.content, tags, projects,
+                params![id, draft.card_type, draft.status, draft.title, draft.content, tags, serialize_string_vec(&projects)?,
                     draft.source_article_id, draft.source_review_id, draft.source_date, draft.source_excerpt, now],
             )?;
+            sync_project_links(&transaction, &id, &projects, &now)?;
             ids.push(id);
         }
         transaction.commit()?;
@@ -1693,14 +2276,19 @@ impl KnowledgePersistence<'_> {
         draft: KnowledgeCardDraft,
     ) -> Result<Option<KnowledgeCard>> {
         let tags = serialize_string_vec(&normalize_tags(draft.tags))?;
-        let projects = serialize_string_vec(&normalize_tags(draft.projects))?;
+        let projects = normalize_tags(draft.projects);
+        let projects_json = serialize_string_vec(&projects)?;
         let now = Local::now().format("%Y-%m-%dT%H:%M:%S").to_string();
-        if self.conn.execute(
+        let transaction = self.conn.transaction()?;
+        for project in &projects {
+            ensure_project(&transaction, project, &now)?;
+        }
+        if transaction.execute(
             "UPDATE knowledge_cards SET card_type=?1, status=?2, title=?3, content=?4, tags=?5,
              source_article_id=?6, source_review_id=?7, source_date=?8, source_excerpt=?9,
              related_ids=?10, projects=?11,
              next_review_at = CASE WHEN ?2 <> 'confirmed' THEN '' ELSE next_review_at END,
-             updated_at=?12 WHERE id=?13",
+             updated_at=?12 WHERE id=?13 AND deleted_at=''",
             params![
                 draft.card_type,
                 draft.status,
@@ -1712,57 +2300,195 @@ impl KnowledgePersistence<'_> {
                 draft.source_date,
                 draft.source_excerpt,
                 serialize_string_vec(&draft.related_ids)?,
-                projects,
+                projects_json,
                 now,
                 id
             ],
         )? == 0
         {
+            transaction.rollback()?;
             return Ok(None);
         }
+        sync_project_links(&transaction, id, &projects, &now)?;
+        transaction.commit()?;
         self.find(id)
+    }
+
+    /// 在单个事务中完成一组卡片的批量修改，避免逐张请求导致部分成功。
+    pub(crate) fn batch_update(
+        &mut self,
+        ids: &[String],
+        action: &str,
+        values: &[String],
+    ) -> Result<usize> {
+        let ids: Vec<String> = ids
+            .iter()
+            .cloned()
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect();
+        let tag_values = normalize_tags(
+            values
+                .iter()
+                .map(|value| value.trim().trim_start_matches('#').to_string())
+                .collect(),
+        );
+        let project_values = normalize_tags(values.to_vec());
+        let now = Local::now().format("%Y-%m-%dT%H:%M:%S").to_string();
+        let transaction = self.conn.transaction()?;
+
+        if action == "delete" {
+            let mut deleted = 0;
+            for id in &ids {
+                deleted += transaction.execute(
+                    "UPDATE knowledge_cards SET deleted_at=?1, updated_at=?1
+                     WHERE id=?2 AND deleted_at=''",
+                    params![now, id],
+                )?;
+            }
+            transaction.commit()?;
+            return Ok(deleted);
+        }
+
+        if action == "restore" {
+            let mut restored = 0;
+            for id in &ids {
+                restored += transaction.execute(
+                    "UPDATE knowledge_cards SET deleted_at='', updated_at=?1
+                     WHERE id=?2 AND deleted_at!=''",
+                    params![now, id],
+                )?;
+            }
+            transaction.commit()?;
+            return Ok(restored);
+        }
+
+        let mut updated = 0;
+        for id in &ids {
+            let Some((current_status, raw_tags, raw_projects)) = transaction
+                .query_row(
+                    "SELECT status, tags, projects FROM knowledge_cards
+                     WHERE id=?1 AND deleted_at=''",
+                    params![id],
+                    |row| {
+                        Ok((
+                            row.get::<_, String>(0)?,
+                            row.get::<_, String>(1)?,
+                            row.get::<_, String>(2)?,
+                        ))
+                    },
+                )
+                .optional()?
+            else {
+                continue;
+            };
+            let mut status = current_status;
+            let mut tags = parse_json_vec(&raw_tags)?;
+            let mut projects = parse_json_vec(&raw_projects)?;
+            match action {
+                "confirm" => status = "confirmed".into(),
+                "set_status" => status = values.first().cloned().unwrap_or(status),
+                "add_tags" => {
+                    tags.extend(tag_values.iter().cloned());
+                    tags = normalize_tags(tags);
+                }
+                "remove_tags" => {
+                    tags.retain(|tag| {
+                        !tag_values
+                            .iter()
+                            .any(|value| value.eq_ignore_ascii_case(tag))
+                    });
+                }
+                "add_projects" => {
+                    projects.extend(project_values.iter().cloned());
+                    projects = normalize_tags(projects);
+                }
+                "set_projects" => projects = project_values.clone(),
+                "remove_projects" => {
+                    projects.retain(|project| {
+                        !project_values
+                            .iter()
+                            .any(|value| value.eq_ignore_ascii_case(project))
+                    });
+                }
+                _ => unreachable!(),
+            }
+            for project in &projects {
+                ensure_project(&transaction, project, &now)?;
+            }
+            transaction.execute(
+                "UPDATE knowledge_cards SET status=?1, tags=?2, projects=?3,
+                 next_review_at = CASE WHEN ?1 <> 'confirmed' THEN '' ELSE next_review_at END,
+                 updated_at=?4 WHERE id=?5 AND deleted_at=''",
+                params![
+                    status,
+                    serialize_string_vec(&tags)?,
+                    serialize_string_vec(&projects)?,
+                    now,
+                    id
+                ],
+            )?;
+            sync_project_links(&transaction, id, &projects, &now)?;
+            updated += 1;
+        }
+        transaction.commit()?;
+        Ok(updated)
     }
 
     pub(crate) fn delete(&mut self, id: &str) -> Result<bool> {
         let tx = self.conn.transaction()?;
-        // 删除前清理其他卡指向该卡的悬空关联
-        let affected: Vec<(String, String)> = {
-            let mut statement = tx
-                .prepare("SELECT id, related_ids FROM knowledge_cards WHERE related_ids LIKE ?1")?;
-            let rows = statement
-                .query_map(params![format!("%{id}%")], |row| {
-                    Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
-                })?
-                .collect::<Result<Vec<_>>>()?;
-            rows
-        };
-        for (owner_id, raw) in affected {
-            let original = parse_json_vec(&raw)?;
-            let cleaned: Vec<String> = original
-                .iter()
-                .filter(|related| *related != id)
-                .cloned()
-                .collect();
-            if cleaned.len() != original.len() {
-                tx.execute(
-                    "UPDATE knowledge_cards SET related_ids=?1, updated_at=?2 WHERE id=?3",
-                    params![
-                        serialize_string_vec(&cleaned)?,
-                        Local::now().format("%Y-%m-%dT%H:%M:%S").to_string(),
-                        owner_id
-                    ],
-                )?;
-            }
-        }
-        let deleted = tx.execute("DELETE FROM knowledge_cards WHERE id=?1", params![id])? > 0;
+        let now = Local::now().format("%Y-%m-%dT%H:%M:%S").to_string();
+        let deleted = tx.execute(
+            "UPDATE knowledge_cards SET deleted_at=?1, updated_at=?1
+             WHERE id=?2 AND deleted_at=''",
+            params![now, id],
+        )? > 0;
         tx.commit()?;
         Ok(deleted)
     }
 }
 
 fn serialize_string_vec(values: &[String]) -> Result<String> {
-    serde_json::to_string(values)
-        .map_err(|error| rusqlite::Error::ToSqlConversionFailure(Box::new(error)))
+    serde_json::to_string(values).map_err(json_to_sql_error)
+}
+
+fn json_to_sql_error(error: serde_json::Error) -> rusqlite::Error {
+    rusqlite::Error::ToSqlConversionFailure(Box::new(error))
+}
+
+fn ensure_project(transaction: &Transaction<'_>, name: &str, now: &str) -> Result<()> {
+    transaction.execute(
+        "INSERT OR IGNORE INTO knowledge_projects (id, name, created_at, updated_at)
+         VALUES (?1, ?2, ?3, ?3)",
+        params![Uuid::new_v4().to_string(), name, now],
+    )?;
+    Ok(())
+}
+
+fn sync_project_links(
+    transaction: &Transaction<'_>,
+    card_id: &str,
+    projects: &[String],
+    now: &str,
+) -> Result<()> {
+    transaction.execute(
+        "DELETE FROM knowledge_card_projects WHERE card_id=?1",
+        params![card_id],
+    )?;
+    for project in projects {
+        ensure_project(transaction, project, now)?;
+        let project_id: String = transaction.query_row(
+            "SELECT id FROM knowledge_projects WHERE name=?1 COLLATE NOCASE",
+            params![project],
+            |row| row.get(0),
+        )?;
+        transaction.execute(
+            "INSERT OR IGNORE INTO knowledge_card_projects (card_id, project_id)
+             VALUES (?1, ?2)",
+            params![card_id, project_id],
+        )?;
+    }
+    Ok(())
 }
 
 fn valid_knowledge_draft(draft: &KnowledgeCardDraft) -> bool {
@@ -1810,7 +2536,14 @@ fn validate_archive(archive: &PortableArchiveInput) -> std::result::Result<(), A
             || !matches!(card.status.as_str(), "draft" | "confirmed" | "outdated")
             || !matches!(
                 card.card_type.as_str(),
-                "fact" | "method" | "concept" | "decision" | "case" | "quote" | "principle" | "snippet"
+                "fact"
+                    | "method"
+                    | "concept"
+                    | "decision"
+                    | "case"
+                    | "quote"
+                    | "principle"
+                    | "snippet"
             )
     }) {
         return Err(ArchiveImportError::Invalid(
@@ -2000,6 +2733,20 @@ fn row_to_knowledge_card(row: &rusqlite::Row<'_>) -> Result<KnowledgeCard> {
     })
 }
 
+fn row_to_knowledge_saved_view(row: &rusqlite::Row<'_>) -> Result<KnowledgeSavedView> {
+    let filters_json: String = row.get(2)?;
+    let filters = serde_json::from_str(&filters_json).map_err(|error| {
+        rusqlite::Error::FromSqlConversionFailure(2, Type::Text, Box::new(error))
+    })?;
+    Ok(KnowledgeSavedView {
+        id: row.get(0)?,
+        name: row.get(1)?,
+        filters,
+        created_at: row.get(3)?,
+        updated_at: row.get(4)?,
+    })
+}
+
 fn article_preview(content: &str, max_len: usize) -> String {
     let plain = content
         .chars()
@@ -2076,7 +2823,7 @@ mod migration_tests {
         .expect("seed legacy card");
 
         let mut db = Database { conn };
-        db.initialize().expect("migrate to v4");
+        db.initialize().expect("migrate to latest schema");
 
         let card = db
             .knowledge()
@@ -2098,7 +2845,7 @@ mod migration_tests {
                 row.get(0)
             })
             .expect("read schema version");
-        assert_eq!(version, 9);
+        assert_eq!(version, 15);
 
         // 已迁移的库再次 initialize 必须幂等，不报重复列错误
         db.initialize().expect("re-initialize is idempotent");
@@ -2132,7 +2879,35 @@ mod migration_tests {
                 row.get(0)
             })
             .expect("read schema version");
-        assert_eq!(version, 9);
+        assert_eq!(version, 15);
+
+        let settings = db.review_settings().expect("default review settings");
+        assert_eq!(settings.new_cards_per_day, 20);
+        assert_eq!(settings.session_limit, 20);
+    }
+
+    #[test]
+    fn review_settings_use_safe_defaults_and_persist_updates() {
+        let mut db = Database::new_in_memory().expect("in-memory database");
+        let updated = db
+            .update_review_settings(&ReviewSettings {
+                new_cards_per_day: 0,
+                session_limit: 8,
+            })
+            .expect("persist review settings");
+        assert_eq!(updated.new_cards_per_day, 0);
+        assert_eq!(updated.session_limit, 8);
+        assert_eq!(
+            db.review_settings().expect("reload review settings"),
+            updated
+        );
+
+        db.initialize()
+            .expect("re-initialize keeps review settings");
+        assert_eq!(
+            db.review_settings().expect("settings after re-init"),
+            updated
+        );
     }
 }
 
@@ -2234,7 +3009,7 @@ mod migration_v5_tests {
                 row.get(0)
             })
             .expect("read schema version");
-        assert_eq!(version, 9);
+        assert_eq!(version, 15);
         db.initialize()
             .expect("re-initialize after v5 is idempotent");
     }

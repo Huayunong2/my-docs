@@ -1,22 +1,30 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
+import * as Dialog from "@radix-ui/react-dialog";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
+  BarChart3,
+  BookMarked,
   Brain,
+  CalendarClock,
   CheckCircle2,
   ExternalLink,
   Eye,
   Link2,
-  PartyPopper,
+  LoaderCircle,
   PencilLine,
   Sparkles,
   X,
+  ArrowRight,
 } from "lucide-react";
+import type { LucideIcon } from "lucide-react";
 import * as api from "../lib/api";
 import type { KnowledgeCard, ReviewGrade } from "../lib/api";
 import { cardTypeLabels, reviewStateLabels } from "../lib/cardLabels";
 import type { Page } from "../App";
 import MarkdownContent from "./MarkdownContent";
-import { EmptyState, InlineError, LoadingState } from "./ui/Feedback";
+import { InlineError, LoadingState } from "./ui/Feedback";
+import PageHeader from "./ui/PageHeader";
 import { toast } from "sonner";
 
 const gradeOptions: Array<{
@@ -29,27 +37,35 @@ const gradeOptions: Array<{
     grade: "again",
     label: "忘记",
     hint: "1 · 当天重来",
-    className: "border-red-200 bg-red-50 text-red-600 hover:bg-red-100 active:bg-red-200/70 dark:border-red-500/25 dark:bg-red-500/10 dark:text-red-300 dark:hover:bg-red-500/20",
+    className: "ui-status-danger",
   },
   {
     grade: "hard",
     label: "困难",
     hint: "2 · 短间隔",
-    className: "border-amber-200 bg-amber-50 text-amber-600 hover:bg-amber-100 active:bg-amber-200/70 dark:border-amber-500/25 dark:bg-amber-500/10 dark:text-amber-300 dark:hover:bg-amber-500/20",
+    className: "ui-status-warning",
   },
   {
     grade: "good",
     label: "记得",
     hint: "3 · 正常间隔",
-    className: "border-emerald-200 bg-emerald-50 text-emerald-600 hover:bg-emerald-100 active:bg-emerald-200/70 dark:border-emerald-500/25 dark:bg-emerald-500/10 dark:text-emerald-300 dark:hover:bg-emerald-500/20",
+    className: "ui-status-success",
   },
   {
     grade: "easy",
     label: "轻松",
     hint: "4 · 长间隔",
-    className: "border-sky-200 bg-sky-50 text-sky-600 hover:bg-sky-100 active:bg-sky-200/70 dark:border-sky-500/25 dark:bg-sky-500/10 dark:text-sky-300 dark:hover:bg-sky-500/20",
+    className: "ui-status-info",
   },
 ];
+
+function formatReviewPreview(preview?: api.ReviewGradePreview): string {
+  if (!preview) return "";
+  if (preview.interval_days <= 0) return "今天再来";
+  if (preview.interval_days === 1) return "明天";
+  if (preview.interval_days <= 30) return `${Math.round(preview.interval_days)} 天后`;
+  return preview.next_review_at ? `${preview.next_review_at.slice(5).replace("-", "/")}` : "稍后安排";
+}
 
 export default function ReviewPage({
   onEditDate,
@@ -75,15 +91,19 @@ export default function ReviewPage({
   const [editTagsText, setEditTagsText] = useState("");
   const [editRelatedText, setEditRelatedText] = useState("");
   const [savingEdit, setSavingEdit] = useState(false);
+  const [batchComplete, setBatchComplete] = useState(false);
+  const [batchRemaining, setBatchRemaining] = useState(0);
 
   const loadToken = useRef(0);
+  const editingTriggerRef = useRef<HTMLButtonElement | null>(null);
+  const queryClient = useQueryClient();
   const load = useCallback(async () => {
     const token = ++loadToken.current;
     setLoading(true);
     setError("");
     try {
       const [res, statsRes, all] = await Promise.all([
-        api.getDueReviewCards(20),
+        api.getDueReviewCards(),
         api.getReviewStats().catch(() => null),
         api.listKnowledgeCards().catch(() => []),
       ]);
@@ -94,6 +114,8 @@ export default function ReviewPage({
       setAllCards(all);
       setIndex(0);
       setRevealed(false);
+      setBatchComplete(false);
+      setBatchRemaining(0);
     } catch (e) {
       if (token === loadToken.current) setError(api.getErrorMessage(e));
     } finally {
@@ -107,6 +129,17 @@ export default function ReviewPage({
 
   const current = cards[index] || null;
 
+  const gradePreviewQuery = useQuery({
+    queryKey: api.reviewQueryKeys.preview(current?.id || ""),
+    queryFn: ({ signal }) => api.getReviewPreview(current!.id, { signal }),
+    enabled: Boolean(current && revealed),
+    staleTime: 5 * 60_000,
+  });
+  const gradePreviews = useMemo(
+    () => new Map((gradePreviewQuery.data || []).map((preview) => [preview.grade, preview])),
+    [gradePreviewQuery.data]
+  );
+
   const grade = useCallback(
     async (value: ReviewGrade) => {
       if (!current || grading) return;
@@ -114,6 +147,7 @@ export default function ReviewPage({
       setError("");
       try {
         const updated = await api.gradeReviewCard(current.id, value);
+        await queryClient.invalidateQueries({ queryKey: api.reviewQueryKeys.preview(current.id) });
         const remaining = cards.filter((card) => card.id !== current.id);
         if (value === "again") {
           // 当天重来：放回队列尾部，稍后再遇到；今日 due 数不减
@@ -122,8 +156,15 @@ export default function ReviewPage({
         } else {
           setCards(remaining);
           if (remaining.length === 0) {
-            // 队列已空：重新拉取以刷新统计与完成态
-            void load();
+            const nextDue = stats ? Math.max(0, stats.due - 1) : 0;
+            if (nextDue > 0) {
+              // 当前批次完成但服务端仍有待复习卡，停在明确的批次完成态，避免无感跳转。
+              setBatchRemaining(nextDue);
+              setBatchComplete(true);
+            } else {
+              // 队列已空：重新拉取以刷新统计与完成态
+              void load();
+            }
           }
           toast.success("已记录，继续下一张");
         }
@@ -132,6 +173,12 @@ export default function ReviewPage({
           ? {
               ...s,
               due: value === "again" ? s.due : Math.max(0, s.due - 1),
+              due_reviews: typeof s.due_reviews === "number"
+                ? Math.max(0, s.due_reviews - (value === "again" || !current.next_review_at ? 0 : 1))
+                : s.due_reviews,
+              new_cards: typeof s.new_cards === "number"
+                ? Math.max(0, s.new_cards - (value === "again" || current.next_review_at ? 0 : 1))
+                : s.new_cards,
               reviewed_today: s.reviewed_today + 1,
             }
           : s));
@@ -141,7 +188,7 @@ export default function ReviewPage({
         setGrading(false);
       }
     },
-    [cards, current, grading, load]
+    [cards, current, grading, load, queryClient, stats]
   );
 
   // 空格显示答案，1-4 评分
@@ -179,8 +226,9 @@ export default function ReviewPage({
     [allCards, current]
   );
 
-  const openEdit = () => {
+  const openEdit = (event?: React.MouseEvent<HTMLButtonElement>) => {
     if (!current) return;
+    if (event) editingTriggerRef.current = event.currentTarget;
     setEditing(current);
     setEditTitle(current.title);
     setEditContent(current.content);
@@ -223,44 +271,45 @@ export default function ReviewPage({
     }
   };
 
-  const finished = !loading && !error && stats !== null && cards.length === 0;
+  const finished = !loading && !error && !batchComplete && stats !== null && cards.length === 0;
 
   return (
     <motion.div
       initial={{ opacity: 0, y: 10 }}
       animate={{ opacity: 1, y: 0 }}
-      className="min-h-full px-3 pb-24 pt-4 sm:px-4 md:px-8 md:py-6"
+      className="page-surface page-surface-review min-h-full px-3 pb-24 pt-4 sm:px-4 md:px-8 md:py-6"
     >
-      <header className="mb-4 flex flex-col gap-3 md:mb-5 md:flex-row md:items-end md:justify-between">
-        <div>
-          <h2 className="flex items-center gap-2 text-xl font-bold text-gray-800 dark:text-gray-100">
-            <Brain size={20} /> 间隔复习
-          </h2>
-          <p className="mt-1 text-sm text-gray-400 dark:text-gray-400">按遗忘曲线回顾已沉淀的知识卡片</p>
-        </div>
-        {stats && (
-          <div className="flex gap-2">
-            <StatChip label="今日到期" value={stats.due > 0 ? stats.due : "已清空"} highlight={stats.due > 0} />
-            <StatChip label="已复习" value={stats.reviewed_today} />
-            <StatChip label="已沉淀" value={stats.total_confirmed} />
-          </div>
-        )}
-      </header>
+      <PageHeader
+        icon={Brain}
+        title="间隔复习"
+        description="按遗忘曲线回顾已沉淀的知识卡片"
+        actions={
+          stats ? (
+            <>
+              <StatChip label="今日到期" value={stats.due} highlight={stats.due > 0} />
+              {typeof stats.due_reviews === "number" && <StatChip label="到期复习" value={stats.due_reviews} />}
+              {typeof stats.new_cards === "number" && <StatChip label="新卡" value={stats.new_cards} />}
+              <StatChip label="已复习" value={stats.reviewed_today} />
+              <StatChip label="已沉淀" value={stats.total_confirmed} />
+            </>
+          ) : null
+        }
+      />
 
       {reviewStats && reviewStats.upcoming.some((d) => d.count > 0) && (
-        <div className="mx-auto mb-4 flex max-w-2xl flex-wrap items-center gap-2 rounded-xl border border-gray-100 bg-white px-4 py-2.5 dark:border-white/10 dark:bg-white/[0.04]">
-          <span className="text-xs font-medium text-gray-400 dark:text-gray-500">未来 7 天</span>
+        <div className="ui-panel-muted mx-auto mb-4 flex max-w-2xl flex-wrap items-center gap-2 px-4 py-2.5">
+          <span className="text-xs font-medium text-[var(--ui-text-muted)]">未来 7 天</span>
           <div className="flex flex-1 items-end gap-1">
             {reviewStats.upcoming.map((day) => (
               <div key={day.date} className="flex flex-1 flex-col items-center gap-1" title={`${day.date} · ${day.count} 张`}>
-                <span className={`font-mono text-[11px] leading-none ${day.count > 0 ? "text-accent" : "text-gray-300 dark:text-gray-600"}`}>
+                <span className={`font-mono text-[11px] leading-none ${day.count > 0 ? "text-[var(--ui-accent-text)]" : "text-[var(--ui-text-disabled)]"}`}>
                   {day.count || ""}
                 </span>
-                <div className={`h-1.5 w-full rounded-full ${day.count > 0 ? "bg-accent/50" : "bg-gray-100 dark:bg-white/[0.04]"}`} />
+                <div className={`h-1.5 w-full rounded-full ${day.count > 0 ? "ui-accent-fill-50" : "bg-[var(--ui-surface-inset)]"}`} />
               </div>
             ))}
           </div>
-          <span className="text-[11px] text-gray-300 dark:text-gray-600">
+          <span className="text-[11px] text-[var(--ui-text-disabled)]">
             {reviewStats.upcoming[0].date.slice(5)}~{reviewStats.upcoming[6].date.slice(5)}
           </span>
         </div>
@@ -271,24 +320,20 @@ export default function ReviewPage({
       <div className="mx-auto max-w-2xl">
         {loading ? (
           <LoadingState label="加载到期卡片..." rows={2} />
+        ) : batchComplete ? (
+          <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }}>
+            <ReviewBatchComplete
+              remaining={batchRemaining}
+              onContinue={() => {
+                setBatchComplete(false);
+                void load();
+              }}
+              onNavigate={onNavigate}
+            />
+          </motion.div>
         ) : finished ? (
           <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }}>
-            <EmptyState
-              icon={PartyPopper}
-              title={stats?.total_confirmed === 0 ? "还没有可复习的卡片" : "今天的复习已完成"}
-              description={
-                stats?.total_confirmed === 0
-                  ? "把草稿卡片确认入库后，就会出现在这里。"
-                  : `今天已复习 ${stats?.reviewed_today ?? 0} 张，明天再来巩固。`
-              }
-              action={
-                stats?.total_confirmed === 0 ? (
-                  <button type="button" onClick={() => onNavigate("knowledge")} className="ui-button-primary">
-                    去知识页确认卡片
-                  </button>
-                ) : undefined
-              }
-            />
+            <ReviewEmptyState stats={stats} reviewStats={reviewStats} onNavigate={onNavigate} />
           </motion.div>
         ) : current ? (
           <AnimatePresence mode="wait">
@@ -301,41 +346,39 @@ export default function ReviewPage({
             >
               <div className="ui-panel p-5 sm:p-6">
                 <div className="mb-3 flex flex-wrap items-center gap-2">
-                  <span className="rounded-md bg-accent-light px-2 py-0.5 text-[11px] font-semibold text-accent dark:bg-accent-light/20">
+                  <span className="ui-status-accent rounded-md px-2 py-0.5 text-[11px] font-semibold">
                     {cardTypeLabels[current.card_type]}
                   </span>
                   {current.review_state && current.review_state !== "new" && (
                     <span
                       className={[
                         "rounded-md px-2 py-0.5 text-[11px] font-medium",
-                        current.review_state === "mature"
-                          ? "bg-emerald-50 text-emerald-600 dark:bg-emerald-500/10 dark:text-emerald-300"
-                          : "bg-amber-50 text-amber-600 dark:bg-amber-500/10 dark:text-amber-300",
+                        current.review_state === "mature" ? "ui-status-success" : "ui-status-warning",
                       ].join(" ")}
                     >
                       {reviewStateLabels[current.review_state] || current.review_state}
                     </span>
                   )}
                   {current.source_date && (
-                    <span className="font-mono text-xs text-gray-400 dark:text-gray-500">
+                    <span className="font-mono text-xs text-[var(--ui-text-subtle)]">
                       {current.source_date}
                     </span>
                   )}
                   {current.review_count ? (
-                    <span className="text-xs text-gray-400 dark:text-gray-500">
+                    <span className="text-xs text-[var(--ui-text-subtle)]">
                       复习过 {current.review_count} 次
                     </span>
                   ) : null}
                 </div>
 
-                <h3 className="text-lg font-bold leading-snug text-gray-800 dark:text-gray-100">
+                <h3 className="text-lg font-bold leading-snug text-[var(--ui-text)]">
                   {current.title}
                 </h3>
 
                 {current.tags.length > 0 && (
                   <div className="mt-2 flex flex-wrap gap-1.5">
                     {current.tags.map((tag) => (
-                      <span key={tag} className="rounded-full bg-gray-100 px-2 py-0.5 text-[11px] text-gray-500 dark:bg-white/[0.06] dark:text-gray-400">
+                      <span key={tag} className="ui-chip h-auto px-2 py-0.5 text-[11px]">
                         #{tag}
                       </span>
                     ))}
@@ -351,20 +394,20 @@ export default function ReviewPage({
                     >
                       <Eye size={16} /> 显示答案
                     </button>
-                    <span className="text-xs text-gray-400 dark:text-gray-500">按空格键快速显示</span>
+                    <span className="text-xs text-[var(--ui-text-subtle)]">按空格键快速显示</span>
                   </div>
                 ) : (
                   <motion.div initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} className="mt-5">
-                    <div className="rounded-xl border border-gray-100 bg-gray-50 p-4 dark:border-white/10 dark:bg-white/[0.035]">
+                    <div className="ui-panel-muted p-4">
                       <MarkdownContent content={current.content} />
                     </div>
 
                     {current.source_excerpt && (
-                      <div className="mt-3 rounded-xl border border-amber-200/40 bg-amber-50/70 p-3 dark:border-amber-500/15 dark:bg-amber-500/[0.06]">
-                        <div className="mb-1 flex items-center gap-1 text-[11px] font-semibold text-amber-700 dark:text-amber-300">
+                      <div className="ui-alert-warn mt-3 p-3">
+                        <div className="mb-1 flex items-center gap-1 text-[11px] font-semibold text-[var(--ui-warning-text)]">
                           <Sparkles size={11} /> 原文片段
                         </div>
-                        <p className="text-xs leading-5 text-amber-900/80 dark:text-amber-200/70">
+                        <p className="text-xs leading-5 text-[var(--ui-warning-text)] opacity-80">
                           {current.source_excerpt}
                         </p>
                       </div>
@@ -374,7 +417,7 @@ export default function ReviewPage({
                       <button
                         type="button"
                         onClick={openSource}
-                        className="mt-3 inline-flex items-center gap-1 text-xs font-semibold text-accent hover:underline"
+                        className="mt-3 inline-flex items-center gap-1 text-xs font-semibold text-[var(--ui-accent-text)] hover:underline"
                       >
                         <ExternalLink size={12} /> 查看来源
                       </button>
@@ -382,7 +425,7 @@ export default function ReviewPage({
 
                     {relatedCards.length > 0 && (
                       <div className="mt-3 flex flex-wrap items-center gap-1.5">
-                        <span className="inline-flex items-center gap-1 text-[11px] font-medium text-gray-400 dark:text-gray-500">
+                        <span className="inline-flex items-center gap-1 text-[11px] font-medium text-[var(--ui-text-subtle)]">
                           <Link2 size={11} /> 关联
                         </span>
                         {relatedCards.map((related) => (
@@ -390,7 +433,7 @@ export default function ReviewPage({
                             key={related.id}
                             type="button"
                             onClick={() => onOpenKnowledgeCard(related.id)}
-                            className="rounded-md bg-accent-light px-2 py-0.5 text-[11px] font-medium text-accent transition-colors hover:bg-accent-light/70 dark:bg-accent-light/20"
+                            className="ui-status-accent rounded-md px-2 py-0.5 text-[11px] font-medium transition-colors hover:shadow-xs"
                           >
                             {related.title}
                           </button>
@@ -402,13 +445,26 @@ export default function ReviewPage({
                       <button
                         type="button"
                         onClick={openEdit}
-                        className="inline-flex h-8 items-center gap-1 rounded-lg border border-gray-200 px-2.5 text-xs font-medium text-gray-500 transition-colors hover:border-accent/30 hover:text-accent dark:border-white/10 dark:text-gray-400"
+                        className="ui-button-secondary h-8 px-2.5"
                       >
                         <PencilLine size={12} /> 编辑卡片
                       </button>
                     </div>
 
-                    <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4">
+                    <div className="mt-4 flex items-center justify-between gap-2">
+                      <span className="ui-section-kicker">选择记忆程度</span>
+                      {gradePreviewQuery.isFetching ? (
+                        <span className="inline-flex items-center gap-1 text-[11px] text-[var(--ui-text-subtle)]">
+                          <LoaderCircle size={12} className="animate-spin" /> 计算下次复习
+                        </span>
+                      ) : gradePreviewQuery.isError ? (
+                        <span className="text-[11px] text-[var(--ui-text-subtle)]">暂时无法预览</span>
+                      ) : (
+                        <span className="text-[11px] text-[var(--ui-text-subtle)]">下次复习预览</span>
+                      )}
+                    </div>
+
+                    <div className="mt-2 grid grid-cols-2 gap-2 sm:grid-cols-4">
                       {gradeOptions.map((option) => (
                         <button
                           key={option.grade}
@@ -416,12 +472,14 @@ export default function ReviewPage({
                           onClick={() => void grade(option.grade)}
                           disabled={grading}
                           className={[
-                            "flex h-16 flex-col items-center justify-center gap-1 rounded-xl border font-semibold transition-all active:scale-95 disabled:opacity-50",
+                            "ui-review-grade",
                             option.className,
                           ].join(" ")}
                         >
                           <span className="text-base leading-none">{option.label}</span>
-                          <span className="text-[10px] font-normal opacity-70">{option.hint}</span>
+                          <span className="text-[10px] font-normal opacity-70">
+                            {formatReviewPreview(gradePreviews.get(option.grade)) || option.hint}
+                          </span>
                         </button>
                       ))}
                     </div>
@@ -429,8 +487,8 @@ export default function ReviewPage({
                 )}
               </div>
 
-              <p className="mt-3 flex items-center justify-center gap-1.5 text-xs text-gray-400 dark:text-gray-500">
-                <CheckCircle2 size={12} className="text-emerald-500" />
+              <p className="mt-3 flex items-center justify-center gap-1.5 text-xs text-[var(--ui-text-subtle)]">
+                <CheckCircle2 size={12} className="text-[var(--ui-success-text)]" />
                 剩余 {cards.length} 张 · 空格翻面，1-4 评分
               </p>
             </motion.div>
@@ -440,29 +498,35 @@ export default function ReviewPage({
 
 
 
-      <AnimatePresence>
-        {editing && (
-          <motion.div
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            className="fixed inset-0 z-50 flex items-end justify-center bg-black/30 p-3 sm:items-center"
-            onClick={() => setEditing(null)}
-          >
-            <motion.div
-              initial={{ y: 16, opacity: 0 }}
-              animate={{ y: 0, opacity: 1 }}
-              exit={{ y: 16, opacity: 0 }}
-              transition={{ duration: 0.15 }}
-              className="ui-panel w-full max-w-md p-4 sm:p-5"
-              onClick={(e) => e.stopPropagation()}
+      <Dialog.Root
+        open={!!editing}
+        onOpenChange={(open) => { if (!open && !savingEdit) setEditing(null); }}
+      >
+        <Dialog.Portal>
+          <Dialog.Overlay className="ui-overlay fixed inset-0 z-50 data-[state=open]:animate-fade-in" />
+          {editing && (
+            <Dialog.Content
+              asChild
+              onCloseAutoFocus={(event) => {
+                event.preventDefault();
+                editingTriggerRef.current?.focus();
+              }}
             >
+              <motion.div
+                initial={{ y: 16, opacity: 0 }}
+                animate={{ y: 0, opacity: 1 }}
+                transition={{ duration: 0.15 }}
+                className="ui-modal-surface fixed inset-x-3 bottom-3 z-50 max-w-md p-4 outline-hidden sm:left-1/2 sm:right-auto sm:top-1/2 sm:bottom-auto sm:w-[calc(100%-1.5rem)] sm:-translate-x-1/2 sm:-translate-y-1/2 sm:p-5"
+              >
               <div className="mb-3 flex items-center justify-between">
-                <h3 className="text-sm font-bold text-gray-800 dark:text-gray-100">编辑知识卡片</h3>
-                <button type="button" onClick={() => setEditing(null)} className="ui-icon-button h-8 w-8" title="关闭">
-                  <X size={15} />
-                </button>
+                <Dialog.Title className="text-sm font-bold text-[var(--ui-text)]">编辑知识卡片</Dialog.Title>
+                <Dialog.Close asChild>
+                  <button type="button" className="ui-icon-button h-8 w-8" title="关闭" aria-label="关闭编辑卡片">
+                    <X size={15} />
+                  </button>
+                </Dialog.Close>
               </div>
+              <Dialog.Description className="sr-only">编辑知识卡片的标题、正文、标签和关联卡片。</Dialog.Description>
               <div className="grid gap-3">
                 <input
                   value={editTitle}
@@ -502,10 +566,11 @@ export default function ReviewPage({
                   {savingEdit ? "保存中..." : "保存"}
                 </button>
               </div>
-            </motion.div>
-          </motion.div>
-        )}
-      </AnimatePresence>
+              </motion.div>
+            </Dialog.Content>
+          )}
+        </Dialog.Portal>
+      </Dialog.Root>
     </motion.div>
   );
 }
@@ -513,9 +578,130 @@ export default function ReviewPage({
 function StatChip({ label, value, highlight }: { label: string; value: number | string; highlight?: boolean }) {
   return (
     <div className="ui-panel flex items-center gap-2 px-3 py-1.5">
-      <span className="text-xs text-gray-400 dark:text-gray-500">{label}</span>
-      <span className={`font-mono text-sm font-bold ${highlight ? "text-accent" : "text-gray-700 dark:text-gray-200"}`}>
+      <span className="text-xs text-[var(--ui-text-subtle)]">{label}</span>
+      <span className={`font-mono text-sm font-bold ${highlight ? "text-[var(--ui-accent-text)]" : "text-[var(--ui-text)]"}`}>
         {value}
+      </span>
+    </div>
+  );
+}
+
+function ReviewEmptyState({
+  stats,
+  reviewStats,
+  onNavigate,
+}: {
+  stats: api.DueReviewStats | null;
+  reviewStats: api.ReviewStatsResponse | null;
+  onNavigate: (page: Page) => void;
+}) {
+  const hasNoConfirmedCards = (stats?.total_confirmed ?? 0) === 0;
+  const reviewedToday = stats?.reviewed_today ?? 0;
+  const nextScheduled = reviewStats?.upcoming.find((day) => day.count > 0);
+  const title = hasNoConfirmedCards
+    ? "从第一张卡片开始"
+    : reviewedToday > 0
+      ? "今日复习已完成"
+      : "今天没有到期卡片";
+  const description = hasNoConfirmedCards
+    ? "确认一张知识卡片，它就会进入可追踪的间隔复习队列。"
+    : reviewedToday > 0
+      ? "当前队列已经清空，今天的记忆巩固完成。"
+      : "没有需要立即处理的卡片，可以继续整理知识或查看学习节奏。";
+
+  return (
+    <section className="ui-panel overflow-hidden">
+      <div className="ui-soft-divider border-b px-5 py-7 text-center sm:px-8 sm:py-9">
+        <span className="ui-status-accent mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-xl ring-1 ring-[var(--ui-selected-border)]">
+          {hasNoConfirmedCards ? <Brain size={23} strokeWidth={2} /> : <CheckCircle2 size={23} strokeWidth={2} />}
+        </span>
+        <p className="ui-section-kicker">今日复习</p>
+        <h3 className="mt-2 text-lg font-semibold tracking-tight text-[var(--ui-text)]">{title}</h3>
+        <p className="mx-auto mt-2 max-w-md text-sm leading-6 text-[var(--ui-text-muted)]">{description}</p>
+        <p className="mt-4 text-3xl font-semibold tracking-tight text-[var(--ui-text)]">
+          {hasNoConfirmedCards ? "—" : "0"}
+          <span className="ml-1 text-sm font-medium text-[var(--ui-text-subtle)]">张待复习卡片</span>
+        </p>
+      </div>
+
+      <div className="ui-metric-grid grid grid-cols-3">
+        <ReviewMetric icon={CheckCircle2} label="今日已复习" value={reviewedToday} suffix="张" />
+        <ReviewMetric icon={BookMarked} label="已确认卡片" value={stats?.total_confirmed ?? 0} suffix="张" />
+        <ReviewMetric
+          icon={CalendarClock}
+          label="下一批复习"
+          value={nextScheduled ? nextScheduled.date.slice(5) : "—"}
+          suffix={nextScheduled ? `${nextScheduled.count} 张` : ""}
+        />
+      </div>
+
+      <div className="ui-soft-divider flex flex-col gap-2 border-t px-5 py-4 sm:flex-row sm:justify-center">
+        <button type="button" onClick={() => onNavigate("knowledge")} className="ui-button-primary w-full sm:w-auto">
+          <BookMarked size={14} /> {hasNoConfirmedCards ? "去知识页确认卡片" : "查看知识库"}
+        </button>
+        <button type="button" onClick={() => onNavigate("stats")} className="ui-button-secondary w-full sm:w-auto">
+          <BarChart3 size={14} /> 查看复习统计
+        </button>
+      </div>
+    </section>
+  );
+}
+
+function ReviewBatchComplete({
+  remaining,
+  onContinue,
+  onNavigate,
+}: {
+  remaining: number;
+  onContinue: () => void;
+  onNavigate: (page: Page) => void;
+}) {
+  return (
+    <section className="ui-panel overflow-hidden">
+      <div className="ui-soft-divider border-b px-5 py-7 text-center sm:px-8 sm:py-9">
+        <span className="ui-status-success mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-xl ring-1 ring-[var(--ui-success-border)]">
+          <CheckCircle2 size={23} strokeWidth={2} />
+        </span>
+        <p className="ui-section-kicker">本批复习</p>
+        <h3 className="mt-2 text-lg font-semibold tracking-tight text-[var(--ui-text)]">这一批完成了</h3>
+        <p className="mx-auto mt-2 max-w-md text-sm leading-6 text-[var(--ui-text-muted)]">
+          还有待复习卡片，可以按自己的节奏继续下一批。
+        </p>
+        <p className="mt-4 text-3xl font-semibold tracking-tight text-[var(--ui-text)]">
+          {remaining}
+          <span className="ml-1 text-sm font-medium text-[var(--ui-text-subtle)]">张待复习</span>
+        </p>
+      </div>
+      <div className="ui-soft-divider flex flex-col gap-2 border-t px-5 py-4 sm:flex-row sm:justify-center">
+        <button type="button" onClick={onContinue} className="ui-button-primary w-full sm:w-auto">
+          <ArrowRight size={14} /> 继续下一批
+        </button>
+        <button type="button" onClick={() => onNavigate("stats")} className="ui-button-secondary w-full sm:w-auto">
+          <BarChart3 size={14} /> 查看复习统计
+        </button>
+      </div>
+    </section>
+  );
+}
+
+function ReviewMetric({
+  icon: Icon,
+  label,
+  value,
+  suffix,
+}: {
+  icon: LucideIcon;
+  label: string;
+  value: number | string;
+  suffix: string;
+}) {
+  return (
+    <div className="flex min-w-0 flex-col items-center gap-1 px-2 py-4 text-center sm:px-4">
+      <Icon size={14} className="text-[var(--ui-text-subtle)]" />
+      <span className="truncate text-[11px] text-[var(--ui-text-subtle)]">{label}</span>
+      <span className="text-sm font-semibold text-[var(--ui-text)]">
+        {value}
+        {suffix && <span className="ml-1 text-[11px] font-normal text-[var(--ui-text-subtle)]">{suffix}</span>}
       </span>
     </div>
   );

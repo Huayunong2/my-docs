@@ -2,7 +2,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Bar, BarChart, Cell, ResponsiveContainer, Tooltip } from "recharts";
 import type { MouseEvent } from "react";
 import { motion } from "framer-motion";
-import { Activity, BarChart3, BookOpenText, Brain, CalendarCheck, CalendarClock, CalendarDays, CalendarRange, CheckCircle2, ChevronLeft, ChevronRight, CircleHelp, Clock, Coffee, FileText, Flame, Heart, HeartPulse, LineChart, LoaderCircle, PencilLine, Plane, Repeat, ShieldCheck, Sparkles, Target, TrendingUp, Trophy, Umbrella } from "lucide-react";
+import * as Dialog from "@radix-ui/react-dialog";
+import { Activity, BarChart3, BookMarked, BookOpenText, Brain, CalendarCheck, CalendarClock, CalendarDays, CalendarRange, CheckCircle2, ChevronLeft, ChevronRight, CircleHelp, Clock, Coffee, FileText, Flame, Folder, Heart, HeartPulse, LineChart, LoaderCircle, PencilLine, Plane, Repeat, ShieldCheck, Sparkles, Tags, Target, TrendingUp, Trophy, Umbrella } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import * as api from "../lib/api";
 import type { MonthDayStats, Review, ReviewKind, StatsOverview, WeekReview } from "../lib/api";
@@ -13,6 +14,9 @@ import type { ReviewGenerationStep } from "../lib/reviewGeneration";
 import { loadStatsSnapshot } from "../lib/statsSnapshot";
 import { useCountUp } from "../lib/useCountUp";
 import { ReviewStatusPill } from "./reviews/ReviewShared";
+import PageHeader from "./ui/PageHeader";
+import { toast } from "sonner";
+import { useQuery } from "@tanstack/react-query";
 
 function ChartTooltip({ active, payload, label }: {
   active?: boolean;
@@ -22,19 +26,19 @@ function ChartTooltip({ active, payload, label }: {
   if (!active || !payload || payload.length === 0) return null;
   const p = payload[0];
   return (
-    <div className="rounded-lg border border-gray-100 bg-white/95 px-3 py-2 text-xs shadow-card backdrop-blur dark:border-white/10 dark:bg-gray-900/95 dark:shadow-card-dark">
+    <div className="ui-modal-surface w-auto px-3 py-2 text-xs">
       {label != null && label !== "" && (
-        <div className="mb-1 font-medium text-gray-500 dark:text-gray-400">{label}</div>
+        <div className="mb-1 font-medium text-[var(--ui-text-muted)]">{label}</div>
       )}
       <div className="flex items-center gap-2">
         <span
           className="h-2 w-2 shrink-0 rounded-full"
-          style={{ backgroundColor: p.color || "var(--color-accent)" }}
+          style={{ backgroundColor: p.color || "var(--ui-accent-solid)" }}
         />
         {p.name ? (
-          <span className="text-gray-600 dark:text-gray-300">{p.name}</span>
+          <span className="text-[var(--ui-text-muted)]">{p.name}</span>
         ) : null}
-        <span className="ml-auto font-semibold text-gray-800 dark:text-gray-100">{p.value}</span>
+        <span className="ml-auto font-semibold text-[var(--ui-text)]">{p.value}</span>
       </div>
     </div>
   );
@@ -72,9 +76,31 @@ function todayDate(): string {
   return formatDate(new Date());
 }
 
+function parseMonthParam(value?: string) {
+  const match = value?.match(/^(\d{4})-(\d{2})$/);
+  if (!match) return null;
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  if (month < 1 || month > 12) return null;
+  return { year, month };
+}
+
 const weekdays = ["日", "一", "二", "三", "四", "五", "六"];
-const exemptionReasons = ["休息", "请假", "生病", "出差"];
+const exemptionReasons = ["休息", "放假", "请假", "生病", "出差", "其他"];
 type StatTone = "accent" | "green" | "amber" | "gray" | "rose" | "sky";
+
+const knowledgeQualityOptions: Array<{
+  key: api.KnowledgeCardQuality;
+  label: string;
+  hint: string;
+  icon: LucideIcon;
+  tone: StatTone;
+}> = [
+  { key: "missing_source", label: "缺少来源", hint: "补回日期或证据片段", icon: FileText, tone: "amber" },
+  { key: "missing_project", label: "未归入项目", hint: "补充项目归属", icon: Folder, tone: "sky" },
+  { key: "missing_tags", label: "缺少标签", hint: "补充检索标签", icon: Tags, tone: "accent" },
+  { key: "short_content", label: "内容过短", hint: "补成可复习的完整表述", icon: BookMarked, tone: "rose" },
+];
 
 const STEP_LABELS: Record<Exclude<ReviewGenerationStep, "idle">, string> = {
   collecting: "收集本周记录",
@@ -92,14 +118,21 @@ export default function StatsPage({
   onEditDate,
   onSearchTerm,
   onNavigate,
+  onOpenKnowledgeQuality,
+  initialMonth,
+  onMonthChange,
 }: {
   onEditDate: (date: string) => void;
   onSearchTerm: (term: string) => void;
   onNavigate: (page: Page) => void;
+  onOpenKnowledgeQuality: (quality: api.KnowledgeCardQuality) => void;
+  initialMonth?: string;
+  onMonthChange?: (month: string) => void;
 }) {
   const now = new Date();
-  const [year, setYear] = useState(now.getFullYear());
-  const [month, setMonth] = useState(now.getMonth() + 1);
+  const initialMonthParts = parseMonthParam(initialMonth);
+  const [year, setYear] = useState(initialMonthParts?.year ?? now.getFullYear());
+  const [month, setMonth] = useState(initialMonthParts?.month ?? now.getMonth() + 1);
   const [overview, setOverview] = useState<StatsOverview | null>(null);
   const [days, setDays] = useState<MonthDayStats[]>([]);
   const [reviewStats, setReviewStats] = useState<api.ReviewStatsResponse | null>(null);
@@ -113,6 +146,7 @@ export default function StatsPage({
   const [generationStep, setGenerationStep] = useState<ReviewGenerationStep>("idle");
   const [expandedMissingDays, setExpandedMissingDays] = useState(false);
   const [activeMissingDay, setActiveMissingDay] = useState<string | null>(null);
+  const [dayActionTarget, setDayActionTarget] = useState<MonthDayStats | null>(null);
   const [exemptionTarget, setExemptionTarget] = useState<MonthDayStats | null>(null);
   const [exemptionNote, setExemptionNote] = useState("");
   const [exemptionError, setExemptionError] = useState("");
@@ -121,6 +155,11 @@ export default function StatsPage({
   const [error, setError] = useState("");
   const loadRevision = useRef(0);
   const generationInFlight = useRef(false);
+  const knowledgeSummaryQuery = useQuery({
+    queryKey: api.knowledgeQueryKeys.summary,
+    queryFn: ({ signal }) => api.getKnowledgeSummary({ signal }),
+    staleTime: 30_000,
+  });
 
   const bounds = useMemo(() => monthBounds(year, month), [year, month]);
   const selectedWeekBounds = useMemo(() => weekBounds(reviewWeekDate), [reviewWeekDate]);
@@ -148,7 +187,7 @@ export default function StatsPage({
         let value = 0;
         let status = "空缺";
         if (day.has_article) {
-          color = "var(--color-accent)";
+          color = "var(--ui-accent-solid)";
           value = day.word_count;
           status = `${day.word_count} 字`;
         } else if (day.exemption) {
@@ -198,6 +237,10 @@ export default function StatsPage({
   const moodColumnCount = Math.min(6, Math.max(1, moodEntries.length));
   const compactMood = moodEntries.length > 6;
   const denseMood = moodEntries.length > 12;
+  const knowledgeSummary = knowledgeSummaryQuery.data;
+  const knowledgeQualityIssueCount = knowledgeSummary
+    ? knowledgeQualityOptions.reduce((total, option) => total + knowledgeSummary[option.key], 0)
+    : 0;
   const missingDays = weekReview?.missing_days || [];
   const visibleMissingDays = expandedMissingDays ? missingDays : missingDays.slice(0, 5);
   const monthHighlights = [
@@ -259,6 +302,13 @@ export default function StatsPage({
   }, [loadStats]);
 
   useEffect(() => {
+    const next = parseMonthParam(initialMonth);
+    if (!next || (next.year === year && next.month === month)) return;
+    setYear(next.year);
+    setMonth(next.month);
+  }, [initialMonth, month, year]);
+
+  useEffect(() => {
     if (activeMissingDay && !missingDays.includes(activeMissingDay)) {
       setActiveMissingDay(null);
     }
@@ -268,17 +318,23 @@ export default function StatsPage({
     const d = new Date(year, month - 1 + delta, 1);
     setYear(d.getFullYear());
     setMonth(d.getMonth() + 1);
+    onMonthChange?.(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`);
   };
 
   const goCurrentMonth = () => {
     setYear(now.getFullYear());
     setMonth(now.getMonth() + 1);
+    onMonthChange?.(`${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`);
   };
 
   const openExemptionMenu = (day: MonthDayStats) => {
     setExemptionTarget(day);
     setExemptionNote(day.exemption?.note || "");
     setExemptionError("");
+  };
+
+  const openDayActions = (day: MonthDayStats) => {
+    setDayActionTarget(day);
   };
 
   const saveExemption = async (reason: string) => {
@@ -290,10 +346,13 @@ export default function StatsPage({
         reason,
         note: exemptionNote.trim(),
       });
+      toast.success(`${exemptionTarget.date} 已设置为「${reason}」`);
       setExemptionTarget(null);
       await loadStats(false);
     } catch (e: any) {
-      setExemptionError(e.message || "保存未写原因失败");
+      const message = e.message || "保存日期状态失败";
+      setExemptionError(message);
+      toast.error(message);
     } finally {
       setSavingExemption(false);
     }
@@ -305,10 +364,13 @@ export default function StatsPage({
     setExemptionError("");
     try {
       await api.deleteDayExemption(exemptionTarget.date);
+      toast.success(`${exemptionTarget.date} 已恢复为普通日期`);
       setExemptionTarget(null);
       await loadStats(false);
     } catch (e: any) {
-      setExemptionError(e.message || "删除未写原因失败");
+      const message = e.message || "清除日期状态失败";
+      setExemptionError(message);
+      toast.error(message);
     } finally {
       setSavingExemption(false);
     }
@@ -377,38 +439,40 @@ export default function StatsPage({
     <motion.div
       initial={{ opacity: 0, y: 10 }}
       animate={{ opacity: 1, y: 0 }}
-      className="min-h-full overflow-y-auto px-3 pb-24 pt-4 sm:px-4 md:px-8 md:py-6"
+      className="page-surface page-surface-stats min-h-full overflow-y-auto px-3 pb-24 pt-4 sm:px-4 md:px-8 md:py-6"
     >
-      <div className="flex items-start justify-between flex-wrap gap-3 mb-4 md:mb-6">
-        <div>
-          <h2 className="text-xl font-bold text-gray-800 dark:text-gray-100">统计</h2>
-          <p className="text-sm text-gray-400 dark:text-gray-400 mt-0.5">
-            {year} 年 {month} 月 · {loading ? "加载中" : `${writtenDays} 天记录，${exemptedDays} 天豁免`}
-          </p>
-        </div>
-        <div className="ui-toolbar flex items-center gap-1">
-          <button
-            onClick={() => shiftMonth(-1)}
-            className="ui-icon-button h-8 w-8"
-            title="上个月"
-          >
-            <ChevronLeft size={16} />
-          </button>
-          <button
-            onClick={goCurrentMonth}
-            className="h-8 rounded-lg px-3 text-xs font-semibold text-accent transition-colors hover:bg-white dark:hover:bg-white/10"
-          >
-            本月
-          </button>
-          <button
-            onClick={() => shiftMonth(1)}
-            className="ui-icon-button h-8 w-8"
-            title="下个月"
-          >
-            <ChevronRight size={16} />
-          </button>
-        </div>
-      </div>
+      <PageHeader
+        icon={BarChart3}
+        title="统计"
+        description={`${year} 年 ${month} 月 · ${loading ? "加载中" : `${writtenDays} 天记录，${exemptedDays} 天豁免`}`}
+        navigation={
+          <div className="ui-toolbar flex items-center gap-1">
+            <button
+              type="button"
+              onClick={() => shiftMonth(-1)}
+              className="ui-icon-button h-8 w-8"
+              title="上个月"
+            >
+              <ChevronLeft size={16} />
+            </button>
+            <button
+              type="button"
+              onClick={goCurrentMonth}
+              className="ui-button-ghost h-8 min-h-8 px-3 text-xs font-semibold text-[var(--ui-accent-text)]"
+            >
+              本月
+            </button>
+            <button
+              type="button"
+              onClick={() => shiftMonth(1)}
+              className="ui-icon-button h-8 w-8"
+              title="下个月"
+            >
+              <ChevronRight size={16} />
+            </button>
+          </div>
+        }
+      />
 
       {error && (
         <div className="ui-alert-bad mb-4">
@@ -446,10 +510,10 @@ export default function StatsPage({
         <section className="ui-panel mb-4 p-4 md:mb-6">
           <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
             <div>
-              <h3 className="flex items-center gap-2 text-sm font-semibold text-gray-700 dark:text-gray-200">
-                <Brain size={16} className="text-accent" /> 复习
+              <h3 className="flex items-center gap-2 text-sm font-semibold text-[var(--ui-text)]">
+                <Brain size={16} className="text-[var(--ui-accent-text)]" /> 复习
               </h3>
-              <p className="mt-0.5 text-xs text-gray-400 dark:text-gray-400">
+              <p className="mt-0.5 text-xs text-[var(--ui-text-subtle)]">
                 学习中 {reviewStats.learning} 张 · 已掌握 {reviewStats.mature} 张 · 累计确认 {reviewStats.total_confirmed} 张
               </p>
             </div>
@@ -457,7 +521,7 @@ export default function StatsPage({
               <button
                 type="button"
                 onClick={() => onNavigate("review")}
-                className="inline-flex h-8 items-center gap-1 rounded-lg bg-accent px-3 text-xs font-semibold text-white shadow-xs shadow-accent/20 transition-colors hover:bg-accent/90"
+                className="ui-button-primary h-8 px-3 text-xs"
               >
                 去复习 {reviewStats.due} 张 →
               </button>
@@ -470,7 +534,7 @@ export default function StatsPage({
             <CompactMetric icon={CalendarClock} label="待复习" value={reviewStats.due > 0 ? String(reviewStats.due) : "无"} unit={reviewStats.due > 0 ? "张" : ""} tone={reviewStats.due > 0 ? "rose" : "gray"} />
           </div>
           <div className="mt-4">
-            <div className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-gray-400 dark:text-gray-500">
+            <div className="ui-section-kicker mb-1.5">
               近 30 天复习趋势
             </div>
             {reviewStats.daily.some((d) => d.count > 0) ? (
@@ -479,12 +543,12 @@ export default function StatsPage({
                   <BarChart data={reviewStats.daily} margin={{ top: 4, right: 0, left: 0, bottom: 0 }}>
                     <defs>
                       <linearGradient id="accentGradient" x1="0" y1="0" x2="0" y2="1">
-                        <stop offset="0%" stopColor="var(--color-accent)" />
-                        <stop offset="100%" stopColor="var(--color-accent-hover)" />
+                        <stop offset="0%" stopColor="var(--ui-accent-solid)" />
+                        <stop offset="100%" stopColor="var(--ui-accent-text)" />
                       </linearGradient>
                     </defs>
                     <Tooltip
-                      cursor={{ fill: "var(--color-accent-light)" }}
+                      cursor={{ fill: "var(--ui-surface-selected)" }}
                       content={<ChartTooltip />}
                       formatter={(value) => [`${value} 次`, "复习"]}
                     />
@@ -493,32 +557,32 @@ export default function StatsPage({
                 </ResponsiveContainer>
               </div>
             ) : (
-              <p className="rounded-lg bg-gray-50 px-3 py-4 text-center text-xs text-gray-400 dark:bg-white/[0.035] dark:text-gray-500">
+              <p className="ui-panel-muted rounded-lg px-3 py-4 text-center text-xs text-[var(--ui-text-subtle)]">
                 还没有复习记录——确认卡片后到「复习」页开始第一次间隔复习
               </p>
             )}
             {reviewStats.daily.some((d) => d.count > 0) && (
-              <p className="mt-1.5 text-[11px] text-gray-400 dark:text-gray-500">
+              <p className="mt-1.5 text-[11px] text-[var(--ui-text-subtle)]">
                 每天复习的卡片数，坚持连续复习比单次量大更重要
               </p>
             )}
           </div>
           <div className="mt-4">
             <div className="mb-1.5 flex items-center justify-between">
-              <span className="text-[11px] font-semibold uppercase tracking-wide text-gray-400 dark:text-gray-500">
+              <span className="ui-section-kicker">
                 未来 7 天到期
               </span>
-              <span className="text-[11px] text-gray-400 dark:text-gray-500">
+              <span className="text-[11px] text-[var(--ui-text-subtle)]">
                 {reviewStats.upcoming.reduce((sum, day) => sum + day.count, 0)} 张
               </span>
             </div>
             <div className="flex items-end gap-1.5">
               {reviewStats.upcoming.map((day) => (
                 <div key={day.date} className="flex flex-1 flex-col items-center gap-1" title={`${day.date} · ${day.count} 张`}>
-                  <span className={`font-mono text-[11px] leading-none ${day.count > 0 ? "text-accent" : "text-gray-300 dark:text-gray-600"}`}>
+                  <span className={`font-mono text-[11px] leading-none ${day.count > 0 ? "text-[var(--ui-accent-text)]" : "text-[var(--ui-text-disabled)]"}`}>
                     {day.count || ""}
                   </span>
-                  <div className={`h-2 w-full rounded-full ${day.count > 0 ? "bg-accent/50" : "bg-gray-100 dark:bg-white/[0.04]"}`} />
+                  <div className={`h-2 w-full rounded-full ${day.count > 0 ? "bg-[var(--ui-accent-text)]/50" : "bg-[var(--ui-surface-inset)]"}`} />
                 </div>
               ))}
             </div>
@@ -526,15 +590,15 @@ export default function StatsPage({
           {heatmap.length > 0 && (
             <div className="mt-4">
               <div className="mb-1.5 flex items-center justify-between">
-                <span className="text-[11px] font-semibold uppercase tracking-wide text-gray-400 dark:text-gray-500">
+                <span className="ui-section-kicker">
                   一年复习热力图
                 </span>
-                <span className="flex items-center gap-1 text-[11px] text-gray-400 dark:text-gray-500">
+                <span className="flex items-center gap-1 text-[11px] text-[var(--ui-text-subtle)]">
                   少
                   {[0, 1, 2, 4, 7].map((level) => (
                     <span
                       key={level}
-                      className={`inline-block h-2.5 w-2.5 rounded-[3px] ${level === 0 ? "bg-gray-100 dark:bg-white/[0.06]" : level <= 1 ? "bg-accent/20" : level <= 2 ? "bg-accent/40" : level <= 4 ? "bg-accent/70" : "bg-accent"}`}
+                      className={`inline-block h-2.5 w-2.5 rounded-[3px] ${level === 0 ? "bg-[var(--ui-surface-inset)]" : level <= 1 ? "ui-accent-fill-20" : level <= 2 ? "ui-accent-fill-40" : level <= 4 ? "ui-accent-fill-70" : "ui-accent-fill"}`}
                     />
                   ))}
                   多
@@ -549,14 +613,14 @@ export default function StatsPage({
                       className={[
                         "h-[11px] w-[11px] rounded-[3px]",
                         day.count === 0
-                          ? "bg-gray-100 dark:bg-white/[0.06]"
+                          ? "bg-[var(--ui-surface-inset)]"
                           : day.count === 1
-                            ? "bg-accent/20"
+                            ? "ui-accent-fill-20"
                             : day.count <= 2
-                              ? "bg-accent/40"
+                              ? "ui-accent-fill-40"
                               : day.count <= 4
-                                ? "bg-accent/70"
-                                : "bg-accent",
+                                ? "ui-accent-fill-70"
+                                : "ui-accent-fill",
                       ].join(" ")}
                     />
                   ))}
@@ -567,32 +631,107 @@ export default function StatsPage({
         </section>
       )}
 
+      {(knowledgeSummary || knowledgeSummaryQuery.isPending) && (
+        <section className="ui-panel mb-4 p-4 md:mb-6">
+          <div className="mb-3 flex flex-wrap items-start justify-between gap-2">
+            <div>
+              <h3 className="flex items-center gap-2 text-sm font-semibold text-[var(--ui-text)]">
+                <BookMarked size={16} className="text-[var(--ui-accent-text)]" /> 知识健康
+              </h3>
+              <p className="mt-0.5 text-xs text-[var(--ui-text-subtle)]">
+                {knowledgeSummary ? `${knowledgeSummary.total} 张活跃卡片 · ${knowledgeQualityIssueCount} 个待完善项` : "正在检查卡片完整度..."}
+              </p>
+            </div>
+            <button type="button" onClick={() => onNavigate("knowledge")} className="ui-button-secondary h-8 px-2.5 text-xs">
+              打开知识库 <ChevronRight size={13} />
+            </button>
+          </div>
+
+          {knowledgeSummaryQuery.isPending && !knowledgeSummary ? (
+            <div className="grid grid-cols-2 gap-2 sm:grid-cols-4" role="status" aria-label="正在加载知识健康">
+              {["w-3/5", "w-2/3", "w-1/2", "w-4/5"].map((width) => (
+                <div key={width} className="ui-panel-muted rounded-xl p-3">
+                  <div className={`ui-skeleton h-3 ${width}`} />
+                  <div className="ui-skeleton mt-3 h-5 w-1/3" />
+                </div>
+              ))}
+            </div>
+          ) : knowledgeSummary?.total === 0 ? (
+            <div className="ui-panel-muted rounded-xl border-dashed px-3 py-4 text-center text-xs text-[var(--ui-text-subtle)]">
+              还没有知识卡片；从今日记录或复盘中提取第一张卡片吧。
+            </div>
+          ) : knowledgeSummary && knowledgeQualityIssueCount > 0 ? (
+            <>
+              <div className="grid gap-2 sm:grid-cols-2">
+                {knowledgeQualityOptions.map(({ key, label, hint, icon: Icon, tone }) => {
+                  const count = knowledgeSummary[key];
+                  const toneClass = {
+                    accent: "ui-status-accent",
+                    green: "ui-status-success",
+                    amber: "ui-status-warning",
+                    gray: "ui-status-muted",
+                    rose: "ui-status-danger",
+                    sky: "ui-status-info",
+                  }[tone];
+                  return (
+                    <button
+                      key={key}
+                      type="button"
+                      onClick={() => onOpenKnowledgeQuality(key)}
+                      className="ui-panel card-interactive group flex min-w-0 items-center gap-3 p-3 text-left"
+                    >
+                      <span className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-xl ${toneClass}`}><Icon size={16} /></span>
+                      <span className="min-w-0 flex-1">
+                        <span className="flex items-center justify-between gap-2 text-xs font-semibold text-[var(--ui-text)]">
+                          <span className="truncate">{label}</span>
+                          <span className="font-mono text-sm text-[var(--ui-text)]">{count}</span>
+                        </span>
+                        <span className="mt-1 block truncate text-[11px] text-[var(--ui-text-subtle)]">{hint}</span>
+                      </span>
+                      <ChevronRight size={14} className="shrink-0 text-[var(--ui-text-disabled)] transition-transform group-hover:translate-x-0.5 group-hover:text-[var(--ui-accent-text)]" />
+                    </button>
+                  );
+                })}
+              </div>
+              <p className="mt-3 text-[11px] leading-4 text-[var(--ui-text-subtle)]">同一张卡片可能同时命中多个问题；点击后会打开全部状态的对应修复视图。</p>
+            </>
+          ) : (
+            <div className="ui-status-success flex items-center gap-2 rounded-xl px-3 py-3 text-xs">
+              <ShieldCheck size={16} /> 当前卡片字段完整度良好，可以继续专注于复习。
+            </div>
+          )}
+        </section>
+      )}
+
       <div className="space-y-4 md:space-y-6">
         <div className="grid items-start gap-4 xl:grid-cols-[minmax(0,1.55fr)_minmax(360px,0.85fr)]">
-        <section className="min-w-0 h-[644px] sm:h-[684px] xl:h-[760px]">
+        <section className="min-w-0 h-[min(78dvh,644px)] min-h-[520px] sm:h-[684px] xl:h-[760px]">
           <div className="ui-panel flex h-full flex-col overflow-hidden">
-            <div className="flex items-center justify-between gap-3 px-3 sm:px-4 py-3 border-b border-gray-100 dark:border-gray-700">
+            <div className="flex flex-wrap items-center justify-between gap-3 border-b px-3 py-3 sm:px-4 ui-soft-divider">
               <div>
-                <h3 className="flex items-center gap-2 text-sm font-semibold text-gray-700 dark:text-gray-200">
-                  <CalendarRange size={16} className="text-accent" /> 月历
+                <h3 className="flex items-center gap-2 text-sm font-semibold text-[var(--ui-text)]">
+                  <CalendarRange size={16} className="text-[var(--ui-accent-text)]" /> 月历
                 </h3>
-                <p className="text-xs text-gray-400 dark:text-gray-400 mt-0.5">点击任意日期编辑当天记录</p>
+                <p className="mt-0.5 text-xs text-[var(--ui-text-subtle)]">
+                  <span className="hidden sm:inline">点击日期编辑记录；空缺日右上角可设置请假、休息等状态</span>
+                  <span className="sm:hidden">点击日期选择编辑记录或设置日期状态</span>
+                </p>
               </div>
               <div className="w-24 shrink-0 sm:w-36">
-                <div className="flex justify-between text-[11px] text-gray-400 dark:text-gray-400 mb-1">
+                <div className="mb-1 flex justify-between text-[11px] text-[var(--ui-text-subtle)]">
                   <span>覆盖度</span>
                   <span>{animatedCompletion}%</span>
                 </div>
-                <div className="h-2 rounded-full bg-gray-100 dark:bg-gray-700 overflow-hidden">
-                  <div className="h-full rounded-full bg-accent transition-[width] duration-500 ease-out" style={{ width: `${animatedCompletion}%` }} />
+                <div className="h-2 overflow-hidden rounded-full bg-[var(--ui-surface-inset)]">
+                  <div className="ui-accent-fill h-full rounded-full transition-[width] duration-500 ease-out" style={{ width: `${animatedCompletion}%` }} />
                 </div>
               </div>
             </div>
 
             <div className="flex min-h-0 flex-1 flex-col p-2 sm:p-3">
-              <div className="grid grid-cols-7 gap-1 sm:gap-2 mb-1.5 shrink-0">
+              <div className="mb-1.5 grid shrink-0 grid-cols-7 gap-1 sm:gap-2">
                 {weekdays.map((d) => (
-                  <div key={d} className="text-center text-xs font-semibold text-gray-400 dark:text-gray-500 py-1.5 uppercase tracking-wider">
+                  <div key={d} className="py-1.5 text-center text-xs font-semibold uppercase tracking-wider text-[var(--ui-text-subtle)]">
                     {d}
                   </div>
                 ))}
@@ -608,24 +747,25 @@ export default function StatsPage({
                       day={day}
                       isToday={day.date === today}
                       onEditDate={onEditDate}
+                      onOpenDayActions={openDayActions}
                       onManageExemption={openExemptionMenu}
                     />
                   ) : (
-                    <div key={`blank-${i}`} data-calendar-cell="blank" className="box-border h-full min-h-0 rounded-lg border border-transparent bg-gray-50/40 dark:bg-white/[0.02]" />
+                    <div key={`blank-${i}`} data-calendar-cell="blank" className="ui-calendar-cell-blank box-border h-full min-h-0 rounded-lg" />
                   )
                 ))}
               </div>
             </div>
 
-            <div className="flex h-9 shrink-0 items-center border-t border-gray-100 px-2 dark:border-gray-700 sm:px-3">
+            <div className="ui-soft-divider flex h-9 shrink-0 items-center border-t px-2 sm:px-3">
               <div className="flex min-w-0 flex-1 items-center gap-1.5 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-                <LegendDot className="bg-accent" label="记录" />
-                <LegendDot className="bg-emerald-400" label="休息" />
-                <LegendDot className="bg-amber-400" label="请假" />
-                <LegendDot className="bg-rose-400" label="生病" />
-                <LegendDot className="bg-sky-400" label="出差" />
-                <LegendDot className="bg-gray-300 dark:bg-white/20" label="空缺" />
-                <span className="ml-1 inline-flex h-6 shrink-0 items-center rounded-full border border-gray-100 bg-white/70 px-2 text-[11px] font-medium text-gray-500 dark:border-white/5 dark:bg-white/[0.04] dark:text-gray-400 sm:ml-auto">
+                <LegendDot className="ui-accent-fill" label="记录" />
+                <LegendDot className="ui-success-fill" label="休息/放假" />
+                <LegendDot className="ui-warning-fill" label="请假/其他" />
+                <LegendDot className="ui-danger-fill" label="生病" />
+                <LegendDot className="ui-info-fill" label="出差" />
+                <LegendDot className="bg-[var(--ui-border-strong)]" label="空缺" />
+                <span className="ui-chip ml-1 h-6 shrink-0 px-2 text-[11px] sm:ml-auto">
                   {writtenDays} 天记录 · {exemptedDays} 天豁免
                 </span>
               </div>
@@ -636,22 +776,22 @@ export default function StatsPage({
           <section className="ui-panel h-[644px] min-w-0 overflow-y-auto p-3 sm:h-[684px] sm:p-4 xl:h-[760px]">
             <div className="mb-4 flex items-start justify-between gap-3">
               <div>
-                <h3 className="flex items-center gap-2 text-sm font-semibold text-gray-700 dark:text-gray-200">
-                  <BarChart3 size={16} className="text-accent" /> 本月概况
+                <h3 className="flex items-center gap-2 text-sm font-semibold text-[var(--ui-text)]">
+                  <BarChart3 size={16} className="text-[var(--ui-accent-text)]" /> 本月概况
                 </h3>
-                <p className="mt-1 text-xs text-gray-400 dark:text-gray-500">覆盖节奏、记录强度和本月亮点</p>
+                <p className="mt-1 text-xs text-[var(--ui-text-subtle)]">覆盖节奏、记录强度和本月亮点</p>
               </div>
-              <span className="inline-flex items-center gap-1 rounded-full bg-accent-light px-2.5 py-1 text-[11px] font-medium text-accent dark:bg-accent-light/20">
+              <span className="ui-status-accent inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-[11px] font-medium">
                 <CalendarRange size={12} />
                 {coveredDays}/{bounds.daysInMonth} 天
               </span>
             </div>
 
-            <div className="grid gap-4 rounded-xl border border-gray-100 bg-gray-50/70 p-3 dark:border-white/5 dark:bg-white/[0.03] sm:grid-cols-[150px_1fr]">
+            <div className="ui-panel-muted grid gap-4 p-3 sm:grid-cols-[150px_1fr]">
               <div className="flex items-center justify-center">
                 <div className="relative h-24 w-24">
                   <svg className="h-full w-full -rotate-90" viewBox="0 0 120 120">
-                    <circle cx="60" cy="60" r="52" fill="none" strokeWidth="10" className="stroke-gray-100 dark:stroke-white/10" />
+                    <circle cx="60" cy="60" r="52" fill="none" strokeWidth="10" className="stroke-[var(--ui-border)]" />
                     <circle
                       cx="60"
                       cy="60"
@@ -664,8 +804,8 @@ export default function StatsPage({
                     />
                   </svg>
                   <div className="absolute inset-0 flex flex-col items-center justify-center">
-                    <span className="text-2xl font-bold text-gray-800 dark:text-gray-100">{animatedCompletion}%</span>
-                    <span className="mt-0.5 text-xs text-gray-400 dark:text-gray-500">覆盖度</span>
+                    <span className="text-2xl font-bold text-[var(--ui-text)]">{animatedCompletion}%</span>
+                    <span className="mt-0.5 text-xs text-[var(--ui-text-subtle)]">覆盖度</span>
                   </div>
                 </div>
               </div>
@@ -680,18 +820,18 @@ export default function StatsPage({
               </div>
             </div>
 
-            <div className="mt-3 rounded-xl border border-gray-100 bg-gray-50 p-3 dark:border-white/5 dark:bg-white/[0.04]">
+            <div className="ui-panel-muted mt-3 p-3">
               <div className="mb-2 flex items-center justify-between gap-2">
-                <h4 className="flex items-center gap-1.5 text-xs font-semibold text-gray-500 dark:text-gray-400">
+                <h4 className="flex items-center gap-1.5 text-xs font-semibold text-[var(--ui-text-muted)]">
                   <Activity size={14} /> 本月节奏
                 </h4>
-                <span className="text-[11px] text-gray-400 dark:text-gray-500">记录 / 豁免 / 空缺</span>
+                <span className="text-[11px] text-[var(--ui-text-subtle)]">记录 / 豁免 / 空缺</span>
               </div>
               <div className="h-20">
                 <ResponsiveContainer width="100%" height="100%">
                   <BarChart data={rhythmData} margin={{ top: 4, right: 0, left: 0, bottom: 0 }}>
                     <Tooltip
-                      cursor={{ fill: "var(--color-accent-light)" }}
+                      cursor={{ fill: "var(--ui-surface-selected)" }}
                       content={<ChartTooltip />}
                       formatter={(_value, _name, item) => {
                         const payload = item?.payload as { status?: string } | undefined;
@@ -714,7 +854,7 @@ export default function StatsPage({
                   </BarChart>
                 </ResponsiveContainer>
               </div>
-              <div className="mt-2 flex items-center justify-between text-[11px] text-gray-400 dark:text-gray-500">
+                <div className="mt-2 flex items-center justify-between text-[11px] text-[var(--ui-text-subtle)]">
                 <span>{bounds.first.slice(5)}</span>
                 <span>最长 {longestDay ? `${longestDay.word_count} 字` : "暂无"}</span>
                 <span>{bounds.last.slice(5)}</span>
@@ -727,15 +867,15 @@ export default function StatsPage({
               ))}
             </div>
 
-            <div className="mt-3 rounded-xl border border-gray-100 p-3 dark:border-white/5">
+              <div className="ui-panel-muted mt-3 p-3">
               <div className="mb-2 flex items-center justify-between gap-2">
-                <h4 className="flex items-center gap-1.5 text-xs font-semibold text-gray-500 dark:text-gray-400">
+                <h4 className="flex items-center gap-1.5 text-xs font-semibold text-[var(--ui-text-muted)]">
                   <Heart size={14} /> 心情分布
                 </h4>
-                <span className="text-[11px] text-gray-400 dark:text-gray-500">{moodEntries.length} 类</span>
+                <span className="text-[11px] text-[var(--ui-text-subtle)]">{moodEntries.length} 类</span>
               </div>
               {moodEntries.length === 0 ? (
-                <p className="text-sm text-gray-400 dark:text-gray-400">本月还没有心情记录</p>
+                <p className="text-sm text-[var(--ui-text-subtle)]">本月还没有心情记录</p>
               ) : (
                 <div
                   className="grid gap-1.5 overflow-hidden"
@@ -757,7 +897,7 @@ export default function StatsPage({
                     />
                   ))}
                   {hiddenMoodCount > 0 && (
-                    <div className="flex h-full min-h-0 items-center justify-center rounded-lg bg-gray-50 px-2 text-center text-xs font-medium text-gray-400 dark:bg-white/[0.04] dark:text-gray-500">
+                    <div className="ui-panel-muted flex h-full min-h-0 items-center justify-center rounded-lg px-2 text-center text-xs font-medium text-[var(--ui-text-subtle)]">
                       +{hiddenMoodCount}
                     </div>
                   )}
@@ -766,9 +906,10 @@ export default function StatsPage({
             </div>
             
             <button
+              type="button"
               onClick={() => onEditDate(today)}
               className={[
-                "h-10 w-full rounded-lg bg-accent text-sm font-medium text-white transition-colors hover:bg-accent-hover",
+                "ui-button-primary h-10 w-full text-sm",
                 moodEntries.length == 0 ? "mt-16" :
                 moodEntries.length > 0 && moodEntries.length <= 6 ? "mt-11" : 
                 "mt-4",
@@ -782,8 +923,8 @@ export default function StatsPage({
         </div>
 
           <section className="ui-panel h-full p-4">
-            <h3 className="text-sm font-semibold text-gray-700 dark:text-gray-200 mb-1">本周复盘</h3>
-            <p className="text-xs text-gray-400 dark:text-gray-400 mb-3">
+            <h3 className="mb-1 text-sm font-semibold text-[var(--ui-text)]">本周复盘</h3>
+            <p className="mb-3 text-xs text-[var(--ui-text-subtle)]">
               {weekReview ? `${weekReview.from} 至 ${weekReview.to}` : "加载中"}
             </p>
             <div className="space-y-3 text-sm">
@@ -797,14 +938,15 @@ export default function StatsPage({
             </div>
             {weekReview?.longest_article && (
               <button
+                type="button"
                 onClick={() => onEditDate(weekReview.longest_article!.date)}
-                className="mt-4 w-full rounded-lg border border-gray-100 dark:border-gray-700 bg-gray-50 dark:bg-gray-900/30 px-3 py-2 text-left hover:border-accent/40"
+                className="ui-panel-muted mt-4 w-full px-3 py-2 text-left transition-colors hover:border-[var(--ui-selected-border)]"
               >
-                <div className="text-[11px] text-gray-400 dark:text-gray-400">最长记录</div>
-                <div className="mt-1 truncate text-sm font-medium text-gray-700 dark:text-gray-200">
+                <div className="text-[11px] text-[var(--ui-text-subtle)]">最长记录</div>
+                <div className="mt-1 truncate text-sm font-medium text-[var(--ui-text)]">
                   {weekReview.longest_article.title || "(无标题)"}
                 </div>
-                <div className="mt-0.5 text-xs text-gray-400 dark:text-gray-400">
+                <div className="mt-0.5 text-xs text-[var(--ui-text-subtle)]">
                   {weekReview.longest_article.date} · {weekReview.longest_article.word_count} 字
                 </div>
               </button>
@@ -812,12 +954,12 @@ export default function StatsPage({
             {missingDays.length ? (
               <div className="mt-4">
                 <div className="mb-2 flex items-center justify-between gap-2">
-                  <span className="text-xs text-gray-400 dark:text-gray-400">空缺日操作</span>
+                  <span className="text-xs text-[var(--ui-text-subtle)]">空缺日操作</span>
                   {missingDays.length > 5 && (
                     <button
                       type="button"
                       onClick={() => setExpandedMissingDays((value) => !value)}
-                      className="text-xs font-medium text-accent hover:underline"
+                      className="ui-button-ghost h-7 min-h-7 px-1 text-xs text-[var(--ui-accent-text)]"
                     >
                       {expandedMissingDays ? "收起" : `显示全部 ${missingDays.length} 天`}
                     </button>
@@ -830,10 +972,8 @@ export default function StatsPage({
                       type="button"
                       onClick={() => setActiveMissingDay((current) => (current === date ? null : date))}
                       className={[
-                        "rounded-full border px-2.5 py-1 font-mono text-xs transition-colors",
-                        activeMissingDay === date
-                          ? "border-accent/50 bg-accent-light text-accent dark:bg-accent-light/20"
-                          : "border-gray-100 bg-gray-50 text-gray-500 hover:border-accent/30 hover:text-accent dark:border-white/5 dark:bg-gray-900/30 dark:text-gray-400",
+                        "ui-filter-button min-h-8 rounded-full px-2.5 py-1 font-mono text-xs",
+                        activeMissingDay === date ? "ui-filter-button-active" : "",
                       ].join(" ")}
                     >
                       {date.slice(5)}
@@ -841,8 +981,8 @@ export default function StatsPage({
                   ))}
                 </div>
                 {activeMissingDay && (
-                  <div className="mt-2 flex flex-col gap-2 rounded-xl border border-gray-100 bg-gray-50 px-3 py-2 dark:border-white/5 dark:bg-gray-900/30 sm:flex-row sm:items-center sm:justify-between">
-                    <span className="font-mono text-xs text-gray-500 dark:text-gray-400">{activeMissingDay}</span>
+                  <div className="ui-panel-muted mt-2 flex flex-col gap-2 px-3 py-2 sm:flex-row sm:items-center sm:justify-between">
+                    <span className="font-mono text-xs text-[var(--ui-text-muted)]">{activeMissingDay}</span>
                     <div className="grid grid-cols-2 gap-2 sm:flex">
                       <button
                         type="button"
@@ -851,14 +991,14 @@ export default function StatsPage({
                           setActiveMissingDay(null);
                           onEditDate(date);
                         }}
-                        className="h-8 rounded-lg bg-accent-light px-3 text-xs font-medium text-accent hover:bg-accent-light/80 dark:bg-accent-light/20"
+                        className="ui-button-secondary h-8 px-3 text-xs text-[var(--ui-accent-text)]"
                       >
                         补写
                       </button>
                       <button
                         type="button"
                         onClick={() => openMissingExemption(activeMissingDay)}
-                        className="h-8 rounded-lg bg-amber-50 px-3 text-xs font-medium text-amber-600 hover:bg-amber-100 dark:bg-amber-900/20 dark:text-amber-300"
+                        className="ui-button-secondary h-8 px-3 text-xs text-[var(--ui-warning-text)]"
                       >
                         豁免
                       </button>
@@ -868,24 +1008,25 @@ export default function StatsPage({
               </div>
             ) : null}
             <div className="mt-4">
-              <div className="mb-2 text-xs text-gray-400 dark:text-gray-400">高频词</div>
+              <div className="ui-section-kicker mb-2">高频词</div>
               {weekReview?.top_terms.length ? (
                 <div className="flex flex-wrap gap-1.5">
                   {weekReview.top_terms.map((item) => (
                     <button
+                      type="button"
                       key={item.term}
                       onClick={() => onSearchTerm(item.term)}
-                      className="rounded-full bg-accent-light px-2 py-1 text-xs text-accent dark:bg-accent-light/20"
+                      className="ui-status-accent rounded-full px-2 py-1 text-xs"
                     >
                       {item.term} × {item.count}
                     </button>
                   ))}
                 </div>
               ) : (
-                <p className="text-sm text-gray-400 dark:text-gray-400">本周内容还不足以提取关键词</p>
+                <p className="text-sm text-[var(--ui-text-subtle)]">本周内容还不足以提取关键词</p>
               )}
             </div>
-            <div className="mt-4 rounded-lg bg-gray-50 px-3 py-2 text-xs text-gray-500 dark:bg-white/5 dark:text-gray-400">
+            <div className="ui-panel-muted mt-4 px-3 py-2 text-xs text-[var(--ui-text-muted)]">
               周复盘将作为独立 AI 派生记录生成，不写入当天日复盘。
             </div>
             <ReviewPanel
@@ -923,77 +1064,141 @@ export default function StatsPage({
           </section>
         </div>
 
-      {exemptionTarget && (
-        <div
-          className="fixed inset-0 z-50 flex items-end justify-center bg-black/30 p-3 sm:items-center"
-          onClick={() => setExemptionTarget(null)}
-        >
-          <div
-            className="ui-modal-surface max-w-sm p-4"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className="mb-3">
-              <h3 className="text-sm font-semibold text-gray-800 dark:text-gray-100">未写原因</h3>
-              <p className="mt-0.5 text-xs text-gray-400 dark:text-gray-400">
-                {exemptionTarget.date} · 豁免日不算记录，但不会打断连续覆盖。
-              </p>
-            </div>
-            <textarea
-              value={exemptionNote}
-              onChange={(e) => setExemptionNote(e.target.value)}
-              rows={2}
-              placeholder="备注，可留空"
-              className="ui-textarea mb-3"
-            />
-            <div className="grid grid-cols-2 gap-2">
-              {exemptionReasons.map((reason) => {
-                const tone = getExemptionTone(reason);
-                const ReasonIcon = getExemptionIcon(reason);
-                const selected = exemptionTarget.exemption?.reason === reason;
-                return (
-                  <button
-                    key={reason}
-                    disabled={savingExemption}
-                    onClick={() => saveExemption(reason)}
-                    className={[
-                      "inline-flex h-10 items-center justify-center gap-1.5 rounded-lg border text-sm font-semibold transition-colors disabled:opacity-60",
-                      selected
-                        ? tone.solid
-                        : tone.option,
-                    ].join(" ")}
-                  >
-                    <ReasonIcon size={15} />
-                    {reason}
+      <Dialog.Root
+        open={!!dayActionTarget}
+        onOpenChange={(open) => {
+          if (!open) setDayActionTarget(null);
+        }}
+      >
+        <Dialog.Portal>
+          <Dialog.Overlay className="ui-overlay fixed inset-0 z-50 data-[state=open]:animate-fade-in md:hidden" />
+          {dayActionTarget && (
+            <Dialog.Content className="ui-modal-surface fixed inset-x-0 bottom-0 z-[51] rounded-t-2xl border-t p-4 pb-[calc(1rem+env(safe-area-inset-bottom,0px))] outline-hidden data-[state=open]:animate-slide-up md:hidden">
+              <div className="ui-sheet-grabber mx-auto mb-3 h-1 w-10 rounded-full" aria-hidden="true" />
+              <div className="mb-4 flex items-start justify-between gap-3">
+                <div>
+                  <Dialog.Title className="text-base font-semibold text-[var(--ui-text)]">日期操作</Dialog.Title>
+                  <Dialog.Description className="mt-1 text-xs leading-5 text-[var(--ui-text-muted)]">
+                    {dayActionTarget.date} · 选择要执行的操作
+                  </Dialog.Description>
+                </div>
+                <Dialog.Close asChild>
+                  <button type="button" className="ui-icon-button h-9 w-9" aria-label="关闭日期操作">
+                    <span aria-hidden="true">×</span>
                   </button>
-                );
-              })}
-            </div>
-            {exemptionError && (
-              <p className="ui-alert-bad mt-3 text-xs">
-                {exemptionError}
-              </p>
-            )}
-            <div className="mt-4 flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
-              <button
-                onClick={() => setExemptionTarget(null)}
-                disabled={savingExemption}
-                className="ui-button-secondary h-10 px-4 text-sm"
-              >
-                取消
-              </button>
-              {exemptionTarget.exemption && (
+                </Dialog.Close>
+              </div>
+              <div className="grid gap-2">
                 <button
-                  onClick={clearExemption}
-                  disabled={savingExemption}
-                  className="inline-flex h-10 items-center justify-center rounded-lg bg-red-500 px-4 text-sm font-semibold text-white transition-colors hover:bg-red-600 disabled:opacity-60"
+                  type="button"
+                  onClick={() => {
+                    const target = dayActionTarget;
+                    setDayActionTarget(null);
+                    onEditDate(target.date);
+                  }}
+                  className="ui-button-secondary min-h-12 justify-start px-4 text-sm"
                 >
-                  清除原因
+                  <PencilLine size={17} className="text-[var(--ui-accent-text)]" />
+                  <span className="flex flex-col items-start">
+                    <span className="font-semibold">编辑记录</span>
+                    <span className="mt-0.5 text-xs font-normal text-[var(--ui-text-subtle)]">
+                      {dayActionTarget.has_article ? "打开这一天的总结" : "补写这一天的总结"}
+                    </span>
+                  </span>
                 </button>
-              )}
-            </div>
-          </div>
-        </div>
-      )}
+                {!dayActionTarget.has_article && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const target = dayActionTarget;
+                      setDayActionTarget(null);
+                      openExemptionMenu(target);
+                    }}
+                    className="ui-button-secondary min-h-12 justify-start px-4 text-sm"
+                  >
+                    <ShieldCheck size={17} className="text-[var(--ui-warning-text)]" />
+                    <span className="flex flex-col items-start">
+                      <span className="font-semibold">{dayActionTarget.exemption ? "编辑日期状态" : "设置日期状态"}</span>
+                      <span className="mt-0.5 text-xs font-normal text-[var(--ui-text-subtle)]">
+                        选择请假、休息、生病或出差
+                      </span>
+                    </span>
+                  </button>
+                )}
+              </div>
+            </Dialog.Content>
+          )}
+        </Dialog.Portal>
+      </Dialog.Root>
+
+      <Dialog.Root
+        open={!!exemptionTarget}
+        onOpenChange={(open) => {
+          if (!open && !savingExemption) setExemptionTarget(null);
+        }}
+      >
+        <Dialog.Portal>
+          <Dialog.Overlay className="ui-overlay fixed inset-0 z-50 data-[state=open]:animate-fade-in" />
+          {exemptionTarget && (
+            <Dialog.Content className="ui-modal-surface fixed inset-x-3 bottom-3 z-[51] max-h-[min(90dvh,560px)] overflow-y-auto p-4 pb-[calc(1rem+env(safe-area-inset-bottom,0px))] outline-hidden data-[state=open]:animate-fade-in sm:left-1/2 sm:right-auto sm:top-1/2 sm:bottom-auto sm:w-[calc(100%-1.5rem)] sm:max-w-sm sm:-translate-x-1/2 sm:-translate-y-1/2">
+              <div className="mb-3">
+                <Dialog.Title className="text-sm font-semibold text-[var(--ui-text)]">日期状态</Dialog.Title>
+                <Dialog.Description className="mt-0.5 text-xs text-[var(--ui-text-muted)]">
+                  {exemptionTarget.date} · 选择一个状态；这一天不算记录，但不会打断连续覆盖。
+                </Dialog.Description>
+              </div>
+              <textarea
+                value={exemptionNote}
+                onChange={(e) => setExemptionNote(e.target.value)}
+                rows={2}
+                placeholder="备注，可留空"
+                className="ui-textarea mb-3"
+              />
+              <div className="grid grid-cols-2 gap-2" role="group" aria-label="日期状态选项">
+                {exemptionReasons.map((reason) => {
+                  const tone = getExemptionTone(reason);
+                  const ReasonIcon = getExemptionIcon(reason);
+                  const selected = exemptionTarget.exemption?.reason === reason;
+                  return (
+                    <button
+                      key={reason}
+                      type="button"
+                      disabled={savingExemption}
+                      onClick={() => saveExemption(reason)}
+                      aria-pressed={selected}
+                      className={[
+                        "inline-flex min-h-11 items-center justify-center gap-1.5 rounded-lg border text-sm font-semibold transition-colors disabled:opacity-60",
+                        selected ? tone.solid : tone.option,
+                      ].join(" ")}
+                    >
+                      <ReasonIcon size={15} />
+                      {reason}
+                    </button>
+                  );
+                })}
+              </div>
+              {exemptionError && <p role="alert" className="ui-alert-bad mt-3 text-xs">{exemptionError}</p>}
+              <div className="mt-4 flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+                <Dialog.Close asChild>
+                  <button type="button" disabled={savingExemption} className="ui-button-secondary h-10 px-4 text-sm">
+                    取消
+                  </button>
+                </Dialog.Close>
+                {exemptionTarget.exemption && (
+                  <button
+                    type="button"
+                    onClick={clearExemption}
+                    disabled={savingExemption}
+                    className="ui-button-danger h-10 px-4 text-sm disabled:opacity-60"
+                  >
+                    清除原因
+                  </button>
+                )}
+              </div>
+            </Dialog.Content>
+          )}
+        </Dialog.Portal>
+      </Dialog.Root>
     </motion.div>
   );
 }
@@ -1002,11 +1207,13 @@ function CalendarDay({
   day,
   isToday,
   onEditDate,
+  onOpenDayActions,
   onManageExemption,
 }: {
   day: MonthDayStats;
   isToday: boolean;
   onEditDate: (date: string) => void;
+  onOpenDayActions: (day: MonthDayStats) => void;
   onManageExemption: (day: MonthDayStats) => void;
 }) {
   const dateNum = Number(day.date.slice(-2));
@@ -1014,7 +1221,7 @@ function CalendarDay({
   const canManageExemption = !day.has_article;
   const exemptionTone = getExemptionTone(day.exemption?.reason);
   const ExemptionIcon = getExemptionIcon(day.exemption?.reason);
-  const openExemption = (e: MouseEvent) => {
+  const openExemption = (e: MouseEvent<HTMLElement>) => {
     e.preventDefault();
     e.stopPropagation();
     if (canManageExemption) onManageExemption(day);
@@ -1022,66 +1229,83 @@ function CalendarDay({
   return (
     <div
       data-calendar-cell="day"
-      role="button"
-      tabIndex={0}
-      onClick={() => onEditDate(day.date)}
-      onKeyDown={(e) => {
-        if (e.key === "Enter" || e.key === " ") onEditDate(day.date);
-      }}
       onContextMenu={openExemption}
       title={day.title || day.exemption?.reason || day.date}
       className={[
-        "group relative box-border h-full min-h-0 overflow-hidden rounded-lg border text-left transition-all",
-        "focus:outline-hidden focus:ring-2 focus:ring-accent/30",
+        "ui-calendar-cell group relative box-border h-full min-h-0 overflow-hidden rounded-lg text-left",
         day.has_article
-          ? "border-accent/30 bg-accent-light/80 dark:bg-accent-light/20 hover:border-accent hover:shadow-xs"
+          ? "ui-calendar-cell-article"
           : day.exemption
             ? `${exemptionTone.card} ${exemptionTone.hover}`
-            : "border-gray-100 dark:border-gray-700 bg-white dark:bg-gray-800/20 hover:bg-gray-50 dark:hover:bg-gray-700/30",
-        isToday ? "ring-2 ring-inset ring-amber-300 dark:ring-amber-500/60" : "",
+            : "",
+        isToday ? "ui-calendar-cell-today" : "",
       ].join(" ")}
     >
-      <span className={[
-        "absolute left-1.5 top-1.5 z-10 inline-flex h-5 min-w-5 items-center justify-center rounded-md px-1 text-xs font-semibold sm:left-2 sm:top-2",
-        day.has_article ? "bg-white/80 text-accent dark:bg-gray-900/30" : "text-gray-400 dark:text-gray-500"
-      ].join(" ")}>
-        {dateNum}
-      </span>
+      <div className="pointer-events-none absolute inset-0 overflow-hidden rounded-lg" aria-hidden="true">
+        <span className={[
+          "ui-calendar-date absolute left-1.5 top-1.5 z-10 inline-flex h-5 min-w-5 items-center justify-center rounded-md px-1 text-xs font-semibold sm:left-2 sm:top-2",
+          day.has_article ? "ui-calendar-date-article" : ""
+        ].join(" ")}>
+          {dateNum}
+        </span>
 
-      <span className="absolute right-1.5 top-1.5 z-20 hidden items-center gap-0.5 sm:flex sm:right-2 sm:top-2">
         {day.has_article && (
-          <span className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-md bg-white/70 text-accent dark:bg-gray-900/30">
+          <span className="ui-calendar-doc absolute right-1.5 top-1.5 z-10 inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-md sm:right-2 sm:top-2">
             <FileText size={11} />
           </span>
         )}
-        {canManageExemption && (
-          <button type="button" onClick={openExemption}
-            className="inline-flex h-5 w-5 items-center justify-center rounded-md text-gray-300 hover:bg-gray-100 hover:text-gray-500 dark:text-gray-600 dark:hover:bg-gray-700 dark:hover:text-gray-300"
-            title="豁免原因"><ExemptionIcon size={12} /></button>
-        )}
-      </span>
 
-      {day.has_article ? (
-        <div className="absolute inset-x-1.5 bottom-1.5 sm:inset-x-2 sm:bottom-2">
-          <div className="mb-1 h-0.5 overflow-hidden rounded-full bg-white/80 dark:bg-gray-700 sm:h-1.5">
-            <div className="h-full rounded-full bg-emerald-500" style={{ width: `${words}%` }} />
+        {day.has_article ? (
+          <div className="absolute inset-x-1.5 bottom-1.5 sm:inset-x-2 sm:bottom-2">
+            <div className="ui-calendar-meter-track mb-1 h-0.5 overflow-hidden rounded-full sm:h-1.5">
+              <div className="ui-calendar-meter-fill h-full rounded-full" style={{ width: `${words}%` }} />
+            </div>
+            <div className="hidden items-center justify-between gap-1 text-[10px] leading-none text-[var(--ui-text-muted)] sm:flex">
+              <span className="truncate">{day.word_count} 字</span>
+              {day.mood && <span className="shrink-0">{day.mood}</span>}
+            </div>
           </div>
-          <div className="hidden items-center justify-between gap-1 text-[10px] leading-none text-gray-500 dark:text-gray-400 sm:flex">
-            <span className="truncate">{day.word_count} 字</span>
-            {day.mood && <span className="shrink-0">{day.mood}</span>}
+        ) : day.exemption ? (
+          <div className="absolute inset-x-1.5 top-1/2 flex -translate-y-1/2 justify-center sm:inset-x-2">
+            <span className={`inline-flex max-w-full items-center gap-1 truncate rounded-full px-1 py-0.5 text-[10px] font-medium sm:px-1.5 ${exemptionTone.pill}`}>
+              <ExemptionIcon size={12} />
+              <span className="hidden sm:inline">{day.exemption.reason}</span>
+            </span>
           </div>
-        </div>
-      ) : day.exemption ? (
-        <div className="absolute inset-x-1.5 top-1/2 flex -translate-y-1/2 justify-center sm:inset-x-2">
-          <span className={`inline-flex max-w-full items-center gap-1 truncate rounded-full px-1 py-0.5 text-[10px] font-medium sm:px-1.5 ${exemptionTone.pill}`}>
-            <ExemptionIcon size={12} />
-            <span className="hidden sm:inline">{day.exemption.reason}</span>
-          </span>
-        </div>
-      ) : (
-        <div className="pointer-events-none absolute inset-0 flex items-center justify-center text-gray-300 dark:text-gray-600 group-hover:text-gray-400">
-          <PencilLine size={12} />
-        </div>
+        ) : (
+          <div className="ui-calendar-empty-icon pointer-events-none absolute inset-0 flex items-center justify-center">
+            <PencilLine size={12} />
+          </div>
+        )}
+      </div>
+
+      <button
+        type="button"
+        onClick={() => onEditDate(day.date)}
+        aria-label={`${day.date}，${day.has_article ? "编辑记录" : day.exemption ? `编辑${day.exemption.reason}状态` : "补写记录"}`}
+          className="absolute inset-0 z-10 hidden overflow-hidden rounded-lg text-left focus:outline-hidden focus:ring-2 focus:ring-inset focus:ring-[var(--ui-focus)]/40 md:block"
+      />
+
+      <button
+        type="button"
+        onClick={() => onOpenDayActions(day)}
+        aria-label={`${day.date}，打开日期操作`}
+        className="absolute inset-0 z-10 rounded-lg text-left focus:outline-hidden focus:ring-2 focus:ring-inset focus:ring-[var(--ui-focus)]/40 md:hidden"
+      />
+
+      {canManageExemption && (
+        <button
+          type="button"
+          onClick={openExemption}
+          aria-label={`${day.date} ${day.exemption ? "编辑" : "设置"}日期状态`}
+          title={`${day.exemption ? "编辑" : "设置"}日期状态`}
+          className={[
+            "ui-calendar-action absolute right-1 top-1 z-20 hidden h-7 w-7 items-center justify-center rounded-md transition-colors focus:outline-hidden focus:ring-2 focus:ring-[var(--ui-focus)]/50 sm:inline-flex sm:right-1.5 sm:top-1.5 sm:h-6 sm:w-6 sm:opacity-60 sm:hover:opacity-100",
+            day.exemption ? exemptionTone.pill : "ui-calendar-action-default text-[var(--ui-text-subtle)]",
+          ].join(" ")}
+        >
+          <ExemptionIcon size={13} />
+        </button>
       )}
     </div>
   );
@@ -1090,45 +1314,45 @@ function CalendarDay({
 function getExemptionTone(reason?: string) {
   if (reason === "休息" || reason === "放假") {
     return {
-      card: "border-emerald-200 bg-emerald-50/85 dark:border-emerald-500/35 dark:bg-emerald-500/10",
-      hover: "hover:border-emerald-300 dark:hover:border-emerald-400/50",
-      pill: "bg-emerald-100 text-emerald-700 dark:bg-emerald-500/20 dark:text-emerald-200",
-      note: "text-emerald-700/70 dark:text-emerald-200/70",
-      bar: "bg-emerald-400 shadow-xs shadow-emerald-400/20",
-      option: "border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100 dark:border-emerald-500/40 dark:bg-emerald-500/10 dark:text-emerald-100 dark:hover:bg-emerald-500/20",
-      solid: "border-emerald-400 bg-emerald-500 text-white shadow-xs shadow-emerald-500/25",
+      card: "ui-status-success",
+      hover: "hover:shadow-xs",
+      pill: "ui-status-success",
+      note: "text-[var(--ui-success-text)]",
+      bar: "bg-[var(--ui-success-action)]",
+      option: "ui-status-success",
+      solid: "ui-status-success-solid",
     };
   }
   if (reason === "生病") {
     return {
-      card: "border-rose-200 bg-rose-50/85 dark:border-rose-500/35 dark:bg-rose-500/10",
-      hover: "hover:border-rose-300 dark:hover:border-rose-400/50",
-      pill: "bg-rose-100 text-rose-700 dark:bg-rose-500/20 dark:text-rose-200",
-      note: "text-rose-700/70 dark:text-rose-200/70",
-      bar: "bg-rose-400 shadow-xs shadow-rose-400/20",
-      option: "border-rose-200 bg-rose-50 text-rose-700 hover:bg-rose-100 dark:border-rose-500/40 dark:bg-rose-500/10 dark:text-rose-100 dark:hover:bg-rose-500/20",
-      solid: "border-rose-400 bg-rose-500 text-white shadow-xs shadow-rose-500/25",
+      card: "ui-status-danger",
+      hover: "hover:shadow-xs",
+      pill: "ui-status-danger",
+      note: "text-[var(--ui-danger-text)]",
+      bar: "bg-[var(--ui-danger-action)]",
+      option: "ui-status-danger",
+      solid: "ui-status-danger-solid",
     };
   }
   if (reason === "出差") {
     return {
-      card: "border-sky-200 bg-sky-50/85 dark:border-sky-500/35 dark:bg-sky-500/10",
-      hover: "hover:border-sky-300 dark:hover:border-sky-400/50",
-      pill: "bg-sky-100 text-sky-700 dark:bg-sky-500/20 dark:text-sky-200",
-      note: "text-sky-700/70 dark:text-sky-200/70",
-      bar: "bg-sky-400 shadow-xs shadow-sky-400/20",
-      option: "border-sky-200 bg-sky-50 text-sky-700 hover:bg-sky-100 dark:border-sky-500/40 dark:bg-sky-500/10 dark:text-sky-100 dark:hover:bg-sky-500/20",
-      solid: "border-sky-400 bg-sky-500 text-white shadow-xs shadow-sky-500/25",
+      card: "ui-status-info",
+      hover: "hover:shadow-xs",
+      pill: "ui-status-info",
+      note: "text-[var(--ui-info-text)]",
+      bar: "bg-[var(--ui-info-action)]",
+      option: "ui-status-info",
+      solid: "ui-status-info-solid",
     };
   }
   return {
-    card: "border-amber-200 bg-amber-50/85 dark:border-amber-500/35 dark:bg-amber-500/10",
-    hover: "hover:border-amber-300 dark:hover:border-amber-400/50",
-    pill: "bg-amber-100 text-amber-700 dark:bg-amber-500/20 dark:text-amber-200",
-    note: "text-amber-700/70 dark:text-amber-200/70",
-    bar: "bg-amber-400 shadow-xs shadow-amber-400/20",
-    option: "border-amber-200 bg-amber-50 text-amber-700 hover:bg-amber-100 dark:border-amber-500/40 dark:bg-amber-500/10 dark:text-amber-100 dark:hover:bg-amber-500/20",
-    solid: "border-amber-400 bg-amber-500 text-white shadow-xs shadow-amber-500/25",
+    card: "ui-status-warning",
+    hover: "hover:shadow-xs",
+    pill: "ui-status-warning",
+    note: "text-[var(--ui-warning-text)]",
+    bar: "bg-[var(--ui-warning-action)]",
+    option: "ui-status-warning",
+    solid: "ui-status-warning-solid",
   };
 }
 
@@ -1150,12 +1374,12 @@ function getExemptionIcon(reason?: string): LucideIcon {
 
 function moodColorClass(index: number) {
   return [
-    "bg-accent",
-    "bg-emerald-500",
-    "bg-amber-500",
-    "bg-sky-500",
-    "bg-rose-500",
-    "bg-violet-500",
+    "bg-[var(--ui-accent-solid)]",
+    "bg-[var(--ui-success-action)]",
+    "bg-[var(--ui-warning-action)]",
+    "bg-[var(--ui-info-action)]",
+    "bg-[var(--ui-danger-action)]",
+    "bg-[var(--ui-accent-solid)]",
   ][index % 6];
 }
 
@@ -1196,29 +1420,29 @@ function ReviewPanel({
   const [datePickerOpen, setDatePickerOpen] = useState(false);
 
   return (
-    <section className={`rounded-xl border border-gray-100 bg-white p-3 transition-colors dark:border-white/10 dark:bg-white/[0.035] sm:p-4 ${className}`}>
+    <section className={`ui-panel p-3 transition-colors sm:p-4 ${className}`}>
       {/* Header */}
       <div className="mb-3 flex items-start justify-between gap-3">
         <div className="min-w-0">
-          <h4 className="text-sm font-bold text-gray-800 dark:text-gray-100 flex items-center gap-2">
+          <h4 className="flex items-center gap-2 text-sm font-bold text-[var(--ui-text)]">
             {kind === "weekly" ? <BarChart3 size={16} /> : <LineChart size={16} />} {title}
           </h4>
-          <p className="mt-1 line-clamp-2 text-xs leading-5 text-gray-500 dark:text-gray-400">{description}</p>
+          <p className="mt-1 line-clamp-2 text-xs leading-5 text-[var(--ui-text-muted)]">{description}</p>
         </div>
         {reviews.length > 0 && (
-          <span className="shrink-0 rounded-full bg-gray-100 dark:bg-white/10 px-2.5 py-1 text-[11px] font-medium text-gray-500 dark:text-gray-400">
+          <span className="ui-status-muted shrink-0 rounded-full px-2.5 py-1 text-[11px] font-medium">
             v{reviews.length}
           </span>
         )}
       </div>
 
-      <div className="mb-3 rounded-lg border border-gray-100 bg-gray-50 px-3 py-2.5 dark:border-white/10 dark:bg-white/[0.035]">
+      <div className="ui-panel-muted mb-3 rounded-lg px-3 py-2.5">
         <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
           <div className="min-w-0">
-            <div className="inline-flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-gray-400 dark:text-gray-500">
+            <div className="ui-section-kicker inline-flex items-center gap-1.5">
               <CalendarRange size={12} /> 生成周期
             </div>
-            <div className="mt-0.5 truncate text-xs font-semibold text-gray-700 dark:text-gray-200">{periodLabel}</div>
+            <div className="mt-0.5 truncate text-xs font-semibold text-[var(--ui-text)]">{periodLabel}</div>
           </div>
           {kind === "weekly" && anchorDate && onAnchorDateChange && (
             <ReviewDatePicker
@@ -1233,31 +1457,31 @@ function ReviewPanel({
 
       {/* Review preview */}
       {selectedReview ? (
-        <div className="mb-3 rounded-lg border border-gray-100 bg-gray-50 p-3 dark:border-white/10 dark:bg-white/[0.035]">
+        <div className="ui-panel-muted mb-3 rounded-lg p-3">
           <div className="flex items-center justify-between gap-2 mb-2">
-            <span className="text-xs font-medium text-gray-500 dark:text-gray-400 truncate">{selectedReview.title}</span>
+            <span className="truncate text-xs font-medium text-[var(--ui-text-muted)]">{selectedReview.title}</span>
             <ReviewStatusPill status={selectedReview.status} />
           </div>
-          <p className="line-clamp-4 whitespace-pre-wrap text-xs leading-5 text-gray-600 dark:text-gray-400">
+          <p className="line-clamp-4 whitespace-pre-wrap text-xs leading-5 text-[var(--ui-text-muted)]">
             {previewContent}
           </p>
         </div>
       ) : reviews.length > 0 ? (
-        <p className="mb-4 text-xs text-gray-400 dark:text-gray-500">进入复盘库查看历史版本</p>
+        <p className="mb-4 text-xs text-[var(--ui-text-subtle)]">进入复盘库查看历史版本</p>
       ) : (
-        <p className="mb-4 text-xs text-gray-400 dark:text-gray-500">还没有 AI 复盘版本</p>
+        <p className="mb-4 text-xs text-[var(--ui-text-subtle)]">还没有 AI 复盘版本</p>
       )}
 
       {(estimateLabel || generating) && (
-        <div className={`mb-3 min-h-[52px] rounded-lg border px-3 py-2 text-xs leading-5 ${generating ? "border-accent/15 bg-accent-light/40 text-gray-600 dark:bg-accent-light/10 dark:text-gray-300" : "border-gray-100 bg-gray-50 text-gray-500 dark:border-white/10 dark:bg-white/[0.035] dark:text-gray-400"}`}>
+        <div className={`mb-3 min-h-[52px] rounded-lg border px-3 py-2 text-xs leading-5 ${generating ? "ui-status-accent" : "ui-panel-muted text-[var(--ui-text-muted)]"}`}>
           {generating ? (
             <>
               <div className="mb-1.5 flex items-center gap-2 font-medium">
-                <LoaderCircle size={13} className="animate-spin text-accent" />
+                <LoaderCircle size={13} className="animate-spin text-[var(--ui-accent-text)]" />
                 {generationStep === "idle" ? "准备生成" : STEP_LABELS[generationStep]}
               </div>
-              <div className="h-1.5 overflow-hidden rounded-full bg-gray-200 dark:bg-gray-700">
-                <div className="h-full rounded-full bg-accent transition-all duration-300" style={{ width: generationStep === "saving" ? "100%" : generationStep === "requesting" ? "66%" : "33%" }} />
+              <div className="h-1.5 overflow-hidden rounded-full bg-[var(--ui-surface-inset)]">
+                <div className="h-full rounded-full bg-[var(--ui-accent-solid)] transition-all duration-300" style={{ width: generationStep === "saving" ? "100%" : generationStep === "requesting" ? "66%" : "33%" }} />
               </div>
             </>
           ) : estimateLabel}
@@ -1322,23 +1546,23 @@ function ReviewDatePicker({
   ];
   return (
     <div className="relative sm:w-[168px]">
-      <div className="mb-1 text-xs text-gray-400 dark:text-gray-500">周内任意一天</div>
+      <div className="mb-1 text-xs text-[var(--ui-text-subtle)]">周内任意一天</div>
       <button
         type="button"
         onClick={() => onOpenChange(!open)}
-        className="flex h-9 w-full items-center justify-between rounded-lg border border-gray-200 bg-white px-3 font-mono text-xs font-semibold text-gray-700 outline-hidden transition-colors hover:border-accent/30 dark:border-white/10 dark:bg-gray-950/30 dark:text-gray-100"
+        className="ui-field flex h-9 w-full items-center justify-between rounded-lg px-3 py-0 font-mono text-xs font-semibold"
       >
         {value.replace(/-/g, "/")}
-        <CalendarRange size={13} className="text-gray-400" />
+        <CalendarRange size={13} className="text-[var(--ui-text-subtle)]" />
       </button>
       {open && (
-        <div className="absolute right-0 top-full z-40 mt-2 w-[280px] rounded-xl border border-gray-100 bg-white p-3 shadow-modal dark:border-white/10 dark:bg-gray-900">
+        <div className="ui-floating-surface absolute right-0 top-full z-40 mt-2 w-[280px] rounded-xl p-3">
           <div className="mb-3 flex items-center justify-between">
             <button type="button" onClick={() => setViewDate(new Date(year, month - 1, 1))} className="ui-icon-button h-8 w-8"><ChevronLeft size={16} /></button>
-            <div className="text-sm font-semibold text-gray-800 dark:text-gray-100">{year} 年 {month + 1} 月</div>
+            <div className="text-sm font-semibold text-[var(--ui-text)]">{year} 年 {month + 1} 月</div>
             <button type="button" onClick={() => setViewDate(new Date(year, month + 1, 1))} className="ui-icon-button h-8 w-8"><ChevronRight size={16} /></button>
           </div>
-          <div className="grid grid-cols-7 gap-1 text-center text-[11px] font-medium text-gray-400 dark:text-gray-500">
+          <div className="grid grid-cols-7 gap-1 text-center text-[11px] font-medium text-[var(--ui-text-subtle)]">
             {weekdays.map((day) => <div key={day} className="py-1">{day}</div>)}
           </div>
           <div className="mt-1 grid grid-cols-7 gap-1">
@@ -1353,9 +1577,7 @@ function ReviewDatePicker({
                   }}
                   className={[
                     "h-8 rounded-lg text-xs font-medium transition-colors",
-                    cell === value
-                      ? "bg-accent text-white"
-                      : "text-gray-600 hover:bg-gray-100 dark:text-gray-300 dark:hover:bg-white/10",
+                      cell === value ? "ui-button-primary h-8 px-0 text-xs" : "text-[var(--ui-text-muted)] hover:bg-[var(--ui-surface-hover)]",
                   ].join(" ")}
                 >
                   {Number(cell.slice(-2))}
@@ -1397,45 +1619,38 @@ function StatCard({
   const displayValue = numeric ? `${animated.toLocaleString()}${numeric.suffix}` : value;
   const toneClass = {
     accent: {
-      icon: "bg-accent-light text-accent dark:bg-accent-light/20",
-      glow: "from-accent/12",
+      icon: "ui-status-accent",
     },
     green: {
-      icon: "bg-emerald-50 text-emerald-600 dark:bg-emerald-500/10 dark:text-emerald-300",
-      glow: "from-emerald-500/12",
+      icon: "ui-status-success",
     },
     amber: {
-      icon: "bg-amber-50 text-amber-600 dark:bg-amber-500/10 dark:text-amber-300",
-      glow: "from-amber-500/12",
+      icon: "ui-status-warning",
     },
     rose: {
-      icon: "bg-rose-50 text-rose-600 dark:bg-rose-500/10 dark:text-rose-300",
-      glow: "from-rose-500/12",
+      icon: "ui-status-danger",
     },
     sky: {
-      icon: "bg-sky-50 text-sky-600 dark:bg-sky-500/10 dark:text-sky-300",
-      glow: "from-sky-500/12",
+      icon: "ui-status-info",
     },
     gray: {
-      icon: "bg-gray-100 text-gray-600 dark:bg-white/[0.06] dark:text-gray-300",
-      glow: "from-gray-500/10",
+      icon: "ui-status-muted",
     },
   }[tone];
 
   return (
-    <div className="ui-panel relative overflow-hidden p-3 md:p-4">
-      <div className={`pointer-events-none absolute inset-x-0 top-0 h-16 bg-gradient-to-b ${toneClass.glow} to-transparent`} />
-      <div className="relative flex min-h-[84px] flex-col justify-between gap-3">
+    <div className="ui-panel p-3 md:p-4">
+      <div className="flex min-h-[84px] flex-col justify-between gap-3">
         <div className="flex items-center justify-between gap-2">
           <div className="min-w-0">
-            <p className="text-xs font-medium text-gray-400 dark:text-gray-400">{label}</p>
-            {meta && <p className="mt-1 truncate text-[11px] text-gray-400/90 dark:text-gray-500">{meta}</p>}
+            <p className="text-xs font-medium text-[var(--ui-text-subtle)]">{label}</p>
+            {meta && <p className="mt-1 truncate text-[11px] text-[var(--ui-text-subtle)]">{meta}</p>}
           </div>
           <span className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-xl ${toneClass.icon}`}>
             <Icon size={17} />
           </span>
         </div>
-        <p className="text-2xl font-bold leading-none text-gray-800 dark:text-gray-100 md:text-[26px]">
+        <p className="text-2xl font-bold leading-none text-[var(--ui-text)] md:text-[26px]">
           {value === "..." ? <span className="ui-skeleton inline-block h-7 w-20 align-middle" /> : displayValue}
         </p>
       </div>
@@ -1457,12 +1672,12 @@ function CompactMetric({
   tone: StatTone;
 }) {
   const toneClass = {
-    accent: "text-accent bg-accent-light dark:bg-accent-light/20",
-    green: "text-emerald-600 bg-emerald-50 dark:text-emerald-300 dark:bg-emerald-900/20",
-    amber: "text-amber-600 bg-amber-50 dark:text-amber-300 dark:bg-amber-900/20",
-    rose: "text-rose-600 bg-rose-50 dark:text-rose-300 dark:bg-rose-900/20",
-    sky: "text-sky-600 bg-sky-50 dark:text-sky-300 dark:bg-sky-900/20",
-    gray: "text-gray-600 bg-gray-50 dark:text-gray-300 dark:bg-white/[0.05]",
+    accent: "ui-status-accent",
+    green: "ui-status-success",
+    amber: "ui-status-warning",
+    rose: "ui-status-danger",
+    sky: "ui-status-info",
+    gray: "ui-status-muted",
   }[tone];
 
   return (
@@ -1496,29 +1711,29 @@ function MoodMetric({
 }) {
   if (dense) {
     return (
-      <div className="flex h-full min-h-0 items-center justify-between gap-1 rounded-lg bg-gray-50 px-2 dark:bg-white/[0.04]">
+      <div className="ui-panel-muted flex h-full min-h-0 items-center justify-between gap-1 rounded-lg px-2">
         <span className="truncate text-sm leading-none">{mood}</span>
-        <span className="shrink-0 text-[11px] font-medium text-gray-400 dark:text-gray-500">{count} 天</span>
+        <span className="shrink-0 text-[11px] font-medium text-[var(--ui-text-subtle)]">{count} 天</span>
       </div>
     );
   }
 
   if (compact) {
     return (
-      <div className="flex h-full min-h-0 items-center justify-between gap-1 rounded-lg bg-gray-50 px-2 dark:bg-white/[0.04]">
+      <div className="ui-panel-muted flex h-full min-h-0 items-center justify-between gap-1 rounded-lg px-2">
         <span className="truncate text-sm leading-none">{mood}</span>
-        <span className="shrink-0 text-[11px] font-medium text-gray-400 dark:text-gray-500">{count} 天</span>
+        <span className="shrink-0 text-[11px] font-medium text-[var(--ui-text-subtle)]">{count} 天</span>
       </div>
     );
   }
 
   return (
-    <div className="h-full min-h-0 rounded-lg bg-gray-50 px-2 py-1.5 dark:bg-white/[0.04]">
+    <div className="ui-panel-muted h-full min-h-0 rounded-lg px-2 py-1.5">
       <div className="mb-1 flex items-center justify-between gap-2">
         <span className="truncate text-sm leading-none">{mood}</span>
-        <span className="shrink-0 text-[11px] font-medium text-gray-400 dark:text-gray-500">{count} 天</span>
+        <span className="shrink-0 text-[11px] font-medium text-[var(--ui-text-subtle)]">{count} 天</span>
       </div>
-      <div className="h-1.5 overflow-hidden rounded-full bg-gray-100 dark:bg-gray-700">
+      <div className="h-1.5 overflow-hidden rounded-full bg-[var(--ui-surface-inset)]">
         <div className={`h-full rounded-full ${colorClass}`} style={{ width: `${ratio}%` }} />
       </div>
     </div>
@@ -1537,15 +1752,15 @@ function MonthHighlightCard({
   meta: string;
 }) {
   return (
-    <div className="rounded-xl border border-gray-100 bg-white px-3 py-2.5 dark:border-white/5 dark:bg-white/[0.03]">
+    <div className="ui-panel-muted px-3 py-2.5">
       <div className="flex items-center justify-between gap-2">
-        <div className="text-[11px] text-gray-400 dark:text-gray-500">{label}</div>
-        <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-lg bg-gray-50 text-gray-400 dark:bg-white/[0.06] dark:text-gray-500">
+        <div className="text-[11px] text-[var(--ui-text-subtle)]">{label}</div>
+        <span className="ui-status-muted flex h-6 w-6 shrink-0 items-center justify-center rounded-lg">
           <Icon size={13} />
         </span>
       </div>
-      <div className="mt-1 truncate text-sm font-semibold text-gray-800 dark:text-gray-100">{value}</div>
-      <div className="mt-0.5 truncate text-[11px] text-gray-400 dark:text-gray-500">{meta}</div>
+      <div className="mt-1 truncate text-sm font-semibold text-[var(--ui-text)]">{value}</div>
+      <div className="mt-0.5 truncate text-[11px] text-[var(--ui-text-subtle)]">{meta}</div>
     </div>
   );
 }
@@ -1553,19 +1768,17 @@ function MonthHighlightCard({
 function InfoRow({ label, value }: { label: string; value: string }) {
   return (
     <div className="flex items-center justify-between gap-3">
-      <span className="text-gray-400 dark:text-gray-400">{label}</span>
-      <span className="font-medium text-gray-700 dark:text-gray-200">{value}</span>
+      <span className="text-[var(--ui-text-subtle)]">{label}</span>
+      <span className="font-medium text-[var(--ui-text)]">{value}</span>
     </div>
   );
 }
 
 function LegendDot({ className, label }: { className: string; label: string }) {
   return (
-    <span className="inline-flex h-6 shrink-0 items-center gap-1.5 rounded-full border border-gray-100 bg-white/70 px-2 text-[11px] font-medium text-gray-500 dark:border-white/5 dark:bg-white/[0.04] dark:text-gray-400">
+    <span className="ui-chip h-6 shrink-0 px-2 text-[11px]">
       <span className={`h-1.5 w-1.5 shrink-0 rounded-full shadow-xs ${className}`} />
       {label}
     </span>
   );
 }
-
-

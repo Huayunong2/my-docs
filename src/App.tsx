@@ -1,14 +1,17 @@
-import { lazy, Suspense, useState, useCallback, useEffect } from "react";
+import { createContext, Suspense, useCallback, useContext, useEffect, useMemo, useState } from "react";
+import { MotionConfig } from "framer-motion";
+import { Outlet, useLocation, useNavigate as useRouterNavigate } from "@tanstack/react-router";
 import { useQuery } from "@tanstack/react-query";
 import { Toaster } from "sonner";
 import Sidebar from "./components/Sidebar";
-import TodayPage from "./components/TodayPage";
 import CommandPalette from "./components/CommandPalette";
 import * as api from "./lib/api";
 
 export type Page = "today" | "history" | "archive" | "search" | "stats" | "reviews" | "review" | "knowledge" | "settings";
+export type ThemeMode = "system" | "light" | "dark";
 
-const pageLoaders = {
+const pageLoaders: Partial<Record<Page, () => Promise<unknown>>> = {
+  today: () => import("./components/TodayPage"),
   history: () => import("./components/HistoryPage"),
   archive: () => import("./components/ArchivePage"),
   search: () => import("./components/SearchPage"),
@@ -19,46 +22,107 @@ const pageLoaders = {
   settings: () => import("./components/SettingsPage"),
 };
 
-const HistoryPage = lazy(pageLoaders.history);
-const ArchivePage = lazy(pageLoaders.archive);
-const SearchPage = lazy(pageLoaders.search);
-const StatsPage = lazy(pageLoaders.stats);
-const ReviewsPage = lazy(pageLoaders.reviews);
-const ReviewPage = lazy(pageLoaders.review);
-const KnowledgePage = lazy(pageLoaders.knowledge);
-const SettingsPage = lazy(pageLoaders.settings);
-
-function preloadPage(page: Page) {
-  if (page !== "today") void pageLoaders[page]();
+export function preloadPage(page: Page) {
+  pageLoaders[page]?.();
 }
 
-function App() {
-  const [page, setPage] = useState<Page>("today");
-  const [recordTarget, setRecordTarget] = useState<{ date: string; nonce: number } | null>(null);
-  const [searchTarget, setSearchTarget] = useState<{ query: string; nonce: number } | null>(null);
-  const [knowledgeTarget, setKnowledgeTarget] = useState<{ cardId: string; nonce: number } | null>(null);
-  const [zen, setZen] = useState(false);
-  const toggleZen = useCallback(() => setZen((z) => !z), []);
-  const [paletteOpen, setPaletteOpen] = useState(false);
+function pageFromPath(pathname: string): Page {
+  if (pathname.startsWith("/knowledge")) return "knowledge";
+  const page = pathname.replace(/^\//, "") as Page;
+  return ["today", "history", "archive", "search", "stats", "reviews", "review", "settings"].includes(page)
+    ? page
+    : "today";
+}
 
-  // 侧栏「今日到期」角标：useQuery 缓存 + 每分钟自动刷新；失败时静默隐藏
+function isEditableTarget(target: EventTarget | null) {
+  if (!(target instanceof HTMLElement)) return false;
+  return target.isContentEditable
+    || target.closest("[contenteditable='true']") !== null
+    || ["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName);
+}
+
+function titleForPath(pathname: string) {
+  if (pathname === "/today" || pathname === "/") return "今日";
+  if (pathname.startsWith("/knowledge/new")) return "新建卡片";
+  if (pathname.startsWith("/knowledge/trash")) return "回收站";
+  if (pathname.startsWith("/knowledge/")) return "知识卡片";
+  const labels: Record<string, string> = {
+    "/knowledge": "知识",
+    "/review": "复习",
+    "/stats": "统计",
+    "/search": "搜索",
+    "/history": "历史",
+    "/archive": "归档",
+    "/reviews": "复盘",
+    "/settings": "设置",
+  };
+  return labels[pathname] || "每日总结";
+}
+
+export interface AppShellContextValue {
+  navigate: (page: Page) => void;
+  updateSearch: (patch: Record<string, unknown>) => void;
+  openRecordDate: (date: string) => void;
+  openSearchTerm: (query: string) => void;
+  openKnowledgeCard: (cardId: string) => void;
+  openKnowledgeQuality: (quality: api.KnowledgeCardQuality) => void;
+  openNewKnowledgeCard: () => void;
+  backToKnowledge: () => void;
+  zen: boolean;
+  onToggleZen: () => void;
+  dark: boolean;
+  themeMode: ThemeMode;
+  onChangeThemeMode: (mode: ThemeMode) => void;
+  accentTheme: string;
+  onChangeAccentTheme: (theme: string) => void;
+}
+
+const AppShellContext = createContext<AppShellContextValue | null>(null);
+
+export function useAppShell() {
+  const value = useContext(AppShellContext);
+  if (!value) throw new Error("useAppShell must be used inside AppShell");
+  return value;
+}
+
+export function AppShell() {
+  const routerNavigate = useRouterNavigate();
+  const location = useLocation();
+  const [zen, setZen] = useState(false);
+  const [paletteOpen, setPaletteOpen] = useState(false);
+  const [themeMode, setThemeMode] = useState<ThemeMode>(() => {
+    if (typeof window !== "undefined") {
+      const stored = localStorage.getItem("themeMode");
+      if (stored === "light" || stored === "dark" || stored === "system") return stored;
+    }
+    return "system";
+  });
+  const [systemDark, setSystemDark] = useState(() => {
+    if (typeof window !== "undefined") return window.matchMedia("(prefers-color-scheme: dark)").matches;
+    return false;
+  });
+  const [accentTheme, setAccentTheme] = useState<string>(() => {
+    if (typeof window !== "undefined") return localStorage.getItem("accentTheme") || "";
+    return "";
+  });
+
+  const dark = themeMode === "dark" || (themeMode === "system" && systemDark);
+
+  // 侧栏「今日到期」角标：useQuery 缓存 + 每分钟自动刷新；失败时静默隐藏。
   const { data: dueCount } = useQuery({
     queryKey: ["dueCount"],
     queryFn: async () => (await api.getDueReviewCards(1)).stats.due,
     refetchInterval: 60_000,
   });
-  const [dark, setDark] = useState(() => {
-    if (typeof window !== "undefined") {
-      return window.matchMedia("(prefers-color-scheme: dark)").matches;
-    }
-    return false;
-  });
-  const [accentTheme, setAccentTheme] = useState<string>(() => {
-    if (typeof window !== "undefined") {
-      return localStorage.getItem("accentTheme") || "";
-    }
-    return "";
-  });
+
+  useEffect(() => {
+    if (themeMode !== "system") return;
+    const media = window.matchMedia("(prefers-color-scheme: dark)");
+    const update = () => setSystemDark(media.matches);
+    update();
+    media.addEventListener?.("change", update);
+    return () => media.removeEventListener?.("change", update);
+  }, [themeMode]);
 
   useEffect(() => {
     const el = document.documentElement;
@@ -66,40 +130,96 @@ function App() {
     else delete el.dataset.theme;
   }, [accentTheme]);
 
-  const toggleDark = useCallback(() => setDark((d) => !d), []);
+  useEffect(() => {
+    const root = document.documentElement;
+    root.classList.toggle("dark", dark);
+    root.style.colorScheme = dark ? "dark" : "light";
+  }, [dark]);
+
+  const toggleZen = useCallback(() => setZen((value) => !value), []);
+  const changeThemeMode = useCallback((mode: ThemeMode) => {
+    setThemeMode(mode);
+    if (typeof window !== "undefined") localStorage.setItem("themeMode", mode);
+  }, []);
+  const toggleDark = useCallback(() => changeThemeMode(dark ? "light" : "dark"), [changeThemeMode, dark]);
+  const openPalette = useCallback(() => setPaletteOpen(true), []);
   const changeAccentTheme = useCallback((theme: string) => {
     setAccentTheme(theme);
     if (typeof window !== "undefined") localStorage.setItem("accentTheme", theme);
   }, []);
+
+  const go = useCallback((to: string, search: Record<string, unknown> = {}, params?: Record<string, string>) => {
+    void routerNavigate({
+      to: to as never,
+      params: params as never,
+      search: search as never,
+    });
+  }, [routerNavigate]);
+
   const navigate = useCallback((nextPage: Page) => {
     preloadPage(nextPage);
-    setPage(nextPage);
+    if (nextPage === "knowledge") go("/knowledge");
+    else go(`/${nextPage}`);
     if (nextPage !== "today") setZen(false);
-  }, []);
-  const openRecordDate = useCallback((date: string) => {
-    setRecordTarget({ date, nonce: Date.now() });
-    setPage("today");
-  }, []);
-  const openSearchTerm = useCallback((query: string) => {
-    setSearchTarget({ query, nonce: Date.now() });
-    navigate("search");
-  }, [navigate]);
-  const openKnowledgeCard = useCallback((cardId: string) => {
-    setKnowledgeTarget({ cardId, nonce: Date.now() });
-    navigate("knowledge");
-  }, [navigate]);
+  }, [go]);
 
-  // Keyboard shortcuts: Ctrl+1-9 page switching
+  const updateSearch = useCallback((patch: Record<string, unknown>) => {
+    void routerNavigate({
+      search: (previous) => ({ ...previous, ...patch }) as never,
+    });
+  }, [routerNavigate]);
+
+  const openRecordDate = useCallback((date: string) => {
+    go("/today", { date });
+  }, [go]);
+
+  const openSearchTerm = useCallback((query: string) => {
+    preloadPage("search");
+    go("/search", query.trim() ? { q: query.trim() } : {});
+  }, [go]);
+
+  const openKnowledgeCard = useCallback((cardId: string) => {
+    preloadPage("knowledge");
+    void routerNavigate({
+      to: "/knowledge/$cardId" as never,
+      params: { cardId } as never,
+      search: (previous) => ({
+        q: previous.q,
+        project: previous.project,
+        tag: previous.tag,
+        status: previous.status,
+        type: previous.type,
+        sort: previous.sort,
+        usage: previous.usage,
+        quality: previous.quality,
+        page: previous.page,
+        view: "detail",
+      }) as never,
+    });
+  }, [routerNavigate]);
+
+  const openKnowledgeQuality = useCallback((quality: api.KnowledgeCardQuality) => {
+    preloadPage("knowledge");
+    go("/knowledge", { quality, status: "all", view: "list" });
+  }, [go]);
+
+  const openNewKnowledgeCard = useCallback(() => {
+    preloadPage("knowledge");
+    go("/knowledge/new", { view: "detail" });
+  }, [go]);
+
+  // Keyboard shortcuts: Ctrl/Cmd+1-9 keeps the existing fast navigation workflow.
   useEffect(() => {
     const map: Record<string, Page> = {
       "1": "today", "2": "history", "3": "archive",
       "4": "search", "5": "stats", "6": "reviews",
       "7": "knowledge", "8": "settings", "9": "review",
     };
-    const handler = (e: KeyboardEvent) => {
-      if ((e.ctrlKey || e.metaKey) && map[e.key]) {
-        e.preventDefault();
-        navigate(map[e.key]);
+    const handler = (event: KeyboardEvent) => {
+      if (event.defaultPrevented || event.isComposing || isEditableTarget(event.target)) return;
+      if ((event.ctrlKey || event.metaKey) && map[event.key]) {
+        event.preventDefault();
+        navigate(map[event.key]);
       }
     };
     window.addEventListener("keydown", handler);
@@ -108,10 +228,11 @@ function App() {
 
   // Ctrl/Cmd+K 命令面板
   useEffect(() => {
-    const handler = (e: KeyboardEvent) => {
-      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k") {
-        e.preventDefault();
-        setPaletteOpen((v) => !v);
+    const handler = (event: KeyboardEvent) => {
+      if (event.defaultPrevented || event.isComposing || isEditableTarget(event.target)) return;
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "k") {
+        event.preventDefault();
+        setPaletteOpen((value) => !value);
       }
     };
     window.addEventListener("keydown", handler);
@@ -125,19 +246,69 @@ function App() {
     return () => window.clearTimeout(timer);
   }, []);
 
+  const backToKnowledge = useCallback(() => {
+    void routerNavigate({
+      to: "/knowledge" as never,
+      search: (previous) => ({ ...previous, view: undefined }) as never,
+    });
+  }, [routerNavigate]);
+
+  const currentPage = useMemo(() => pageFromPath(location.pathname), [location.pathname]);
+
+  useEffect(() => {
+    document.title = `${titleForPath(location.pathname)} — 每日总结`;
+  }, [location.pathname]);
+
+  const contextValue: AppShellContextValue = {
+    navigate,
+    updateSearch,
+    openRecordDate,
+    openSearchTerm,
+    openKnowledgeCard,
+    openKnowledgeQuality,
+    openNewKnowledgeCard,
+    backToKnowledge,
+    zen,
+    onToggleZen: toggleZen,
+    dark,
+    themeMode,
+    onChangeThemeMode: changeThemeMode,
+    accentTheme,
+    onChangeAccentTheme: changeAccentTheme,
+  };
+
   return (
-    <div className={dark ? "dark" : ""} style={{ display: "contents" }}>
-      <div className="flex h-dvh w-screen bg-surface dark:bg-surface-dark transition-colors duration-300">
-        {!zen && <Sidebar page={page} onNavigate={navigate} onPrefetch={preloadPage} dark={dark} onToggleDark={toggleDark} dueCount={dueCount} />}
-        <main className="flex-1 min-w-0 overflow-y-auto">
-          <Suspense fallback={<PageFallback />}>
-            <PageContent page={page} recordTarget={recordTarget} searchTarget={searchTarget} knowledgeTarget={knowledgeTarget} onEditDate={openRecordDate} onSearchTerm={openSearchTerm} onOpenKnowledgeCard={openKnowledgeCard} onNavigate={navigate} zen={zen} onToggleZen={toggleZen} dark={dark} accentTheme={accentTheme} onChangeAccentTheme={changeAccentTheme} />
-          </Suspense>
-        </main>
-        <CommandPalette open={paletteOpen} onClose={() => setPaletteOpen(false)} onNavigate={(p) => navigate(p)} />
-      </div>
-      <Toaster richColors position="bottom-center" theme={dark ? "dark" : "light"} />
-    </div>
+    <MotionConfig reducedMotion="user">
+      <AppShellContext.Provider value={contextValue}>
+        <div className={dark ? "dark" : ""} style={{ display: "contents" }}>
+          <div className="app-shell flex h-dvh w-screen transition-colors duration-300">
+            <a
+              href="#main-content"
+              className="sr-only fixed left-3 top-3 z-[100] rounded-lg bg-[var(--ui-accent-solid)] px-3 py-2 text-sm font-semibold text-white shadow-lg focus:not-sr-only"
+            >
+              跳到主要内容
+            </a>
+            {!zen && (
+              <Sidebar
+                page={currentPage}
+                onPrefetch={preloadPage}
+                onOpenPalette={openPalette}
+                dark={dark}
+                onToggleDark={toggleDark}
+                dueCount={dueCount}
+              />
+            )}
+            <main id="main-content" className="app-content min-h-0 min-w-0 flex-1 overflow-y-auto" tabIndex={-1}>
+              <Suspense fallback={<PageFallback />}>
+                <Outlet />
+              </Suspense>
+            </main>
+            <CommandPalette open={paletteOpen} onClose={() => setPaletteOpen(false)} onNavigate={(page) => { navigate(page); setPaletteOpen(false); }} />
+          </div>
+          <Toaster richColors position="bottom-center" theme={dark ? "dark" : "light"} />
+        </div>
+      </AppShellContext.Provider>
+    </MotionConfig>
   );
 }
 
@@ -155,57 +326,4 @@ function PageFallback() {
   );
 }
 
-function PageContent({
-  page,
-  recordTarget,
-  searchTarget,
-  knowledgeTarget,
-  onEditDate,
-  onSearchTerm,
-  onOpenKnowledgeCard,
-  onNavigate,
-  zen,
-  onToggleZen,
-  dark,
-  accentTheme,
-  onChangeAccentTheme,
-}: {
-  page: Page;
-  recordTarget: { date: string; nonce: number } | null;
-  searchTarget: { query: string; nonce: number } | null;
-  knowledgeTarget: { cardId: string; nonce: number } | null;
-  onEditDate: (date: string) => void;
-  onSearchTerm: (query: string) => void;
-  onOpenKnowledgeCard: (cardId: string) => void;
-  onNavigate: (page: Page) => void;
-  zen: boolean;
-  onToggleZen: () => void;
-  dark: boolean;
-  accentTheme: string;
-  onChangeAccentTheme: (theme: string) => void;
-}) {
-  switch (page) {
-    case "today":
-      return <TodayPage targetDate={recordTarget?.date} targetNonce={recordTarget?.nonce} onNavigate={onNavigate} zen={zen} onToggleZen={onToggleZen} dark={dark} onWikiLink={onSearchTerm} />;
-    case "history":
-      return <HistoryPage onEditDate={onEditDate} />;
-    case "archive":
-      return <ArchivePage onEditDate={onEditDate} />;
-    case "search":
-      return <SearchPage onEditDate={onEditDate} initialQuery={searchTarget?.query} initialNonce={searchTarget?.nonce} onOpenKnowledgeCard={onOpenKnowledgeCard} />;
-    case "stats":
-      return <StatsPage onEditDate={onEditDate} onSearchTerm={onSearchTerm} onNavigate={onNavigate} />;
-    case "reviews":
-      return <ReviewsPage />;
-    case "review":
-      return <ReviewPage onEditDate={onEditDate} onNavigate={onNavigate} onOpenKnowledgeCard={onOpenKnowledgeCard} />;
-    case "knowledge":
-      return <KnowledgePage onEditDate={onEditDate} onNavigate={onNavigate} initialCardId={knowledgeTarget?.cardId} initialNonce={knowledgeTarget?.nonce} dark={dark} onWikiLink={onSearchTerm} />;
-    case "settings":
-      return <SettingsPage accentTheme={accentTheme} onChangeAccentTheme={onChangeAccentTheme} />;
-    default:
-      return <TodayPage />;
-  }
-}
-
-export default App;
+export default AppShell;

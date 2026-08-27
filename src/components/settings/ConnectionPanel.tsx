@@ -97,12 +97,12 @@ export default function ConnectionPanel() {
         <SectionTitle desc="显示当前设备将连接到哪里。">连接状态</SectionTitle>
         <div className="grid min-w-0 gap-3 text-sm sm:grid-cols-[180px_minmax(0,1fr)]">
           <div>
-            <p className="text-xs text-gray-400 dark:text-gray-500">模式</p>
-            <p className="mt-1 font-medium text-gray-800 dark:text-gray-100">{connectionMode}</p>
+            <p className="text-xs text-[var(--ui-text-subtle)]">模式</p>
+            <p className="mt-1 font-medium text-[var(--ui-text)]">{connectionMode}</p>
           </div>
           <div className="min-w-0">
-            <p className="text-xs text-gray-400 dark:text-gray-500">API 地址</p>
-            <p className="mt-1 break-all font-mono text-xs text-gray-600 dark:text-gray-300">{displayUrl}</p>
+            <p className="text-xs text-[var(--ui-text-subtle)]">API 地址</p>
+            <p className="mt-1 break-all font-mono text-xs text-[var(--ui-text-muted)]">{displayUrl}</p>
           </div>
         </div>
         <div className="mt-3 grid gap-2 sm:flex sm:flex-row">
@@ -174,7 +174,7 @@ export default function ConnectionPanel() {
             )}
           </div>
         ) : (
-          <p className="text-xs text-gray-400">加载中...</p>
+          <p className="text-xs text-[var(--ui-text-subtle)]">加载中...</p>
         )}
         <SecondaryBtn onClick={checkHealth} className="mt-3"><RefreshCw size={15} /> 刷新诊断</SecondaryBtn>
       </Card>
@@ -184,8 +184,8 @@ export default function ConnectionPanel() {
         <div className="space-y-3">
           <Input value={serverUrl} onChange={(e) => setServerUrl(e.target.value)} placeholder="http://服务器IP:8080/api" />
           <Input type={showToken ? "text" : "password"} value={token} onChange={(e) => setToken(e.target.value)} placeholder="粘贴 setup.sh 生成的 token" />
-          <label className="flex items-center gap-2 text-xs text-gray-500 dark:text-gray-400">
-            <input type="checkbox" checked={showToken} onChange={(e) => setShowToken(e.target.checked)} className="accent-accent" />
+          <label className="flex items-center gap-2 text-xs text-[var(--ui-text-muted)]">
+            <input type="checkbox" checked={showToken} onChange={(e) => setShowToken(e.target.checked)} className="accent-[var(--ui-accent-solid)]" />
             显示令牌
           </label>
           <PrimaryBtn onClick={saveAndTest} disabled={testing}><Save size={15} /> 保存并测试</PrimaryBtn>
@@ -198,7 +198,7 @@ export default function ConnectionPanel() {
           tone={urlWarning ? "warn" : "neutral"}
           message={urlWarning || "当前地址格式有效。公网 HTTP 模式仍不加密，敏感内容不要在不可信网络下填写。"}
         />
-        <ul className="mt-3 space-y-1.5 text-sm text-gray-500 dark:text-gray-400">
+        <ul className="mt-3 space-y-1.5 text-sm text-[var(--ui-text-muted)]">
           <li>使用脚本生成的长令牌，不要改成短密码。</li>
           <li>手机丢失或令牌泄露后，用 FORCE_NEW_TOKEN=1 重新部署并换令牌。</li>
           <li>云服务器安全组只放行必要端口。</li>
@@ -232,16 +232,16 @@ function InfoTile({
   wide?: boolean;
 }) {
   return (
-    <div className={`rounded-lg bg-gray-50 p-3 dark:bg-white/[0.035] ${wide ? "sm:col-span-2" : ""}`}>
-      <div className="text-xs text-gray-400 dark:text-gray-500">{label}</div>
+    <div className={`ui-panel-muted rounded-lg p-3 ${wide ? "sm:col-span-2" : ""}`}>
+      <div className="text-xs text-[var(--ui-text-subtle)]">{label}</div>
       <div className={[
         "mt-1 truncate text-sm font-medium",
         mono ? "font-mono text-xs" : "",
-        good === undefined ? "text-gray-700 dark:text-gray-300" : good ? "text-emerald-600 dark:text-emerald-300" : "text-gray-400 dark:text-gray-500",
+        good === undefined ? "text-[var(--ui-text)]" : good ? "text-[var(--ui-success-text)]" : "text-[var(--ui-text-subtle)]",
       ].join(" ")}>
         {value}
       </div>
-      {meta && <div className="mt-0.5 text-xs text-gray-500 dark:text-gray-500">{meta}</div>}
+      {meta && <div className="mt-0.5 text-xs text-[var(--ui-text-subtle)]">{meta}</div>}
     </div>
   );
 }
