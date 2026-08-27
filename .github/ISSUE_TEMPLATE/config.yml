@@ -1,0 +1,5 @@
+blank_issues_enabled: false
+contact_links:
+  - name: 报告安全漏洞
+    url: https://github.com/Huayunong2/my-docs/security/advisories/new
+    about: 请通过 GitHub 私有安全报告，不要公开发布漏洞细节。
