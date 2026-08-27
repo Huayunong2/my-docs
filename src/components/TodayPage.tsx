@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
+import * as Dialog from "@radix-ui/react-dialog";
 import {
   AlertTriangle,
   BookMarked,
@@ -18,7 +19,6 @@ import {
   MoreVertical,
   PenLine,
   Save,
-  Share2,
   Smile,
   Sparkles,
   Tag,
@@ -116,12 +116,62 @@ function relativeDateLabel(date: string): string {
   return date;
 }
 
+type LocalDraft = {
+  title: string;
+  content: string;
+  mood: string;
+  tags: string[];
+  savedAt: number;
+};
+
+function localDraftKey(date: string) {
+  return `daily-summary:draft:${date}`;
+}
+
+function readLocalDraft(date: string): LocalDraft | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const parsed = JSON.parse(localStorage.getItem(localDraftKey(date)) || "null") as Partial<LocalDraft> | null;
+    if (!parsed || typeof parsed.savedAt !== "number" || typeof parsed.title !== "string" || typeof parsed.content !== "string" || typeof parsed.mood !== "string" || !Array.isArray(parsed.tags)) {
+      return null;
+    }
+    return {
+      title: parsed.title,
+      content: parsed.content,
+      mood: parsed.mood,
+      tags: parsed.tags.filter((tag): tag is string => typeof tag === "string"),
+      savedAt: parsed.savedAt,
+    };
+  } catch {
+    return null;
+  }
+}
+
+function writeLocalDraft(date: string, draft: Omit<LocalDraft, "savedAt">) {
+  if (typeof window === "undefined") return;
+  try {
+    localStorage.setItem(localDraftKey(date), JSON.stringify({ ...draft, savedAt: Date.now() }));
+  } catch {
+    // localStorage 不可用时仍保留服务器自动保存流程。
+  }
+}
+
+function clearLocalDraft(date: string) {
+  if (typeof window === "undefined") return;
+  try {
+    localStorage.removeItem(localDraftKey(date));
+  } catch {
+    // 忽略隐私模式或存储配额限制。
+  }
+}
+
 type SaveStatus = "idle" | "saving" | "saved" | "error";
 type MobilePane = "edit" | "preview";
 
 export default function TodayPage({
   targetDate,
   targetNonce,
+  onDateChange,
   onNavigate,
   zen,
   onToggleZen,
@@ -130,6 +180,7 @@ export default function TodayPage({
 }: {
   targetDate?: string;
   targetNonce?: number;
+  onDateChange?: (date: string) => void;
   onNavigate?: (page: "knowledge") => void;
   zen?: boolean;
   onToggleZen?: () => void;
@@ -158,7 +209,9 @@ export default function TodayPage({
   const [cardExtractCount, setCardExtractCount] = useState(0);
   const [knowledgePrompt, setKnowledgePrompt] = useState(false);
   const knowledgePromptDate = useRef("");
+  const aiTriggerRef = useRef<HTMLButtonElement | null>(null);
   const saveTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
+  const localDraftTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
   const articleRef = useRef<Article | null>(null);
   const recordSession = useRef(new DailyRecordSession({
     create: api.createArticle,
@@ -176,6 +229,7 @@ export default function TodayPage({
   useEffect(() => {
     let cancelled = false;
     if (saveTimer.current) clearTimeout(saveTimer.current);
+    if (localDraftTimer.current) clearTimeout(localDraftTimer.current);
     setArticle(null);
     setTitle("");
     setContent("");
@@ -189,43 +243,52 @@ export default function TodayPage({
 
     const generation = recordSession.current.begin(date, null);
     articleRef.current = null;
+    const localDraft = readLocalDraft(date);
+    const restoreLocalDraft = (serverArticle: Article | null) => {
+      if (!localDraft) return false;
+      const serverUpdatedAt = serverArticle ? Date.parse(serverArticle.updated_at) : Number.NaN;
+      if (serverArticle && (!Number.isFinite(serverUpdatedAt) || localDraft.savedAt <= serverUpdatedAt)) {
+        clearLocalDraft(date);
+        return false;
+      }
+      setTitle(localDraft.title);
+      setContent(localDraft.content);
+      setMood(localDraft.mood);
+      setTags(localDraft.tags);
+      setDirty(true);
+      setSaveStatus("idle");
+      setSaveError("");
+      toast.info("已恢复尚未同步的本地草稿");
+      return true;
+    };
     api.getTodayArticle(date)
       .then((a) => {
         if (cancelled || !recordSession.current.acceptLoaded(generation, a)) return;
         if (a) {
           setArticle(a);
           articleRef.current = a;
-          setTitle(a.title);
-          setContent(a.content);
-          setMood(a.mood);
-          setTags(a.tags);
-          setDirty(false);
-        }
-        // 消费 Web Share Target 分享进来的内容（追加到当前记录）
-        const rawShare = localStorage.getItem("pendingShare");
-        if (rawShare) {
-          localStorage.removeItem("pendingShare");
-          try {
-            const shared = JSON.parse(rawShare) as { text?: string; title?: string };
-            if (shared.text) {
-              setContent((prev) => (prev ? `${prev}\n\n${shared.text}` : shared.text || ""));
-              if (shared.title && !a?.title) setTitle(shared.title);
-              setDirty(true);
-            }
-          } catch {
-            /* 忽略损坏的分享数据 */
+          if (!restoreLocalDraft(a)) {
+            setTitle(a.title);
+            setContent(a.content);
+            setMood(a.mood);
+            setTags(a.tags);
+            setDirty(false);
           }
+        } else {
+          restoreLocalDraft(null);
         }
       })
       .catch((e) => {
         if (cancelled) return;
-        setSaveError("连接服务器失败: " + api.getErrorMessage(e));
+        const restored = restoreLocalDraft(null);
+        setSaveError(restored ? "连接服务器失败，已保留本地草稿，恢复连接后可继续保存。" : "连接服务器失败: " + api.getErrorMessage(e));
         setSaveStatus("error");
       });
 
     return () => {
       cancelled = true;
       if (saveTimer.current) clearTimeout(saveTimer.current);
+      if (localDraftTimer.current) clearTimeout(localDraftTimer.current);
     };
   }, [date]);
 
@@ -259,6 +322,11 @@ export default function TodayPage({
         clearTimeout(saveTimer.current);
         saveTimer.current = undefined;
       }
+      if (localDraftTimer.current) {
+        clearTimeout(localDraftTimer.current);
+        localDraftTimer.current = undefined;
+      }
+      writeLocalDraft(date, { title: newTitle, content: newContent, mood: newMood, tags: newTags });
       setSaveStatus("saving");
       setSaveError("");
       try {
@@ -272,6 +340,7 @@ export default function TodayPage({
         if (!result.applied) return false;
         setArticle(result.article);
         articleRef.current = result.article;
+        clearLocalDraft(date);
         setDirty(false);
         setSaveStatus("saved");
         setTimeout(() => setSaveStatus((s) => (s === "saved" ? "idle" : s)), 2000);
@@ -297,6 +366,11 @@ export default function TodayPage({
   const autoSave = useCallback(
     (newTitle: string, newContent: string, newMood: string, newTags = tags) => {
       recordSession.current.markEdited();
+      if (localDraftTimer.current) clearTimeout(localDraftTimer.current);
+      localDraftTimer.current = setTimeout(() => {
+        localDraftTimer.current = undefined;
+        writeLocalDraft(date, { title: newTitle, content: newContent, mood: newMood, tags: newTags });
+      }, 180);
       setDirty(true);
       if (saveTimer.current) clearTimeout(saveTimer.current);
       saveTimer.current = setTimeout(() => {
@@ -310,22 +384,6 @@ export default function TodayPage({
   // Manual save
   const handleManualSave = () => {
     doSave(title, content, mood, tags);
-  };
-
-  const handleShare = async () => {
-    const text = `${title || date}${content ? `\n\n${content}` : ""}`.trim();
-    try {
-      if (navigator.share) {
-        await navigator.share({ title: title || date, text });
-      } else if (navigator.clipboard) {
-        await navigator.clipboard.writeText(text);
-        toast.success("已复制到剪贴板");
-      }
-    } catch (err) {
-      if ((err as Error)?.name !== "AbortError") {
-        toast.error("分享失败");
-      }
-    }
   };
 
   const requestDateChange = useCallback(async (nextDate: string) => {
@@ -349,7 +407,8 @@ export default function TodayPage({
       }
     }
     setSelectedDate(nextDate);
-  }, [confirm, content, date, dirty, doSave, mood, tags, title]);
+    onDateChange?.(nextDate);
+  }, [confirm, content, date, dirty, doSave, mood, onDateChange, tags, title]);
 
   useEffect(() => {
     if (targetDate && targetNonce !== externalNonceRef.current) {
@@ -428,6 +487,7 @@ export default function TodayPage({
       setDirty(false);
       setSaveStatus("idle");
       setSaveError("");
+      clearLocalDraft(date);
     } catch (e: any) {
       setSaveError("删除失败: " + api.getErrorMessage(e));
     }
@@ -502,6 +562,13 @@ export default function TodayPage({
     }
   };
 
+  const closeAiPanel = () => {
+    setAiResult("");
+    setAiError("");
+    setCardExtractNotice("");
+    setCardExtractCount(0);
+  };
+
   // Ctrl+S keyboard shortcut
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
@@ -518,6 +585,7 @@ export default function TodayPage({
   useEffect(() => {
     const flushPendingSave = () => {
       if (dirty || saveTimer.current) {
+        writeLocalDraft(date, { title, content, mood, tags });
         doSave(title, content, mood, tags);
       }
     };
@@ -570,47 +638,47 @@ export default function TodayPage({
       initial={{ opacity: 0, y: 10 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.3 }}
-      className="h-full flex flex-col relative"
+      className="page-surface page-surface-today h-full flex flex-col relative"
     >
       {zen && (
         <div className="flex items-center justify-between px-3 py-2 md:px-8 md:py-3">
-          <span className="text-xs font-medium text-gray-400 dark:text-gray-500">专注模式 · 按 Esc 退出</span>
-          <button onClick={onToggleZen} className="ui-button-secondary h-8">
+          <span className="text-xs font-medium text-[var(--ui-text-subtle)]">专注模式 · 按 Esc 退出</span>
+          <button type="button" onClick={onToggleZen} className="ui-button-secondary h-8">
             <Minimize2 size={14} /> 退出
           </button>
         </div>
       )}
       {/* Header */}
       <div className="px-3 pb-2 pt-3 md:px-8 md:pt-4" style={zen ? { display: "none" } : undefined}>
-        <div className="glass-card rounded-xl px-2 py-2 sm:px-3">
+        <div className="today-header-panel ui-panel px-2 py-2 sm:px-3">
           <div className="flex flex-col gap-2 xl:flex-row xl:items-center xl:justify-between">
             <div className="flex min-w-0 items-center justify-between gap-2">
               <div className="flex min-w-0 items-center gap-2">
-              <span className="hidden h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-accent-light text-accent dark:bg-accent-light/20 sm:flex">
+              <span className="ui-status-accent hidden h-8 w-8 shrink-0 items-center justify-center rounded-lg sm:flex">
                 <Calendar size={16} strokeWidth={2.2} />
               </span>
               <div className="min-w-0">
-                <h2 className="bg-gradient-to-r from-accent to-accent-hover bg-clip-text text-base font-bold leading-tight text-transparent">
+                <h1 className="text-base font-bold leading-tight tracking-tight text-[var(--ui-text)]">
                   每日记录
-                </h2>
-                <p className="mt-0.5 truncate text-xs text-gray-400 dark:text-gray-400">
+                </h1>
+                <p className="mt-0.5 truncate text-xs text-[var(--ui-text-subtle)]">
                   {relativeDateLabel(date)} · {date}
                 </p>
               </div>
               </div>
 
               <div className="flex items-center gap-1.5 md:hidden">
-                <span className="text-[11px] text-gray-400 dark:text-gray-500">{wordCount} 字</span>
+                <span className="text-[11px] text-[var(--ui-text-subtle)]">{wordCount} 字</span>
                 <span
                   className={[
                     "text-[11px] font-medium",
                     saveStatus === "error"
-                      ? "text-red-500"
+                      ? "text-[var(--ui-danger-text)]"
                       : saveStatus === "saving"
-                        ? "text-accent"
+                        ? "text-[var(--ui-accent-text)]"
                         : dirty
-                          ? "text-amber-500"
-                          : "text-emerald-500",
+                          ? "text-[var(--ui-warning-text)]"
+                          : "text-[var(--ui-success-text)]",
                   ].join(" ")}
                 >
                   {saveStatus === "error" ? "保存失败" : saveStatus === "saving" ? "保存中" : dirty ? "未保存" : "已同步"}
@@ -619,7 +687,7 @@ export default function TodayPage({
             </div>
 
             <div className="flex flex-col gap-2 lg:flex-row lg:items-center lg:justify-end">
-              <div className="relative flex w-full items-center gap-1 rounded-xl border border-gray-200/70 bg-gray-50 p-1 dark:border-white/10 dark:bg-white/[0.04] sm:w-auto">
+              <div className="ui-toolbar relative flex w-full items-center gap-1 sm:w-auto">
               <button
                 type="button"
                 onClick={() => requestDateChange(shiftDate(date, -1))}
@@ -641,7 +709,7 @@ export default function TodayPage({
                 <button
                   type="button"
                   onClick={() => requestDateChange(todayDate())}
-                  className="gradient-border h-8 shrink-0 rounded-lg px-2.5 text-xs font-semibold text-accent transition-transform hover:scale-[1.04]"
+                  className="ui-button-secondary h-8 shrink-0 px-2.5 text-xs font-semibold text-[var(--ui-accent-text)]"
                 >
                   今天
                 </button>
@@ -654,7 +722,7 @@ export default function TodayPage({
                 </span>
 
                 {saveStatus === "saving" && (
-                  <span className="ui-chip h-8 text-accent">
+                  <span className="ui-status-accent inline-flex h-8 items-center gap-1.5 rounded-full px-2.5 text-xs font-medium">
                     <LoaderCircle size={13} className="animate-spin" /> 保存中
                   </span>
                 )}
@@ -662,18 +730,18 @@ export default function TodayPage({
                   <motion.span
                     initial={{ opacity: 0, scale: 0.92 }}
                     animate={{ opacity: 1, scale: 1 }}
-                    className="ui-chip h-8 text-emerald-600 dark:text-emerald-300"
+                    className="ui-status-success inline-flex h-8 items-center gap-1.5 rounded-full px-2.5 text-xs font-medium"
                   >
                     <CheckCircle2 size={13} /> 已保存
                   </motion.span>
                 )}
                 {dirty && saveStatus !== "saving" && saveStatus !== "error" && (
-                  <span className="ui-chip h-8 text-amber-600 dark:text-amber-300">
+                  <span className="ui-status-warning inline-flex h-8 items-center gap-1.5 rounded-full px-2.5 text-xs font-medium">
                     <AlertTriangle size={13} /> 未保存
                   </span>
                 )}
                 {saveStatus === "error" && (
-                  <span className="ui-chip h-8 text-red-600 dark:text-red-300">
+                  <span className="ui-status-danger inline-flex h-8 items-center gap-1.5 rounded-full px-2.5 text-xs font-medium">
                     <AlertTriangle size={13} /> 保存失败
                   </span>
                 )}
@@ -681,7 +749,7 @@ export default function TodayPage({
             </div>
           </div>
 
-          <div className="mt-2 grid grid-cols-2 gap-2 border-t border-gray-100 pt-2 dark:border-white/10 md:flex md:flex-wrap md:items-center xl:border-t-0 xl:pt-0">
+          <div className="ui-soft-divider mt-2 grid grid-cols-2 gap-2 border-t pt-2 md:flex md:flex-wrap md:items-center xl:border-t-0 xl:pt-0">
             <motion.button
               whileTap={{ scale: 0.95 }}
               onClick={handleManualSave}
@@ -705,12 +773,12 @@ export default function TodayPage({
                     className="flex-col items-start gap-1 px-3 py-2.5"
                   >
                     <div className="flex w-full items-center justify-between gap-3">
-                      <span className="text-sm font-semibold text-gray-800 dark:text-gray-100">{t.name}</span>
+                      <span className="text-sm font-semibold text-[var(--ui-text)]">{t.name}</span>
                       {t.autoTitle && (
-                        <span className="rounded-full bg-accent-light px-2 py-0.5 text-[10px] font-medium text-accent dark:bg-accent-light/20">自动标题</span>
+                        <span className="ui-status-accent rounded-full px-2 py-0.5 text-[10px] font-medium">自动标题</span>
                       )}
                     </div>
-                    <p className="line-clamp-2 text-xs leading-5 text-gray-400 dark:text-gray-500">{t.description}</p>
+                    <p className="line-clamp-2 text-xs leading-5 text-[var(--ui-text-subtle)]">{t.description}</p>
                   </DropdownMenuItem>
                 ))}
               </DropdownMenuContent>
@@ -720,9 +788,12 @@ export default function TodayPage({
             <div className="col-span-2 flex w-full gap-2 md:col-span-1 md:w-auto">
               <motion.button
                 whileTap={{ scale: 0.95 }}
-                onClick={handleAISummary}
+                onClick={(event) => {
+                  aiTriggerRef.current = event.currentTarget;
+                  void handleAISummary();
+                }}
                 disabled={aiLoading}
-                className="ui-button-secondary flex-1 text-accent dark:text-accent md:flex-none md:w-auto"
+                className="ui-button-secondary flex-1 text-[var(--ui-accent-text)] md:w-auto md:flex-none"
                 title="AI 总结当前内容"
               >
                 {aiLoading ? <LoaderCircle size={14} className="animate-spin" /> : <Sparkles size={14} />}
@@ -731,9 +802,12 @@ export default function TodayPage({
 
               <motion.button
                 whileTap={{ scale: 0.95 }}
-                onClick={handleExtractKnowledgeCards}
+                onClick={(event) => {
+                  aiTriggerRef.current = event.currentTarget;
+                  void handleExtractKnowledgeCards();
+                }}
                 disabled={extractingCards}
-                className="ui-button-secondary flex-1 text-emerald-600 dark:text-emerald-300 md:flex-none md:w-auto"
+                className="ui-button-secondary flex-1 text-[var(--ui-success-text)] md:w-auto md:flex-none"
                 title="从当前正文抽取知识卡片草稿"
               >
                 {extractingCards ? <LoaderCircle size={14} className="animate-spin" /> : <BookMarked size={14} />}
@@ -742,14 +816,7 @@ export default function TodayPage({
             </div>
 
             <button
-              onClick={handleShare}
-              className="ui-button-ghost hidden md:inline-flex"
-              title="分享当前记录"
-            >
-              <Share2 size={14} /> 分享
-            </button>
-
-            <button
+              type="button"
               onClick={onToggleZen}
               className="ui-button-ghost hidden md:inline-flex"
               title="专注模式（隐藏侧栏与干扰）"
@@ -784,25 +851,15 @@ export default function TodayPage({
                     animate={{ opacity: 1, y: 0 }}
                     exit={{ opacity: 0, y: -4 }}
                     transition={{ duration: 0.12 }}
-                    className="absolute right-0 top-full z-30 mt-2 w-36 rounded-xl border border-gray-100 bg-white p-1.5 shadow-modal dark:border-white/10 dark:bg-gray-900"
+                    className="ui-floating-surface absolute right-0 top-full z-30 mt-2 w-36 rounded-xl p-1.5"
                   >
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setShowMobileMore(false);
-                          handleShare();
-                        }}
-                        className="flex h-9 w-full items-center gap-2 rounded-lg px-2.5 text-xs font-medium text-gray-600 hover:bg-gray-100 dark:text-gray-300 dark:hover:bg-white/10"
-                      >
-                        <Share2 size={14} /> 分享记录
-                      </button>
                       <button
                         type="button"
                         onClick={() => {
                           setShowMobileMore(false);
                           handleDelete();
                         }}
-                        className="flex h-9 w-full items-center gap-2 rounded-lg px-2.5 text-xs font-medium text-red-600 hover:bg-red-50 dark:text-red-300 dark:hover:bg-red-500/10"
+                        className="ui-button-danger h-9 min-h-9 w-full justify-start gap-2 border-0 bg-transparent px-2.5 text-xs"
                       >
                         <Trash2 size={14} /> 删除记录
                       </button>
@@ -825,7 +882,7 @@ export default function TodayPage({
           </div>
         </div>
 
-        <div className="mt-1 flex flex-wrap items-center gap-2 text-[11px] text-gray-400 dark:text-gray-500 md:hidden">
+        <div className="mt-1 flex flex-wrap items-center gap-2 text-[11px] text-[var(--ui-text-subtle)] md:hidden">
           <span>{wordCount} 字</span>
           <span>·</span>
           <span>{tags.length ? `${tags.length} 标签` : "无标签"}</span>
@@ -838,9 +895,9 @@ export default function TodayPage({
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0, y: -6 }}
               transition={{ duration: 0.15 }}
-              className="mt-2 flex flex-wrap items-center justify-between gap-2 rounded-xl border border-accent/20 bg-accent-light/40 px-4 py-2.5 text-xs dark:bg-accent-light/10"
+              className="ui-status-accent mt-2 flex flex-wrap items-center justify-between gap-2 rounded-xl px-4 py-2.5 text-xs"
             >
-              <span className="text-gray-600 dark:text-gray-300">今天的记录比较长，想把其中的规律沉淀成知识卡片？</span>
+              <span className="text-[var(--ui-text-muted)]">今天的记录比较长，想把其中的规律沉淀成知识卡片？</span>
               <span className="flex items-center gap-2">
                 {onNavigate && (
                   <button
@@ -850,7 +907,7 @@ export default function TodayPage({
                       setKnowledgePrompt(false);
                       onNavigate("knowledge");
                     }}
-                    className="inline-flex h-7 items-center gap-1 rounded-lg bg-accent px-2.5 text-xs font-semibold text-white hover:bg-accent/90"
+                    className="ui-button-primary h-7 px-2.5 text-xs"
                   >
                     <BookMarked size={12} /> 去沉淀
                   </button>
@@ -861,7 +918,7 @@ export default function TodayPage({
                     localStorage.setItem(`knowledge-prompt:${date}`, "1");
                     setKnowledgePrompt(false);
                   }}
-                  className="text-gray-400 hover:text-gray-600 dark:text-gray-300"
+                  className="ui-button-ghost h-7 min-h-7 px-2 text-xs"
                 >
                   稍后
                 </button>
@@ -873,59 +930,79 @@ export default function TodayPage({
         {/* AI result panel */}
         <AnimatePresence>
           {(aiResult || aiError || cardExtractNotice) && (
-            <>
-              <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-                className="fixed inset-0 bg-black/20 z-30 md:hidden" onClick={() => { setAiResult(""); setAiError(""); setCardExtractNotice(""); setCardExtractCount(0); }} />
-              <motion.div
-                initial={{ x: "100%", opacity: 0 }}
-                animate={{ x: 0, opacity: 1 }}
-                exit={{ x: "100%", opacity: 0 }}
-                transition={{ type: "spring", damping: 25, stiffness: 200 }}
-                className="fixed bottom-0 right-0 top-auto z-40 flex h-[82dvh] w-full max-w-[100vw] flex-col overflow-hidden rounded-t-2xl border border-gray-200/60 bg-white shadow-2xl dark:border-white/10 dark:bg-gray-900 md:bottom-auto md:top-[10dvh] md:h-[82dvh] md:w-[480px] md:max-w-[42vw] md:rounded-l-2xl md:rounded-tr-none md:border-r-0"
-              >
-                <div className="flex items-center justify-between border-b border-gray-100 px-5 py-3.5 dark:border-white/5">
-                  <h3 className="flex items-center gap-2 text-sm font-bold text-gray-800 dark:text-gray-100">
-                    {aiResult || aiError ? <Bot size={16} /> : <BookMarked size={16} />}
-                    {aiResult || aiError ? "AI 总结" : "提取知识卡片"}
-                  </h3>
-                  <div className="flex items-center gap-2">
-                    <button
-                      type="button"
-                      onClick={handleExtractKnowledgeCards}
-                      disabled={extractingCards}
-                      className="inline-flex h-8 items-center justify-center gap-1.5 rounded-lg border border-gray-200 bg-white px-2.5 text-xs font-semibold text-gray-600 transition-colors hover:border-accent/30 hover:text-accent disabled:opacity-60 dark:border-white/10 dark:bg-white/[0.04] dark:text-gray-300"
-                      title="从当前真实正文抽取知识卡片草稿"
-                    >
-                      {extractingCards ? <LoaderCircle size={13} className="animate-spin" /> : <BookMarked size={13} />}
-                      提取卡片
-                    </button>
-                    <button onClick={() => { setAiResult(""); setAiError(""); setCardExtractNotice(""); setCardExtractCount(0); }}
-                      className="ui-icon-button"><X size={15} /></button>
-                  </div>
-                </div>
-                <div className={`flex-1 overflow-y-auto p-5 ${aiError ? "text-red-500" : ""}`}>
-                  {cardExtractNotice && (
-                    <div className="mb-3 flex flex-col gap-2 rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-xs font-medium text-gray-600 dark:border-white/10 dark:bg-white/[0.04] dark:text-gray-300 sm:flex-row sm:items-center sm:justify-between">
-                      <span>{cardExtractNotice}</span>
-                      {cardExtractCount > 0 && onNavigate && (
+            <Dialog.Root
+              open
+              onOpenChange={(open) => { if (!open) closeAiPanel(); }}
+            >
+              <Dialog.Portal>
+                <Dialog.Overlay className="ui-overlay fixed inset-0 z-30 data-[state=open]:animate-fade-in md:hidden" />
+                <Dialog.Content
+                  asChild
+                  onCloseAutoFocus={(event) => {
+                    event.preventDefault();
+                    aiTriggerRef.current?.focus();
+                  }}
+                >
+                  <motion.div
+                    initial={{ x: "100%", opacity: 0 }}
+                    animate={{ x: 0, opacity: 1 }}
+                    exit={{ x: "100%", opacity: 0 }}
+                    transition={{ type: "spring", damping: 25, stiffness: 200 }}
+                    className="ui-modal-surface fixed bottom-0 right-0 top-auto z-40 flex h-[82dvh] w-full max-w-[100vw] flex-col overflow-hidden rounded-t-2xl outline-hidden md:bottom-auto md:top-[10dvh] md:h-[82dvh] md:w-[480px] md:max-w-[42vw] md:rounded-l-2xl md:rounded-tr-none md:border-r-0"
+                  >
+                    <Dialog.Title className="sr-only">{aiResult || aiError ? "AI 总结" : "提取知识卡片"}</Dialog.Title>
+                    <Dialog.Description className="sr-only">查看 AI 生成的总结或知识卡片提取结果。</Dialog.Description>
+                    <div className="ui-soft-divider flex items-center justify-between gap-3 border-b px-5 py-3.5">
+                      <h3 className="flex items-center gap-2 text-sm font-bold text-[var(--ui-text)]" aria-hidden="true">
+                        {aiResult || aiError ? <Bot size={16} /> : <BookMarked size={16} />}
+                        {aiResult || aiError ? "AI 总结" : "提取知识卡片"}
+                      </h3>
+                      <div className="flex items-center gap-2">
                         <button
                           type="button"
-                          onClick={() => onNavigate("knowledge")}
-                          className="inline-flex h-7 shrink-0 items-center justify-center rounded-md border border-accent/20 bg-accent-light px-2 text-xs font-semibold text-accent dark:bg-accent-light/20"
+                          onClick={(event) => {
+                            aiTriggerRef.current = event.currentTarget;
+                            void handleExtractKnowledgeCards();
+                          }}
+                          disabled={extractingCards}
+                          className="ui-button-secondary h-8 px-2.5 text-xs"
+                          title="从当前真实正文抽取知识卡片草稿"
                         >
-                          查看待确认
+                          {extractingCards ? <LoaderCircle size={13} className="animate-spin" /> : <BookMarked size={13} />}
+                          提取卡片
                         </button>
+                        <Dialog.Close asChild>
+                          <button type="button" onClick={closeAiPanel} className="ui-icon-button" aria-label="关闭 AI 结果">
+                            <X size={15} />
+                          </button>
+                        </Dialog.Close>
+                      </div>
+                    </div>
+                    <div className={`flex-1 overflow-y-auto p-5 ${aiError ? "text-[var(--ui-danger-text)]" : ""}`}>
+                      {cardExtractNotice && (
+                        <div className="ui-panel-muted mb-3 flex flex-col gap-2 px-3 py-2 text-xs font-medium sm:flex-row sm:items-center sm:justify-between">
+                          <span>{cardExtractNotice}</span>
+                          {cardExtractCount > 0 && onNavigate && (
+                            <button
+                              type="button"
+                              onClick={() => onNavigate("knowledge")}
+                              className="ui-status-accent inline-flex h-8 shrink-0 items-center justify-center rounded-md px-2 text-xs font-semibold"
+                            >
+                              查看待确认
+                            </button>
+                          )}
+                        </div>
+                      )}
+                      {aiError ? aiError : (
+                        <div className="mx-auto max-w-[760px]">
+                          <MarkdownPreview content={aiResult} onWikiLink={onWikiLink} />
+                        </div>
                       )}
                     </div>
-                  )}
-                  {aiError ? aiError : (
-                    <div className="mx-auto max-w-[760px]">
-                      <MarkdownPreview content={aiResult} onWikiLink={onWikiLink} />
-                    </div>
-                  )}
-                </div>
-              </motion.div>
-            </>
+                  </motion.div>
+                </Dialog.Content>
+              </Dialog.Portal>
+            </Dialog.Root>
           )}
         </AnimatePresence>
 
@@ -939,30 +1016,28 @@ export default function TodayPage({
               className="ui-alert-bad mt-2 text-xs"
             >
               {saveError}
-              <button onClick={handleManualSave} className="ml-2 underline">重试保存</button>
-              <button onClick={() => setSaveError("")} className="ml-2 underline">关闭</button>
+              <button type="button" onClick={handleManualSave} className="ml-2 underline">重试保存</button>
+              <button type="button" onClick={() => setSaveError("")} className="ml-2 underline">关闭</button>
             </motion.div>
           )}
         </AnimatePresence>
       </div>
 
       <div className={`${metaExpanded ? "block" : "hidden"} px-3 pb-3 md:block md:px-8`} style={zen ? { display: "none" } : undefined}>
-        <div className="ui-panel-muted grid gap-3 p-2.5 lg:grid-cols-[minmax(260px,0.9fr)_1.1fr]">
+        <div className="today-meta-panel ui-panel-muted grid gap-3 p-2.5 lg:grid-cols-[minmax(260px,0.9fr)_1.1fr]">
           <div className="min-w-0">
-            <div className="mb-2 flex items-center gap-2 px-1 text-[11px] font-semibold uppercase tracking-wide text-gray-400 dark:text-gray-500">
+            <div className="ui-section-kicker mb-2 flex items-center gap-2 px-1">
               <Smile size={13} /> 心情
             </div>
             <div className="flex gap-1.5 overflow-x-auto pb-0.5">
               {moods.map((m) => (
                 <motion.button
                   key={m.emoji}
+                  type="button"
                   whileTap={{ scale: 0.94 }}
                   onClick={() => handleMoodChange(m.emoji)}
-                  className={`relative flex h-8 shrink-0 items-center gap-1.5 rounded-lg border px-2 text-sm leading-none transition-all duration-200 ${
-                    mood === m.emoji
-                      ? "border-accent/30 bg-accent-light text-accent shadow-xs dark:bg-accent-light/20"
-                      : "border-transparent text-gray-500 hover:bg-white dark:text-gray-400 dark:hover:bg-white/10"
-                  }`}
+                  aria-pressed={mood === m.emoji}
+                  className={mood === m.emoji ? "ui-filter-button ui-filter-button-active h-8 shrink-0 gap-1.5 px-2 text-sm" : "ui-filter-button h-8 shrink-0 gap-1.5 border-transparent px-2 text-sm"}
                   title={m.label}
                 >
                   <span>{m.emoji}</span>
@@ -973,7 +1048,7 @@ export default function TodayPage({
           </div>
 
           <div className="min-w-0">
-            <div className="mb-2 flex items-center justify-between gap-2 px-1 text-[11px] font-semibold uppercase tracking-wide text-gray-400 dark:text-gray-500">
+            <div className="ui-section-kicker mb-2 flex items-center justify-between gap-2 px-1">
               <span className="inline-flex items-center gap-2"><Tag size={13} /> 标签</span>
               {quickTags.length > 0 && <span className="font-normal normal-case tracking-normal">可快速选择</span>}
             </div>
@@ -983,7 +1058,7 @@ export default function TodayPage({
                   key={tag}
                   type="button"
                   onClick={() => removeTag(tag)}
-                  className="ui-chip border-accent/20 bg-accent-light text-accent hover:bg-accent-light/80 dark:bg-accent-light/20"
+                  className="ui-status-accent ui-chip border-[var(--ui-selected-border)] bg-[var(--ui-surface-selected)] text-[var(--ui-accent-text)] hover:bg-[var(--ui-surface-hover)]"
                   title="点击移除标签"
                 >
                   #{tag} <X size={12} />
@@ -1010,7 +1085,7 @@ export default function TodayPage({
                   key={tag}
                   type="button"
                   onClick={() => addQuickTag(tag)}
-                  className="h-7 rounded-full border border-gray-200/70 px-2.5 text-xs text-gray-400 transition-colors hover:border-accent/30 hover:bg-accent-light hover:text-accent dark:border-white/10 dark:hover:bg-accent-light/20"
+                  className="ui-filter-button h-7 min-h-7 rounded-full px-2.5 text-xs"
                 >
                   #{tag}
                 </button>
@@ -1027,7 +1102,7 @@ export default function TodayPage({
           value={title}
           onChange={handleTitleChange}
           placeholder="标题..."
-          className="w-full bg-transparent text-2xl font-semibold text-gray-800 outline-hidden border-none placeholder-gray-300 dark:text-gray-100 dark:placeholder-gray-600 md:text-2xl"
+          className="today-title-input w-full border-0 bg-transparent text-2xl font-semibold text-[var(--ui-text)] outline-hidden placeholder:text-[var(--ui-text-disabled)] md:text-2xl"
         />
       </div>
 
@@ -1047,7 +1122,7 @@ export default function TodayPage({
       {/* Split editor */}
       <div className={`grid flex-1 grid-cols-1 gap-4 px-3 pb-28 md:px-8 md:pb-6 min-h-0 ${zen ? "" : "md:grid-cols-[minmax(0,1.08fr)_minmax(360px,0.92fr)]"}`}>
         <div className={`${mobilePane === "edit" ? "flex" : "hidden"} min-w-0 flex-col md:flex`}>
-          <div className="mb-2 flex items-center justify-between gap-3 text-2xs font-semibold uppercase tracking-widest text-gray-400 dark:text-gray-500">
+          <div className="ui-section-kicker mb-2 flex items-center justify-between gap-3">
             <span>编辑</span>
             <span className="font-mono normal-case tracking-normal">{wordCount} 字</span>
           </div>
@@ -1067,7 +1142,7 @@ export default function TodayPage({
         </div>
 
         <div className={`${mobilePane === "preview" ? "flex" : "hidden"} min-w-0 flex-col md:flex`} style={zen ? { display: "none" } : undefined}>
-          <div className="mb-2 flex items-center justify-between gap-3 text-2xs font-semibold uppercase tracking-widest text-gray-400 dark:text-gray-500">
+          <div className="ui-section-kicker mb-2 flex items-center justify-between gap-3">
             <span>预览</span>
             <span className="font-mono normal-case tracking-normal">{charCount} 字符</span>
           </div>
@@ -1104,7 +1179,7 @@ function DatePickerPopover({
       <PopoverTrigger asChild>
         <button
           type="button"
-          className="flex h-8 min-w-0 flex-1 items-center justify-between gap-2 rounded-lg border border-gray-200 bg-white px-3 text-xs font-medium text-gray-600 outline-hidden transition-colors hover:border-accent/30 dark:border-white/10 dark:bg-gray-950/30 dark:text-gray-200 sm:flex-none sm:w-[148px]"
+          className="ui-field flex h-8 min-w-0 flex-1 items-center justify-between gap-2 rounded-lg px-3 py-0 text-xs font-medium sm:w-[148px] sm:flex-none"
           aria-label="选择记录日期"
         >
           <span className="font-mono">{selectedDate.replace(/-/g, "/")}</span>
@@ -1124,18 +1199,18 @@ function DatePickerPopover({
             }
           }}
         />
-        <div className="mt-2 flex items-center justify-between border-t border-gray-100 pt-2 dark:border-white/10">
+        <div className="ui-soft-divider mt-2 flex items-center justify-between border-t pt-2">
           <button
             type="button"
             onClick={() => {
               onSelect(todayDate());
               setOpen(false);
             }}
-            className="h-8 rounded-lg bg-accent-light px-3 text-xs font-semibold text-accent hover:bg-accent-light/80 dark:bg-accent-light/20"
+            className="ui-button-ghost h-8 min-h-8 px-3 text-xs font-semibold text-[var(--ui-accent-text)]"
           >
             回到今天
           </button>
-          <button type="button" onClick={() => setOpen(false)} className="h-8 rounded-lg px-3 text-xs text-gray-400 hover:bg-gray-100 dark:hover:bg-white/10">
+          <button type="button" onClick={() => setOpen(false)} className="ui-button-ghost h-8 min-h-8 px-3 text-xs">
             关闭
           </button>
         </div>

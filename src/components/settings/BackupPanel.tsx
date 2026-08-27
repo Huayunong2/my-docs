@@ -47,14 +47,14 @@ export default function BackupPanel() {
 
       <Card>
         <SectionTitle>备份列表</SectionTitle>
-        {backups.length === 0 && <p className="text-sm text-gray-400">暂无备份</p>}
+        {backups.length === 0 && <p className="text-sm text-[var(--ui-text-subtle)]">暂无备份</p>}
         <div className="space-y-2">
           {backups.map((b, index) => (
-            <div key={b.name} className={`rounded-lg border p-3 ${index === 0 ? "border-emerald-200 dark:border-emerald-900/40 bg-emerald-50/40 dark:bg-emerald-900/10" : "border-gray-100 dark:border-white/5"}`}>
+            <div key={b.name} className={index === 0 ? "ui-status-success rounded-lg p-3" : "ui-panel-muted rounded-lg p-3"}>
               <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                 <div className="min-w-0">
-                  <p className="text-sm font-mono font-medium text-gray-700 dark:text-gray-300 truncate">{b.name}</p>
-                  <p className="text-xs text-gray-400 mt-1">{formatSize(b.size_bytes)} · {b.created_at}{index === 0 ? " · 最新" : ""}</p>
+                  <p className="truncate font-mono text-sm font-medium text-[var(--ui-text)]">{b.name}</p>
+                  <p className="mt-1 text-xs text-[var(--ui-text-subtle)]">{formatSize(b.size_bytes)} · {b.created_at}{index === 0 ? " · 最新" : ""}</p>
                 </div>
                 <div className="flex flex-col sm:flex-row gap-2">
                   <SecondaryBtn onClick={() => download(b.name)} className="py-1.5 text-xs"><Download size={13} /> 下载</SecondaryBtn>

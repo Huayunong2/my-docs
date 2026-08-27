@@ -88,7 +88,7 @@ pub(crate) fn valid_backup_name(name: &str) -> bool {
             .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
 }
 pub(crate) fn valid_exemption_reason(reason: &str) -> bool {
-    matches!(reason, "休息" | "请假" | "生病" | "出差")
+    matches!(reason, "休息" | "放假" | "请假" | "生病" | "出差" | "其他")
 }
 pub(crate) fn article_to_markdown(article: &Article) -> String {
     format!(

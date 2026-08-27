@@ -44,7 +44,7 @@ function CopyButton({ text }: { text: string }) {
     <button
       type="button"
       onClick={copy}
-      className="rounded-md px-2 py-1 text-xs text-gray-400 hover:bg-white/10 hover:text-gray-100"
+      className="ui-button-ghost h-7 min-h-7 rounded-md px-2 text-xs"
     >
       {copied ? "已复制" : "复制"}
     </button>
@@ -117,22 +117,20 @@ function MermaidBlock({ chart }: { chart: string }) {
   }, [chart, id]);
 
   return (
-    <div className="my-4 overflow-hidden rounded-lg border border-gray-200 bg-white shadow-xs dark:border-gray-700 dark:bg-gray-900">
-      <div className="flex min-h-9 flex-wrap items-center justify-between gap-2 border-b border-gray-100 bg-gray-50 px-3 py-1.5 dark:border-gray-800 dark:bg-gray-800/70">
-        <span className="text-[11px] font-medium uppercase tracking-wide text-gray-500 dark:text-gray-400">
+    <div className="ui-editor-surface my-4 overflow-hidden rounded-lg">
+      <div className="ui-soft-divider flex min-h-9 flex-wrap items-center justify-between gap-2 border-b px-3 py-1.5">
+        <span className="text-[11px] font-medium uppercase tracking-wide text-[var(--ui-text-subtle)]">
           mermaid
         </span>
-        <div className="flex items-center gap-1">
+        <div className="ui-segment flex items-center gap-0.5 p-0.5">
           {(["compact", "fit", "original"] as const).map((mode) => (
             <button
               key={mode}
               type="button"
               onClick={() => setViewMode(mode)}
               className={[
-                "rounded-md px-2 py-1 text-xs",
-                viewMode === mode
-                  ? "bg-accent text-white"
-                  : "text-gray-500 hover:bg-gray-200 dark:text-gray-400 dark:hover:bg-white/10",
+                "ui-segment-item h-7 px-2 text-xs",
+                viewMode === mode ? "ui-segment-item-active" : "",
               ].join(" ")}
             >
               {mode === "compact" ? "紧凑" : mode === "fit" ? "适配" : "原始"}
@@ -141,7 +139,7 @@ function MermaidBlock({ chart }: { chart: string }) {
           <button
             type="button"
             onClick={() => setExpanded((value) => !value)}
-            className="rounded-md px-2 py-1 text-xs text-gray-500 hover:bg-gray-200 dark:text-gray-400 dark:hover:bg-white/10"
+            className="ui-button-ghost h-7 min-h-7 px-2 text-xs"
           >
             {expanded ? "收起" : "展开"}
           </button>
@@ -149,8 +147,8 @@ function MermaidBlock({ chart }: { chart: string }) {
         </div>
       </div>
       {error ? (
-        <div className="space-y-3 p-3">
-          <p className="rounded-lg bg-red-50 px-3 py-2 text-xs text-red-600 dark:bg-red-900/20 dark:text-red-300">
+          <div className="space-y-3 p-3">
+          <p className="ui-alert-bad">
             {error}
           </p>
           <PlainCodeBlock code={chart} language="mermaid" />
@@ -165,9 +163,9 @@ function MermaidBlock({ chart }: { chart: string }) {
           dangerouslySetInnerHTML={{ __html: svg }}
         />
       ) : (
-        <div className="p-5 flex items-center gap-3">
-          <div className="w-5 h-5 border-2 border-accent/30 border-t-accent rounded-full animate-spin" />
-          <span className="text-sm text-gray-400 dark:text-gray-500">图表加载中...</span>
+        <div className="flex items-center gap-3 p-5" role="status">
+          <div className="h-5 w-5 animate-spin rounded-full border-2 border-[var(--ui-selected-border)] border-t-[var(--ui-accent-solid)]" />
+          <span className="text-sm text-[var(--ui-text-subtle)]">图表加载中...</span>
         </div>
       )}
     </div>
@@ -185,11 +183,11 @@ function CodeBlock({ children }: { children: unknown }) {
 
 function MarkdownContent({ content, onWikiLink }: { content: string; onWikiLink?: (title: string) => void }) {
   if (!content.trim()) {
-    return <p className="text-gray-300 dark:text-gray-500 italic text-sm">输入 Markdown 内容以预览...</p>;
+    return <p className="text-sm italic text-[var(--ui-text-subtle)]">输入 Markdown 内容以预览...</p>;
   }
 
   return (
-    <div className="text-[15px] leading-7 text-gray-700 dark:text-gray-300">
+    <div className="text-[15px] leading-7 text-[var(--ui-text-muted)]">
       <ReactMarkdown
         remarkPlugins={[
           remarkGfm,
@@ -204,15 +202,15 @@ function MarkdownContent({ content, onWikiLink }: { content: string; onWikiLink?
         ]}
         rehypePlugins={[rehypeSanitize]}
         components={{
-        h1: ({ children }) => <h1 className="mb-5 text-3xl font-bold leading-tight text-gray-950 dark:text-gray-50">{children}</h1>,
-        h2: ({ children }) => <h2 className="mt-10 mb-4 border-b border-gray-200 pb-2 text-2xl font-bold leading-tight text-gray-950 dark:border-white/10 dark:text-gray-50">{children}</h2>,
-        h3: ({ children }) => <h3 className="mt-8 mb-3 text-xl font-semibold leading-snug text-gray-800 dark:text-gray-100">{children}</h3>,
+        h1: ({ children }) => <h1 className="mb-5 text-3xl font-bold leading-tight text-[var(--ui-text)]">{children}</h1>,
+        h2: ({ children }) => <h2 className="ui-soft-divider mt-10 mb-4 border-b pb-2 text-2xl font-bold leading-tight text-[var(--ui-text)]">{children}</h2>,
+        h3: ({ children }) => <h3 className="mt-8 mb-3 text-xl font-semibold leading-snug text-[var(--ui-text)]">{children}</h3>,
         p: ({ children }) => <p className="mb-4 leading-relaxed">{children}</p>,
         ul: ({ children }) => <ul className="mb-4 pl-6 space-y-1.5 list-disc">{children}</ul>,
         ol: ({ children }) => <ol className="mb-4 pl-6 space-y-1.5 list-decimal">{children}</ol>,
         li: ({ children }) => <li className="leading-relaxed">{children}</li>,
         blockquote: ({ children }) => (
-          <blockquote className="border-l-4 border-accent pl-4 italic my-3 text-gray-600 dark:text-gray-400">
+          <blockquote className="my-3 border-l-4 border-[var(--ui-accent-solid)] pl-4 italic text-[var(--ui-text-muted)]">
             {children}
           </blockquote>
         ),
@@ -221,7 +219,7 @@ function MarkdownContent({ content, onWikiLink }: { content: string; onWikiLink?
           return (
             <code
               data-language={language || undefined}
-              className={`rounded bg-gray-100 px-1.5 py-0.5 font-mono text-[0.92em] text-pink-600 dark:bg-gray-800 dark:text-pink-400 ${className || ""}`}
+              className={`ui-inline-code rounded px-1.5 py-0.5 font-mono text-[0.92em] ${className || ""}`}
             >
               {children}
             </code>
@@ -235,14 +233,14 @@ function MarkdownContent({ content, onWikiLink }: { content: string; onWikiLink?
               <button
                 type="button"
                 onClick={() => onWikiLink?.(title)}
-                className="rounded bg-accent-light/60 px-1 py-0.5 font-medium text-accent underline decoration-accent/40 underline-offset-2 hover:bg-accent-light dark:bg-accent-light/20"
+                className="ui-wiki-link px-1 py-0.5 font-medium"
               >
                 {children}
               </button>
             );
           }
           return (
-            <a href={href} className="text-accent underline" target="_blank" rel="noopener noreferrer">
+            <a href={href} className="text-[var(--ui-accent-text)] underline" target="_blank" rel="noopener noreferrer">
               {children}
             </a>
           );
@@ -255,8 +253,8 @@ function MarkdownContent({ content, onWikiLink }: { content: string; onWikiLink?
             <table className="min-w-full border-collapse text-sm">{children}</table>
           </div>
         ),
-        th: ({ children }) => <th className="border border-gray-200 dark:border-gray-700 px-2 py-1 text-left">{children}</th>,
-        td: ({ children }) => <td className="border border-gray-200 dark:border-gray-700 px-2 py-1">{children}</td>,
+        th: ({ children }) => <th className="border border-[var(--ui-border)] px-2 py-1 text-left">{children}</th>,
+        td: ({ children }) => <td className="border border-[var(--ui-border)] px-2 py-1">{children}</td>,
         }}
       >
         {content}

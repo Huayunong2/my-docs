@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { motion } from "framer-motion";
+import * as Dialog from "@radix-ui/react-dialog";
 import {
   BookOpenText,
   CheckCircle2,
@@ -20,6 +21,7 @@ import { normalizeReviewContent } from "../lib/reviewContent";
 import { ReviewViewerModal, ReviewStatusPill } from "./reviews/ReviewShared";
 import MarkdownContent from "./MarkdownContent";
 import { EmptyState, LoadingState, useConfirmDialog } from "./ui/Feedback";
+import PageHeader from "./ui/PageHeader";
 import { Tabs, TabsList, TabsTrigger } from "./ui/tabs";
 
 type KindFilter = "all" | ReviewKind;
@@ -54,6 +56,8 @@ export default function ReviewsPage() {
   const [saving, setSaving] = useState(false);
   const [extractingKnowledgeId, setExtractingKnowledgeId] = useState("");
   const [notice, setNotice] = useState("");
+  const editingTriggerRef = useRef<HTMLButtonElement | null>(null);
+  const compareTriggerRef = useRef<HTMLButtonElement | null>(null);
   const { confirm, dialog } = useConfirmDialog();
 
   const loadReviews = useCallback(async () => {
@@ -110,7 +114,8 @@ export default function ReviewsPage() {
     };
   }, [filtered]);
 
-  const openEditor = (review: Review) => {
+  const openEditor = (review: Review, event?: React.MouseEvent<HTMLButtonElement>) => {
+    if (event) editingTriggerRef.current = event.currentTarget;
     setEditingReview(review);
     setEditTitle(review.title);
     setEditContent(review.content);
@@ -207,21 +212,14 @@ export default function ReviewsPage() {
     <motion.div
       initial={{ opacity: 0, y: 10 }}
       animate={{ opacity: 1, y: 0 }}
-      className="min-h-full overflow-y-auto px-3 pb-24 pt-4 sm:px-4 md:px-8 md:py-6"
+      className="page-surface page-surface-reviews min-h-full overflow-y-auto px-3 pb-24 pt-4 sm:px-4 md:px-8 md:py-6"
     >
-      <div className="mb-4 flex flex-wrap items-start justify-between gap-3 md:mb-6">
-        <div className="flex items-start gap-3">
-          <span className="hidden h-10 w-10 items-center justify-center rounded-xl bg-accent-light text-accent dark:bg-accent-light/20 sm:flex">
-            <BookOpenText size={19} strokeWidth={2.2} />
-          </span>
-          <div>
-            <h2 className="text-xl font-bold text-gray-800 dark:text-gray-100">复盘库</h2>
-            <p className="mt-0.5 text-sm text-gray-400 dark:text-gray-400">
-              按年月和周期管理 AI 周复盘、月复盘及历史版本
-            </p>
-          </div>
-        </div>
-      </div>
+      <PageHeader
+        icon={BookOpenText}
+        title="复盘库"
+        description="按年月和周期管理 AI 周复盘、月复盘及历史版本"
+        className="mb-4 md:mb-6"
+      />
 
       {error && (
         <div className="ui-alert-bad mb-4">
@@ -236,14 +234,14 @@ export default function ReviewsPage() {
 
       <div className="ui-panel mb-4 p-3">
         <div className="relative">
-          <Search className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={15} />
+          <Search className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-[var(--ui-text-subtle)]" size={15} />
           <input
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             placeholder="搜索复盘..."
-            className="ui-field h-10 bg-gray-50 pl-9 pr-10 dark:bg-white/[0.04]"
+            className="ui-field h-10 pl-9 pr-10"
           />
-          <button onClick={loadReviews}
+          <button type="button" onClick={loadReviews}
             className="ui-icon-button absolute right-1 top-1/2 h-8 w-8 -translate-y-1/2">
             <RefreshCw size={14} />
           </button>
@@ -292,8 +290,8 @@ export default function ReviewsPage() {
           {monthGroups.map((group) => (
             <section key={group.month} className="ui-panel p-3 sm:p-4">
               <div className="mb-3 flex items-center justify-between gap-3">
-                <h3 className="text-sm font-semibold text-gray-800 dark:text-gray-100">{group.month}</h3>
-                <span className="text-xs text-gray-400 dark:text-gray-500">{group.periods.length} 个周期</span>
+                <h3 className="text-sm font-semibold text-[var(--ui-text)]">{group.month}</h3>
+                <span className="text-xs text-[var(--ui-text-subtle)]">{group.periods.length} 个周期</span>
               </div>
               <div className="space-y-3">
                 {group.periods.map((period) => (
@@ -305,7 +303,10 @@ export default function ReviewsPage() {
                     onOpen={openEditor}
                     onConfirm={confirmReview}
                     onDelete={deleteReview}
-                    onCompare={() => openCompare(period)}
+                    onCompare={(event) => {
+                      compareTriggerRef.current = event.currentTarget;
+                      openCompare(period);
+                    }}
                   />
                 ))}
               </div>
@@ -328,6 +329,7 @@ export default function ReviewsPage() {
           onExtractKnowledge={() => extractKnowledgeFromReview(editingReview)}
           extractingKnowledge={extractingKnowledgeId === editingReview.id}
           onClose={() => setEditingReview(null)}
+          onRestoreFocus={() => editingTriggerRef.current?.focus()}
         />
       )}
       {comparePair && (
@@ -335,6 +337,7 @@ export default function ReviewsPage() {
           current={comparePair.current}
           previous={comparePair.previous}
           onClose={() => setComparePair(null)}
+          onRestoreFocus={() => compareTriggerRef.current?.focus()}
         />
       )}
       {dialog}
@@ -354,10 +357,10 @@ function ReviewMetric({
   tone: "accent" | "green" | "amber" | "gray";
 }) {
   const toneClass = {
-    accent: "bg-accent-light text-accent dark:bg-accent-light/20",
-    green: "bg-emerald-50 text-emerald-600 dark:bg-emerald-500/10 dark:text-emerald-300",
-    amber: "bg-amber-50 text-amber-600 dark:bg-amber-500/10 dark:text-amber-300",
-    gray: "bg-gray-100 text-gray-600 dark:bg-white/10 dark:text-gray-300",
+    accent: "ui-status-accent",
+    green: "ui-status-success",
+    amber: "ui-status-warning",
+    gray: "ui-status-muted",
   }[tone];
 
   return (
@@ -366,8 +369,8 @@ function ReviewMetric({
         <Icon size={16} strokeWidth={2.2} />
       </span>
       <div className="min-w-0">
-        <div className="text-lg font-bold leading-none text-gray-800 dark:text-gray-100">{value}</div>
-        <div className="mt-1 truncate text-[11px] text-gray-400 dark:text-gray-500">{label}</div>
+        <div className="text-lg font-bold leading-none text-[var(--ui-text)]">{value}</div>
+        <div className="mt-1 truncate text-[11px] text-[var(--ui-text-subtle)]">{label}</div>
       </div>
     </div>
   );
@@ -385,10 +388,10 @@ function PeriodCard({
   period: PeriodGroup;
   expanded: boolean;
   onToggle: () => void;
-  onOpen: (review: Review) => void;
+  onOpen: (review: Review, event?: React.MouseEvent<HTMLButtonElement>) => void;
   onConfirm: (review: Review) => void;
   onDelete: (review: Review) => void;
-  onCompare: () => void;
+  onCompare: (event: React.MouseEvent<HTMLButtonElement>) => void;
 }) {
   const current = period.current;
   const previewContent = normalizeReviewContent(current.kind, current.title, current.content);
@@ -397,16 +400,16 @@ function PeriodCard({
     ? current.source_article_ids.length
     : current.source_review_ids.length;
   return (
-    <article className="relative rounded-xl border border-gray-100 bg-gray-50/70 p-3 pl-7 transition-colors hover:border-accent/25 dark:border-white/10 dark:bg-white/[0.025]">
-      <div className="absolute bottom-3 left-3 top-3 w-px bg-gray-200 dark:bg-white/10" />
+    <article className="ui-panel-muted relative p-3 pl-7 transition-colors hover:border-[var(--ui-selected-border)]">
+      <div className="absolute bottom-3 left-3 top-3 w-px bg-[var(--ui-border)]" />
       <div
         className={[
           "absolute left-[7px] top-5 h-3 w-3 rounded-full ring-4",
           period.kind === "monthly"
-            ? "bg-accent ring-accent-light dark:ring-accent-light/20"
-            : current.status === "confirmed"
-              ? "bg-emerald-500 ring-emerald-50 dark:ring-emerald-900/30"
-              : "bg-amber-500 ring-amber-50 dark:ring-amber-900/30",
+            ? "ui-status-accent ring-[var(--ui-surface-selected)]"
+              : current.status === "confirmed"
+              ? "ui-status-success ring-[var(--ui-success-surface)]"
+              : "ui-status-warning ring-[var(--ui-warning-surface)]",
         ].join(" ")}
       />
       <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
@@ -416,29 +419,29 @@ function PeriodCard({
               {kindLabel} · {period.periodStart} 至 {period.periodEnd}
             </span>
             <ReviewStatusPill status={current.status} />
-            <span className="ui-chip h-6 px-2 py-0 text-[11px] text-accent">
+            <span className="ui-chip h-6 px-2 py-0 text-[11px] text-[var(--ui-accent-text)]">
               <Pin size={11} />
               当前版本
             </span>
-            <span className="ui-chip h-6 px-2 py-0 text-[11px] text-gray-400 dark:text-gray-500">
+            <span className="ui-chip h-6 px-2 py-0 text-[11px] text-[var(--ui-text-subtle)]">
               当前 v{current.version} / 共 {period.versions.length} 版
             </span>
-            <span className="ui-chip h-6 px-2 py-0 text-[11px] text-gray-400 dark:text-gray-500">
+            <span className="ui-chip h-6 px-2 py-0 text-[11px] text-[var(--ui-text-subtle)]">
               来源 {sourceCount} {period.kind === "weekly" ? "篇" : "个"}
             </span>
           </div>
-          <h4 className="truncate text-sm font-semibold text-gray-800 dark:text-gray-100">{current.title}</h4>
-          <p className="mt-1 line-clamp-2 whitespace-pre-wrap text-xs leading-5 text-gray-500 dark:text-gray-400">
+          <h4 className="truncate text-sm font-semibold text-[var(--ui-text)]">{current.title}</h4>
+          <p className="mt-1 line-clamp-2 whitespace-pre-wrap text-xs leading-5 text-[var(--ui-text-muted)]">
             {previewContent}
           </p>
-          <div className="mt-2 text-[11px] text-gray-400 dark:text-gray-500">
+          <div className="mt-2 text-[11px] text-[var(--ui-text-subtle)]">
             生成：{current.generated_at || "未知"} · 模型：{current.model || "AI"}
           </div>
         </div>
         <div className="flex shrink-0 flex-col gap-2 sm:w-32">
           <button
             type="button"
-            onClick={() => onOpen(current)}
+            onClick={(event) => onOpen(current, event)}
             className="ui-button-primary"
           >
             查看全文
@@ -465,27 +468,27 @@ function PeriodCard({
       </div>
 
       {expanded && (
-        <div className="mt-3 space-y-2 border-t border-gray-100 pt-3 dark:border-gray-700">
+        <div className="mt-3 space-y-2 border-t border-[var(--ui-border)] pt-3">
           {period.versions.map((review) => (
-            <div key={review.id} className="rounded-lg border border-gray-100 bg-white p-2 dark:border-white/10 dark:bg-white/[0.04]">
+            <div key={review.id} className="ui-panel-muted rounded-lg p-2">
               <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
                 <div className="min-w-0">
                   <div className="flex flex-wrap items-center gap-2">
-                    <span className="text-xs font-medium text-gray-700 dark:text-gray-200">v{review.version}</span>
+                    <span className="text-xs font-medium text-[var(--ui-text-muted)]">v{review.version}</span>
                     <ReviewStatusPill status={review.status} />
                     {review.id === current.id && (
-                      <span className="rounded-full bg-accent-light px-2 py-0.5 text-[11px] font-medium text-accent dark:bg-accent-light/20">
+                      <span className="ui-status-accent rounded-full px-2 py-0.5 text-[11px] font-medium">
                         当前
                       </span>
                     )}
-                    <span className="text-[11px] text-gray-400 dark:text-gray-500">{review.generated_at}</span>
+                    <span className="text-[11px] text-[var(--ui-text-subtle)]">{review.generated_at}</span>
                   </div>
-                  <p className="mt-1 truncate text-xs text-gray-500 dark:text-gray-400">{review.title}</p>
+                  <p className="mt-1 truncate text-xs text-[var(--ui-text-muted)]">{review.title}</p>
                 </div>
                 <div className="flex flex-col gap-2 sm:flex-row">
                   <button
                     type="button"
-                    onClick={() => onOpen(review)}
+                    onClick={(event) => onOpen(review, event)}
                     className="ui-button-secondary h-8"
                   >
                     查看/编辑
@@ -494,7 +497,7 @@ function PeriodCard({
                     <button
                       type="button"
                       onClick={() => onConfirm(review)}
-                      className="inline-flex h-8 items-center justify-center gap-1.5 rounded-lg border border-emerald-100 bg-emerald-50 px-3 text-xs font-medium text-emerald-600 hover:bg-emerald-100 dark:border-emerald-400/20 dark:bg-emerald-500/10 dark:text-emerald-300"
+                    className="ui-button-success h-8 px-3 text-xs"
                     >
                       <CheckCircle2 size={13} />
                       确认归档
@@ -522,59 +525,74 @@ function ReviewCompareModal({
   current,
   previous,
   onClose,
+  onRestoreFocus,
 }: {
   current: Review;
   previous: Review;
   onClose: () => void;
+  onRestoreFocus: () => void;
 }) {
   return (
-    <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/45 p-3 sm:items-center" onClick={onClose}>
-      <div
-        className="ui-modal-surface flex max-h-[92vh] max-w-6xl flex-col overflow-hidden"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <div className="flex items-start justify-between gap-3 border-b border-gray-100 px-4 py-3 dark:border-white/10 sm:px-5">
-          <div>
-            <div className="flex items-center gap-2">
-              <GitCompareArrows size={17} className="text-accent" />
-              <h3 className="text-base font-bold text-gray-900 dark:text-gray-100">版本对比</h3>
+    <Dialog.Root
+      open
+      onOpenChange={(open) => {
+        if (!open) onClose();
+      }}
+    >
+      <Dialog.Portal>
+        <Dialog.Overlay className="ui-overlay fixed inset-0 z-50 data-[state=open]:animate-fade-in" />
+        <Dialog.Content
+          className="ui-modal-surface fixed inset-x-3 bottom-3 z-50 flex max-h-[92vh] max-w-6xl flex-col overflow-hidden outline-hidden sm:left-1/2 sm:right-auto sm:top-1/2 sm:bottom-auto sm:w-[calc(100%-1.5rem)] sm:-translate-x-1/2 sm:-translate-y-1/2"
+          onCloseAutoFocus={(event) => {
+            event.preventDefault();
+            onRestoreFocus();
+          }}
+        >
+          <div className="ui-soft-divider flex items-start justify-between gap-3 border-b px-4 py-3 sm:px-5">
+            <div>
+              <div className="flex items-center gap-2">
+                <GitCompareArrows size={17} className="text-[var(--ui-accent-text)]" />
+                <Dialog.Title className="text-base font-bold text-[var(--ui-text)]">版本对比</Dialog.Title>
+              </div>
+              <Dialog.Description className="mt-1 text-xs text-[var(--ui-text-subtle)]">
+                {current.period_start} 至 {current.period_end} · 当前 v{current.version} 对比 v{previous.version}
+              </Dialog.Description>
             </div>
-            <p className="mt-1 text-xs text-gray-400 dark:text-gray-500">
-              {current.period_start} 至 {current.period_end} · 当前 v{current.version} 对比 v{previous.version}
-            </p>
+            <Dialog.Close asChild>
+              <button type="button" className="ui-icon-button h-9 w-9" aria-label="关闭版本对比">
+                <X size={16} />
+              </button>
+            </Dialog.Close>
           </div>
-          <button type="button" onClick={onClose} className="ui-icon-button h-9 w-9">
-            <X size={16} />
-          </button>
-        </div>
-        <div className="grid min-h-0 flex-1 overflow-y-auto md:grid-cols-2">
-          <ComparePane label="当前版本" review={current} accent />
-          <ComparePane label="对比版本" review={previous} />
-        </div>
-      </div>
-    </div>
+          <div className="grid min-h-0 flex-1 overflow-y-auto md:grid-cols-2">
+            <ComparePane label="当前版本" review={current} accent />
+            <ComparePane label="对比版本" review={previous} />
+          </div>
+        </Dialog.Content>
+      </Dialog.Portal>
+    </Dialog.Root>
   );
 }
 
 function ComparePane({ label, review, accent = false }: { label: string; review: Review; accent?: boolean }) {
   return (
-    <section className={["min-h-[360px] border-gray-100 p-4 dark:border-white/10 md:border-l", accent ? "md:border-l-0" : ""].join(" ")}>
+    <section className={["ui-soft-divider min-h-[360px] p-4 md:border-l", accent ? "md:border-l-0" : ""].join(" ")}>
       <div className="mb-3 flex flex-wrap items-center gap-2">
         <span
           className={[
             "rounded-full px-2.5 py-1 text-[11px] font-semibold",
             accent
-              ? "bg-accent-light text-accent dark:bg-accent-light/20"
-              : "bg-gray-100 text-gray-500 dark:bg-white/10 dark:text-gray-300",
+              ? "ui-status-accent"
+              : "ui-status-muted",
           ].join(" ")}
         >
           {label}
         </span>
         <ReviewStatusPill status={review.status} />
-        <span className="text-xs text-gray-400 dark:text-gray-500">v{review.version}</span>
+        <span className="text-xs text-[var(--ui-text-subtle)]">v{review.version}</span>
       </div>
-      <h4 className="mb-3 text-sm font-semibold text-gray-900 dark:text-gray-100">{review.title}</h4>
-      <div className="max-w-none rounded-xl border border-gray-100 bg-gray-50/70 p-3 dark:border-white/10 dark:bg-white/[0.035]">
+      <h4 className="mb-3 text-sm font-semibold text-[var(--ui-text)]">{review.title}</h4>
+      <div className="ui-panel-muted max-w-none p-3">
         <MarkdownContent content={review.content} />
       </div>
     </section>

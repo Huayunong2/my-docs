@@ -266,6 +266,334 @@ fn card_draft(status: &str) -> KnowledgeCardDraft {
 }
 
 #[test]
+fn projects_survive_without_cards_and_batch_moves_keep_counts_consistent() {
+    let mut db = Database::new_in_memory().expect("in-memory database");
+
+    let empty = db
+        .knowledge()
+        .create_project("  FPGA-DIAG  ")
+        .expect("create project")
+        .expect("project should be created");
+    assert_eq!(empty.name, "FPGA-DIAG");
+    assert_eq!(empty.count, 0);
+    assert!(db
+        .knowledge()
+        .list_projects()
+        .expect("list projects")
+        .iter()
+        .any(|project| project.name == "FPGA-DIAG" && project.count == 0));
+
+    let mut first_draft = card_draft("draft");
+    first_draft.title = "第一张卡".into();
+    first_draft.projects = vec!["FPGA-DIAG".into()];
+    let first = db.knowledge().save(first_draft).expect("save first card");
+
+    let mut second_draft = card_draft("draft");
+    second_draft.title = "第二张卡".into();
+    second_draft.projects = vec!["FPGA-DIAG".into(), "旧项目".into()];
+    let second = db.knowledge().save(second_draft).expect("save second card");
+
+    db.knowledge()
+        .batch_update(
+            &[first.id.clone(), second.id.clone()],
+            "set_projects",
+            &["新项目".into()],
+        )
+        .expect("move cards");
+
+    let projects = db.knowledge().list_projects().expect("list projects");
+    assert_eq!(
+        projects
+            .iter()
+            .find(|project| project.name == "新项目")
+            .map(|project| project.count),
+        Some(2)
+    );
+    assert_eq!(
+        projects
+            .iter()
+            .find(|project| project.name == "FPGA-DIAG")
+            .map(|project| project.count),
+        Some(0)
+    );
+
+    let moved = db
+        .knowledge()
+        .find(&first.id)
+        .expect("find moved card")
+        .expect("moved card exists");
+    assert_eq!(moved.projects, vec!["新项目"]);
+
+    db.knowledge()
+        .batch_update(&[first.id], "delete", &[])
+        .expect("delete card");
+    assert_eq!(
+        db.knowledge()
+            .list_projects()
+            .expect("list projects")
+            .iter()
+            .find(|project| project.name == "新项目")
+            .map(|project| project.count),
+        Some(1)
+    );
+}
+
+#[test]
+fn knowledge_summary_counts_active_statuses_and_excludes_trash() {
+    let mut db = Database::new_in_memory().expect("in-memory database");
+    db.knowledge().save(card_draft("draft")).expect("draft");
+    let confirmed = db
+        .knowledge()
+        .save(card_draft("confirmed"))
+        .expect("confirmed");
+    db.knowledge()
+        .save(card_draft("outdated"))
+        .expect("outdated");
+    db.knowledge()
+        .batch_update(std::slice::from_ref(&confirmed.id), "delete", &[])
+        .expect("delete card");
+
+    let summary = db.knowledge().summary().expect("summary");
+    assert_eq!(summary.total, 2);
+    assert_eq!(summary.draft, 1);
+    assert_eq!(summary.confirmed, 0);
+    assert_eq!(summary.outdated, 1);
+}
+
+#[test]
+fn batch_can_remove_tags_case_insensitively() {
+    let mut db = Database::new_in_memory().expect("in-memory database");
+    let mut draft = card_draft("draft");
+    draft.tags = vec!["Rust".into(), "重点".into(), "保留".into()];
+    let card = db.knowledge().save(draft).expect("save card");
+
+    let updated = db
+        .knowledge()
+        .batch_update(
+            std::slice::from_ref(&card.id),
+            "remove_tags",
+            &["#rust".into(), "重点".into()],
+        )
+        .expect("remove tags");
+    assert_eq!(updated, 1);
+
+    let restored = db
+        .knowledge()
+        .find(&card.id)
+        .expect("find card")
+        .expect("card exists");
+    assert_eq!(restored.tags, vec!["保留"]);
+}
+
+#[test]
+fn soft_deleted_cards_stay_recoverable_without_affecting_active_views() {
+    let mut db = Database::new_in_memory().expect("in-memory database");
+    let mut draft = card_draft("confirmed");
+    draft.title = "可恢复卡片".into();
+    draft.projects = vec!["回收测试".into()];
+    let card = db.knowledge().save(draft).expect("save card");
+    db.knowledge()
+        .apply_grade(&card.id, "good", 3.0, 5.0, 3.0, "2026-07-19", "2026-07-16")
+        .expect("grade card");
+
+    assert_eq!(
+        db.knowledge()
+            .batch_update(std::slice::from_ref(&card.id), "delete", &[])
+            .expect("move card to trash"),
+        1
+    );
+    assert!(db.knowledge().list().expect("active cards").is_empty());
+    assert!(db
+        .knowledge()
+        .find(&card.id)
+        .expect("find active card")
+        .is_none());
+    assert!(db
+        .knowledge()
+        .due(20, "2026-07-16")
+        .expect("due cards")
+        .is_empty());
+    assert_eq!(
+        db.knowledge()
+            .list_projects()
+            .expect("project counts")
+            .iter()
+            .find(|project| project.name == "回收测试")
+            .map(|project| project.count),
+        Some(0)
+    );
+
+    let trashed = db.knowledge().list_trash().expect("trash cards");
+    assert_eq!(trashed.len(), 1);
+    assert_eq!(trashed[0].id, card.id);
+    assert_eq!(trashed[0].projects, vec!["回收测试"]);
+    assert_eq!(trashed[0].review_count, 1);
+
+    assert_eq!(
+        db.knowledge()
+            .batch_update(std::slice::from_ref(&card.id), "restore", &[])
+            .expect("restore card"),
+        1
+    );
+    let restored = db
+        .knowledge()
+        .find(&card.id)
+        .expect("find restored card")
+        .expect("restored card exists");
+    assert_eq!(restored.projects, vec!["回收测试"]);
+    assert_eq!(restored.review_count, 1);
+    assert_eq!(
+        db.knowledge()
+            .list_projects()
+            .expect("project counts after restore")
+            .iter()
+            .find(|project| project.name == "回收测试")
+            .map(|project| project.count),
+        Some(1)
+    );
+    assert!(db.knowledge().list_trash().expect("empty trash").is_empty());
+}
+
+#[test]
+fn knowledge_query_page_supports_fts_fallback_filters_and_pagination() {
+    let mut db = Database::new_in_memory().expect("in-memory database");
+    let mut first_draft = card_draft("confirmed");
+    first_draft.title = "中文路由刷新".into();
+    first_draft.content = "缓存命中后仍然可以恢复页面状态，并且保留来源和项目关系。".into();
+    first_draft.tags = vec!["搜索".into()];
+    first_draft.projects = vec!["查询".into()];
+    let first = db.knowledge().save(first_draft).expect("save first card");
+
+    let mut second_draft = card_draft("draft");
+    second_draft.title = "第二张卡".into();
+    second_draft.content = "其他内容".into();
+    second_draft.tags = vec![];
+    second_draft.source_date.clear();
+    second_draft.source_excerpt.clear();
+    let second = db.knowledge().save(second_draft).expect("save second card");
+
+    let mut deleted_draft = card_draft("confirmed");
+    deleted_draft.title = "已删除的中文卡".into();
+    let deleted = db
+        .knowledge()
+        .save(deleted_draft)
+        .expect("save deleted card");
+    db.knowledge()
+        .batch_update(std::slice::from_ref(&deleted.id), "delete", &[])
+        .expect("delete card");
+
+    let (matches, total) = db
+        .knowledge()
+        .query_page("中文", None, None, None, None, None, None, "updated", 1, 24)
+        .expect("query Chinese text");
+    assert_eq!(total, 1);
+    assert_eq!(matches.len(), 1);
+    assert_eq!(matches[0].id, first.id);
+
+    let (project_matches, project_total) = db
+        .knowledge()
+        .query_page(
+            "",
+            None,
+            None,
+            None,
+            None,
+            Some("查询"),
+            None,
+            "updated",
+            1,
+            24,
+        )
+        .expect("query project");
+    assert_eq!(project_total, 1);
+    assert_eq!(project_matches[0].id, first.id);
+
+    let (all_status_matches, all_status_total) = db
+        .knowledge()
+        .query_page(
+            "",
+            None,
+            Some("all"),
+            None,
+            None,
+            None,
+            None,
+            "updated",
+            1,
+            24,
+        )
+        .expect("query all statuses");
+    assert_eq!(all_status_total, 2);
+    assert_eq!(all_status_matches.len(), 2);
+
+    for (quality, expected_id) in [
+        ("missing_source", &second.id),
+        ("missing_project", &second.id),
+        ("missing_tags", &second.id),
+        ("short_content", &second.id),
+    ] {
+        let (quality_matches, quality_total) = db
+            .knowledge()
+            .query_page(
+                "",
+                None,
+                None,
+                None,
+                None,
+                None,
+                Some(quality),
+                "updated",
+                1,
+                24,
+            )
+            .expect("query quality");
+        assert_eq!(quality_total, 1, "quality filter {quality}");
+        assert_eq!(
+            quality_matches[0].id, *expected_id,
+            "quality filter {quality}"
+        );
+    }
+
+    let (first_page, total) = db
+        .knowledge()
+        .query_page("", None, None, None, None, None, None, "created", 1, 1)
+        .expect("first page");
+    let (second_page, second_total) = db
+        .knowledge()
+        .query_page("", None, None, None, None, None, None, "created", 2, 1)
+        .expect("second page");
+    assert_eq!(total, 2);
+    assert_eq!(second_total, total);
+    assert_eq!(first_page.len(), 1);
+    assert_eq!(second_page.len(), 1);
+    assert_ne!(first_page[0].id, second_page[0].id);
+
+    let mut updated = card_draft("draft");
+    updated.title = "FTS 触发器更新".into();
+    updated.content = "索引应当同步更新".into();
+    db.knowledge()
+        .update(&second.id, updated)
+        .expect("update second card");
+    let (updated_matches, updated_total) = db
+        .knowledge()
+        .query_page(
+            "触发器",
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            "updated",
+            1,
+            24,
+        )
+        .expect("query updated text");
+    assert_eq!(updated_total, 1);
+    assert_eq!(updated_matches[0].id, second.id);
+}
+
+#[test]
 fn new_cards_created_after_migration_have_default_review_fields() {
     let mut db = Database::new_in_memory().expect("in-memory database");
 
@@ -622,7 +950,15 @@ fn grading_writes_review_history_log_and_advances_state() {
     // 长间隔 + 高 ease → mature
     let mature = db
         .knowledge()
-        .apply_grade(&card.id, "easy", 30.0, 5.0, 30.0, "2026-08-15", "2026-07-16")
+        .apply_grade(
+            &card.id,
+            "easy",
+            30.0,
+            5.0,
+            30.0,
+            "2026-08-15",
+            "2026-07-16",
+        )
         .expect("apply grade")
         .expect("card exists");
     assert_eq!(mature.review_state, "mature");
@@ -654,13 +990,29 @@ fn review_stats_report_totals_streak_and_daily_series() {
         .apply_grade(&first.id, "good", 3.0, 5.0, 3.0, "2026-07-17", "2026-07-14")
         .expect("grade");
     db.knowledge()
-        .apply_grade(&second.id, "hard", 1.0, 5.0, 1.0, "2026-07-15", "2026-07-14")
+        .apply_grade(
+            &second.id,
+            "hard",
+            1.0,
+            5.0,
+            1.0,
+            "2026-07-15",
+            "2026-07-14",
+        )
         .expect("grade");
     db.knowledge()
         .apply_grade(&first.id, "good", 8.0, 5.0, 8.0, "2026-07-22", "2026-07-15")
         .expect("grade");
     db.knowledge()
-        .apply_grade(&first.id, "good", 20.0, 5.0, 20.0, "2026-08-05", "2026-07-16")
+        .apply_grade(
+            &first.id,
+            "good",
+            20.0,
+            5.0,
+            20.0,
+            "2026-08-05",
+            "2026-07-16",
+        )
         .expect("grade");
 
     let stats = db
@@ -720,7 +1072,15 @@ fn due_queue_limits_new_cards_to_daily_cap() {
     due_card.title = "到期卡".into();
     let due_card = db.knowledge().save(due_card).expect("save due card");
     db.knowledge()
-        .apply_grade(&due_card.id, "good", 3.0, 5.0, 3.0, "2026-07-01", "2026-07-01")
+        .apply_grade(
+            &due_card.id,
+            "good",
+            3.0,
+            5.0,
+            3.0,
+            "2026-07-01",
+            "2026-07-01",
+        )
         .expect("grade due card");
 
     let due = db.knowledge().due(100, "2026-07-16").expect("due cards");
@@ -893,7 +1253,7 @@ fn related_ids_are_resolved_bidirectionally_on_read() {
 }
 
 #[test]
-fn deleting_a_card_cleans_dangling_related_ids() {
+fn deleting_a_card_hides_related_ids_until_the_card_is_restored() {
     let mut db = Database::new_in_memory().expect("in-memory database");
     let mut a = card_draft("confirmed");
     a.title = "卡A".into();
@@ -911,6 +1271,56 @@ fn deleting_a_card_cleans_dangling_related_ids() {
     let a_view = db.knowledge().find(&a.id).expect("find A").expect("exists");
     assert!(
         !a_view.related_ids.contains(&b.id),
-        "删除 B 后 A 不再引用悬空 id"
+        "删除 B 后普通视图不展示指向回收站的关系"
     );
+    assert_eq!(db.knowledge().list_trash().expect("trash").len(), 1);
+    db.knowledge()
+        .batch_update(std::slice::from_ref(&b.id), "restore", &[])
+        .expect("restore B");
+    let restored_a = db.knowledge().find(&a.id).expect("find A").expect("exists");
+    assert!(
+        restored_a.related_ids.contains(&b.id),
+        "恢复 B 后原有关联应自动回来"
+    );
+}
+
+#[test]
+fn saved_knowledge_views_round_trip_and_update_filters() {
+    let mut db = Database::new_in_memory().expect("in-memory database");
+    let filters = json!({
+        "q": "  中文检索 ",
+        "status": "draft",
+        "sort": "created",
+        "unknown": "discarded"
+    });
+
+    let created = db
+        .knowledge()
+        .create_saved_view("待确认知识", &filters)
+        .expect("create saved view");
+    assert_eq!(created.name, "待确认知识");
+    assert_eq!(created.filters, filters);
+
+    let listed = db.knowledge().list_saved_views().expect("list saved views");
+    assert_eq!(listed.len(), 1);
+    assert_eq!(listed[0].id, created.id);
+
+    let updated_filters = json!({ "project": "Rust", "usage": "never_used" });
+    let updated = db
+        .knowledge()
+        .update_saved_view(&created.id, "未使用的 Rust 卡片", &updated_filters)
+        .expect("update saved view")
+        .expect("saved view exists");
+    assert_eq!(updated.name, "未使用的 Rust 卡片");
+    assert_eq!(updated.filters, updated_filters);
+
+    assert!(db
+        .knowledge()
+        .delete_saved_view(&created.id)
+        .expect("delete saved view"));
+    assert!(db
+        .knowledge()
+        .list_saved_views()
+        .expect("list saved views")
+        .is_empty());
 }

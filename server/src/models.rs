@@ -1,4 +1,5 @@
 use serde::{Deserialize, Deserializer, Serialize};
+use serde_json::Value;
 use std::collections::BTreeMap;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -158,6 +159,36 @@ pub(crate) struct KnowledgeCard {
     pub(crate) projects: Vec<String>,
 }
 
+#[derive(Debug, Serialize)]
+pub(crate) struct KnowledgeCardsPage {
+    pub(crate) cards: Vec<KnowledgeCard>,
+    pub(crate) total: i64,
+    pub(crate) page: i64,
+    pub(crate) page_size: i64,
+    pub(crate) has_more: bool,
+}
+
+#[derive(Debug, Serialize, Default)]
+pub(crate) struct KnowledgeSummary {
+    pub(crate) total: i64,
+    pub(crate) draft: i64,
+    pub(crate) confirmed: i64,
+    pub(crate) outdated: i64,
+    pub(crate) missing_source: i64,
+    pub(crate) missing_project: i64,
+    pub(crate) missing_tags: i64,
+    pub(crate) short_content: i64,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub(crate) struct KnowledgeSavedView {
+    pub(crate) id: String,
+    pub(crate) name: String,
+    pub(crate) filters: Value,
+    pub(crate) created_at: String,
+    pub(crate) updated_at: String,
+}
+
 fn default_review_ease() -> f64 {
     2.5
 }
@@ -168,9 +199,17 @@ pub(crate) struct KnowledgeTagCount {
     pub(crate) count: i64,
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub(crate) struct KnowledgeProject {
+    pub(crate) name: String,
+    pub(crate) count: i64,
+}
+
 #[derive(Debug, Serialize)]
 pub(crate) struct ReviewStats {
     pub(crate) due: i64,
+    pub(crate) due_reviews: i64,
+    pub(crate) new_cards: i64,
     pub(crate) reviewed_today: i64,
     pub(crate) total_confirmed: i64,
 }
@@ -179,6 +218,25 @@ pub(crate) struct ReviewStats {
 pub(crate) struct DueReviewResponse {
     pub(crate) cards: Vec<KnowledgeCard>,
     pub(crate) stats: ReviewStats,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
+pub(crate) struct ReviewSettings {
+    pub(crate) new_cards_per_day: i64,
+    pub(crate) session_limit: i64,
+}
+
+#[derive(Debug, Deserialize)]
+pub(crate) struct UpdateReviewSettingsPayload {
+    pub(crate) new_cards_per_day: i64,
+    pub(crate) session_limit: i64,
+}
+
+#[derive(Debug, Serialize)]
+pub(crate) struct ReviewGradePreview {
+    pub(crate) grade: String,
+    pub(crate) interval_days: f64,
+    pub(crate) next_review_at: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -343,6 +401,28 @@ pub(crate) struct KnowledgeListQuery {
     pub(crate) usage: Option<String>,
     pub(crate) tag: Option<String>,
     pub(crate) project: Option<String>,
+    pub(crate) quality: Option<String>,
+    pub(crate) sort: Option<String>,
+    pub(crate) page: Option<i64>,
+    pub(crate) page_size: Option<i64>,
+}
+
+#[derive(Debug, Deserialize)]
+pub(crate) struct CreateKnowledgeProjectPayload {
+    pub(crate) name: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub(crate) struct SaveKnowledgeViewPayload {
+    pub(crate) name: String,
+    #[serde(default)]
+    pub(crate) filters: Value,
+}
+
+#[derive(Debug, Deserialize)]
+pub(crate) struct UpdateKnowledgeViewPayload {
+    pub(crate) name: Option<String>,
+    pub(crate) filters: Option<Value>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -390,7 +470,7 @@ pub(crate) struct UpdateKnowledgeCardPayload {
     pub(crate) projects: Option<Vec<String>>,
 }
 
-/// 批量操作：对一组卡片执行确认归档 / 打标签 / 改项目 / 删除。
+/// 批量操作：对一组卡片执行状态更新、标签/项目更新或删除。
 #[derive(Debug, Deserialize)]
 pub(crate) struct BatchKnowledgeCardsPayload {
     pub(crate) ids: Vec<String>,

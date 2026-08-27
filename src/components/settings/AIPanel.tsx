@@ -90,19 +90,19 @@ function AIMetric({
   tone?: "neutral" | "good" | "warn";
 }) {
   const toneClass = {
-    neutral: "text-gray-500 bg-gray-100 dark:bg-white/10 dark:text-gray-300",
-    good: "text-emerald-600 bg-emerald-50 dark:bg-emerald-500/10 dark:text-emerald-300",
-    warn: "text-amber-600 bg-amber-50 dark:bg-amber-500/10 dark:text-amber-300",
+    neutral: "ui-status-muted",
+    good: "ui-status-success",
+    warn: "ui-status-warning",
   }[tone];
   return (
-    <div className="min-w-0 rounded-lg bg-gray-50 p-3 dark:bg-white/[0.035]">
+    <div className="ui-panel-muted min-w-0 rounded-lg p-3">
       <div className="flex items-center gap-2">
         <span className={`flex h-7 w-7 items-center justify-center rounded-lg ${toneClass}`}>
           <Icon size={15} />
         </span>
-        <span className="text-xs text-gray-400 dark:text-gray-500">{label}</span>
+        <span className="text-xs text-[var(--ui-text-subtle)]">{label}</span>
       </div>
-      <div className="mt-2 break-words text-sm font-semibold leading-5 text-gray-800 dark:text-gray-100">{value}</div>
+      <div className="mt-2 break-words text-sm font-semibold leading-5 text-[var(--ui-text)]">{value}</div>
     </div>
   );
 }

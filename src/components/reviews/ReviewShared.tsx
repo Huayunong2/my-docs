@@ -1,4 +1,5 @@
 import { useState } from "react";
+import * as Dialog from "@radix-ui/react-dialog";
 import { BookMarked, ChevronDown, X } from "lucide-react";
 import type { Review } from "../../lib/api";
 import { normalizeReviewContent } from "../../lib/reviewContent";
@@ -9,9 +10,7 @@ export function ReviewStatusPill({ status }: { status: Review["status"] }) {
     <span
       className={[
         "shrink-0 rounded-full px-2 py-0.5 text-[11px] font-medium",
-        status === "confirmed"
-          ? "bg-emerald-50 text-emerald-600 dark:bg-emerald-900/20 dark:text-emerald-300"
-          : "bg-amber-50 text-amber-600 dark:bg-amber-900/20 dark:text-amber-300",
+        status === "confirmed" ? "ui-status-success" : "ui-status-warning",
       ].join(" ")}
     >
       {status === "confirmed" ? "已确认" : "草稿"}
@@ -32,6 +31,7 @@ export function ReviewViewerModal({
   onExtractKnowledge,
   extractingKnowledge = false,
   onClose,
+  onRestoreFocus,
 }: {
   review: Review;
   title: string;
@@ -45,6 +45,7 @@ export function ReviewViewerModal({
   onExtractKnowledge?: () => void;
   extractingKnowledge?: boolean;
   onClose: () => void;
+  onRestoreFocus?: () => void;
 }) {
   const [editing, setEditing] = useState(false);
   const [metaExpanded, setMetaExpanded] = useState(false);
@@ -62,42 +63,46 @@ export function ReviewViewerModal({
   ];
 
   return (
-    <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/40 p-3 sm:items-center" onClick={onClose}>
-      <div
-        className="ui-modal-surface flex max-h-[92vh] max-w-3xl flex-col overflow-hidden"
-        onClick={(e) => e.stopPropagation()}
-      >
+    <Dialog.Root open onOpenChange={(open) => { if (!open) onClose(); }}>
+      <Dialog.Portal>
+        <Dialog.Overlay className="ui-overlay fixed inset-0 z-50 data-[state=open]:animate-fade-in" />
+        <Dialog.Content
+          className="ui-modal-surface fixed inset-x-3 bottom-3 z-50 flex max-h-[92vh] max-w-3xl flex-col overflow-hidden outline-hidden sm:left-1/2 sm:right-auto sm:top-1/2 sm:bottom-auto sm:w-[calc(100%-1.5rem)] sm:-translate-x-1/2 sm:-translate-y-1/2"
+          onCloseAutoFocus={(event) => {
+            if (!onRestoreFocus) return;
+            event.preventDefault();
+            onRestoreFocus();
+          }}
+        >
         {/* Header */}
-        <div className="flex flex-wrap items-start justify-between gap-3 border-b border-gray-100 dark:border-white/5 px-5 py-4">
+        <div className="ui-soft-divider flex flex-wrap items-start justify-between gap-3 border-b px-5 py-4">
           <div>
             <div className="flex items-center gap-2">
-              <h3 className="text-base font-bold text-gray-900 dark:text-gray-100">{title}</h3>
+              <Dialog.Title className="text-base font-bold text-[var(--ui-text)]">{title}</Dialog.Title>
               <ReviewStatusPill status={review.status} />
             </div>
-            <p className="mt-1 text-xs text-gray-400 dark:text-gray-500">
+            <Dialog.Description className="mt-1 text-xs text-[var(--ui-text-subtle)]">
               {review.kind === "weekly" ? "周复盘" : "月复盘"} · {review.period_start} 至 {review.period_end} · v{review.version} · {review.model || "AI"}
-            </p>
+            </Dialog.Description>
           </div>
-          <button
-            type="button"
-            onClick={onClose}
-            className="ui-icon-button h-8 w-8"
-          >
-            <X size={15} />
-          </button>
+          <Dialog.Close asChild>
+            <button type="button" className="ui-icon-button h-8 w-8" aria-label="关闭复盘详情">
+              <X size={15} />
+            </button>
+          </Dialog.Close>
         </div>
 
         {/* 移动端：元信息默认折叠成一行摘要，正文优先 */}
-        <div className="border-b border-gray-100 bg-gray-50/70 px-5 py-2.5 dark:border-white/5 dark:bg-white/[0.03] sm:hidden">
+        <div className="ui-modal-meta border-b px-5 py-2.5 sm:hidden">
           <button
             type="button"
             onClick={() => setMetaExpanded(!metaExpanded)}
             className="flex w-full items-center justify-between gap-2 text-left"
           >
-            <span className="min-w-0 truncate text-xs text-gray-400 dark:text-gray-500">
+            <span className="min-w-0 truncate text-xs text-[var(--ui-text-subtle)]">
               {review.kind === "weekly" ? "周复盘" : "月复盘"} · {review.period_start} 至 {review.period_end} · v{review.version} · 来源 {sourceCount}
             </span>
-            <span className="flex shrink-0 items-center gap-0.5 text-xs font-medium text-accent">
+            <span className="flex shrink-0 items-center gap-0.5 text-xs font-medium text-[var(--ui-accent-text)]">
               {metaExpanded ? "收起" : "详情"}
               <ChevronDown size={14} className={`transition-transform ${metaExpanded ? "rotate-180" : ""}`} />
             </span>
@@ -106,8 +111,8 @@ export function ReviewViewerModal({
             <div className="mt-2.5 grid grid-cols-2 gap-2">
               {metaItems.map((item) => (
                 <div key={item.label} className="min-w-0">
-                  <div className="text-[11px] text-gray-400 dark:text-gray-500">{item.label}</div>
-                  <div className="mt-0.5 truncate text-xs font-medium text-gray-700 dark:text-gray-200">{item.value}</div>
+                  <div className="text-[11px] text-[var(--ui-text-subtle)]">{item.label}</div>
+                  <div className="mt-0.5 truncate text-xs font-medium text-[var(--ui-text-muted)]">{item.value}</div>
                 </div>
               ))}
             </div>
@@ -115,11 +120,11 @@ export function ReviewViewerModal({
         </div>
 
         {/* 桌面端：保持 6 项元信息网格不变 */}
-        <div className="hidden grid-cols-2 gap-2 border-b border-gray-100 bg-gray-50/70 px-5 py-3 dark:border-white/5 dark:bg-white/[0.03] sm:grid sm:grid-cols-3">
+        <div className="ui-modal-meta hidden grid-cols-2 gap-2 border-b px-5 py-3 sm:grid sm:grid-cols-3">
           {metaItems.map((item) => (
             <div key={item.label} className="min-w-0">
-              <div className="text-[11px] text-gray-400 dark:text-gray-500">{item.label}</div>
-              <div className="mt-0.5 truncate text-xs font-medium text-gray-700 dark:text-gray-200">{item.value}</div>
+              <div className="text-[11px] text-[var(--ui-text-subtle)]">{item.label}</div>
+              <div className="mt-0.5 truncate text-xs font-medium text-[var(--ui-text-muted)]">{item.value}</div>
             </div>
           ))}
         </div>
@@ -127,14 +132,14 @@ export function ReviewViewerModal({
         {/* Body */}
         {editing ? (
           <div className="grid min-h-0 flex-1 gap-0 overflow-y-auto lg:grid-cols-2">
-            <div className="border-b border-gray-100 p-4 dark:border-white/5 lg:border-b-0 lg:border-r">
-              <label className="mb-1 block text-xs font-medium text-gray-500 dark:text-gray-400">标题</label>
+            <div className="ui-soft-divider border-b p-4 lg:border-b-0 lg:border-r">
+              <label className="mb-1 block text-xs font-medium text-[var(--ui-text-muted)]">标题</label>
               <input
                 value={title}
                 onChange={(e) => onTitleChange(e.target.value)}
                 className="ui-field mb-3 rounded-lg"
               />
-              <label className="mb-1 block text-xs font-medium text-gray-500 dark:text-gray-400">正文</label>
+              <label className="mb-1 block text-xs font-medium text-[var(--ui-text-muted)]">正文</label>
               <textarea
                 value={content}
                 onChange={(e) => onContentChange(e.target.value)}
@@ -142,7 +147,7 @@ export function ReviewViewerModal({
               />
             </div>
             <div className="min-h-[320px] overflow-y-auto p-4">
-              <div className="mb-3 text-xs font-medium text-gray-500 dark:text-gray-400">预览</div>
+              <div className="mb-3 text-xs font-medium text-[var(--ui-text-muted)]">预览</div>
               <MarkdownContent content={content} />
             </div>
           </div>
@@ -153,7 +158,7 @@ export function ReviewViewerModal({
         )}
 
         {/* Footer */}
-        <div className="flex flex-col-reverse gap-2 border-t border-gray-100 dark:border-white/5 px-5 py-4 sm:flex-row sm:justify-between">
+        <div className="ui-soft-divider flex flex-col-reverse gap-2 border-t px-5 py-4 sm:flex-row sm:justify-between">
           <button
             type="button"
             onClick={onDelete}
@@ -165,33 +170,34 @@ export function ReviewViewerModal({
           <div className="flex gap-2">
             {editing ? (
               <>
-                <button onClick={() => setEditing(false)} disabled={saving}
+                <button type="button" onClick={() => setEditing(false)} disabled={saving}
                   className="ui-button-secondary">取消编辑</button>
-                <button onClick={onSave} disabled={saving}
+                <button type="button" onClick={onSave} disabled={saving}
                   className="ui-button-primary">保存草稿</button>
-                <button onClick={onConfirm} disabled={saving}
-                  className="inline-flex h-9 items-center justify-center rounded-lg bg-emerald-500 px-3 text-xs font-semibold text-white transition-colors hover:bg-emerald-600 disabled:opacity-50">确认归档</button>
+                <button type="button" onClick={onConfirm} disabled={saving}
+                  className="ui-button-success">确认归档</button>
               </>
             ) : (
               <>
                 {onExtractKnowledge && (
-                  <button onClick={onExtractKnowledge} disabled={saving || extractingKnowledge}
+                  <button type="button" onClick={onExtractKnowledge} disabled={saving || extractingKnowledge}
                     className="ui-button-secondary">
                     <BookMarked size={14} />
                     {extractingKnowledge ? "提取中" : "提取知识"}
                   </button>
                 )}
-                <button onClick={() => setEditing(true)}
+                <button type="button" onClick={() => setEditing(true)}
                   className="ui-button-secondary">编辑</button>
                 {review.status !== "confirmed" && (
-                  <button onClick={onConfirm} disabled={saving}
+                  <button type="button" onClick={onConfirm} disabled={saving}
                     className="ui-button-primary">确认归档</button>
                 )}
               </>
             )}
           </div>
         </div>
-      </div>
-    </div>
+        </Dialog.Content>
+      </Dialog.Portal>
+    </Dialog.Root>
   );
 }

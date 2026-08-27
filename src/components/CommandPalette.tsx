@@ -1,5 +1,5 @@
 import { Command } from "cmdk";
-import { AnimatePresence, motion } from "framer-motion";
+import * as Dialog from "@radix-ui/react-dialog";
 import {
   Archive,
   BarChart3,
@@ -15,7 +15,7 @@ import type { LucideIcon } from "lucide-react";
 import type { Page } from "../App";
 
 const commands: { id: Page; label: string; icon: LucideIcon; hint?: string }[] = [
-  { id: "today", label: "记录", icon: NotebookPen, hint: "1" },
+  { id: "today", label: "今日", icon: NotebookPen, hint: "1" },
   { id: "history", label: "历史", icon: CalendarDays, hint: "2" },
   { id: "archive", label: "归档", icon: Archive, hint: "3" },
   { id: "search", label: "搜索", icon: Search, hint: "4" },
@@ -41,63 +41,49 @@ export default function CommandPalette({
   };
 
   return (
-    <AnimatePresence>
-      {open && (
-        <>
-          <motion.div
-            key="palette-backdrop"
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            onClick={onClose}
-            className="fixed inset-0 z-40 bg-black/40 backdrop-blur-sm"
-          />
-          <motion.div
-            key="palette-panel"
-            initial={{ opacity: 0, scale: 0.97, y: -8 }}
-            animate={{ opacity: 1, scale: 1, y: 0 }}
-            exit={{ opacity: 0, scale: 0.97, y: -8 }}
-            transition={{ duration: 0.15 }}
-            className="fixed left-1/2 top-[16%] z-50 w-[92vw] max-w-md -translate-x-1/2 overflow-hidden rounded-2xl border border-gray-100 bg-white shadow-modal dark:border-white/10 dark:bg-gray-900"
-          >
-            <Command loop onKeyDown={(e) => e.key === "Escape" && onClose()}>
-              <div className="flex items-center gap-2 border-b border-gray-100 px-4 dark:border-white/10">
-                <Search size={16} className="shrink-0 text-gray-400" />
-                <Command.Input
-                  autoFocus
-                  placeholder="跳转到页面…"
-                  className="h-12 w-full bg-transparent text-sm text-gray-800 outline-hidden placeholder:text-gray-400 dark:text-gray-100 dark:placeholder:text-gray-500"
-                />
-                <kbd className="shrink-0 rounded border border-gray-200 bg-gray-50 px-1.5 py-0.5 text-[10px] font-medium text-gray-400 dark:border-white/10 dark:bg-white/10">
-                  Esc
-                </kbd>
-              </div>
-              <Command.List className="max-h-72 overflow-y-auto p-1.5">
-                <Command.Empty className="px-3 py-6 text-center text-sm text-gray-400 dark:text-gray-500">
-                  无匹配页面
-                </Command.Empty>
-                {commands.map((c) => {
-                  const Icon = c.icon;
-                  return (
-                    <Command.Item
-                      key={c.id}
-                      value={c.id}
-                      onSelect={() => run(c.id)}
-                      className="flex cursor-pointer items-center gap-3 rounded-lg px-3 py-2.5 text-sm text-gray-600 transition-colors data-[selected=true]:bg-accent-light data-[selected=true]:text-accent dark:text-gray-300 dark:data-[selected=true]:bg-accent-light/20"
-                    >
-                      <Icon size={16} />
-                      <span className="font-medium">{c.label}</span>
-                      {c.hint && (
-                        <kbd className="ml-auto text-[10px] text-gray-400 dark:text-gray-500">Ctrl+{c.hint}</kbd>
-                      )}
-                    </Command.Item>
-                  );
-                })}
-              </Command.List>
-            </Command>
-          </motion.div>
-        </>
-      )}
-    </AnimatePresence>
+    <Dialog.Root open={open} onOpenChange={(next) => { if (!next) onClose(); }}>
+      <Dialog.Portal>
+        <Dialog.Overlay className="ui-overlay fixed inset-0 z-40 data-[state=open]:animate-fade-in" />
+        <Dialog.Content className="ui-modal-surface fixed left-1/2 top-[16%] z-50 w-[92vw] max-w-md -translate-x-1/2 overflow-hidden p-0 outline-hidden data-[state=open]:animate-scale-in">
+          <Dialog.Title className="sr-only">快速导航</Dialog.Title>
+          <Dialog.Description className="sr-only">搜索页面并使用键盘快捷键快速跳转。</Dialog.Description>
+          <Command loop>
+            <div className="ui-command-input-row flex items-center gap-2 border-b px-4">
+              <Search size={16} className="shrink-0 text-[var(--ui-text-muted)]" />
+              <Command.Input
+                autoFocus
+                placeholder="跳转到页面…"
+                className="ui-command-input h-12 w-full bg-transparent text-sm outline-hidden"
+              />
+              <kbd className="ui-command-kbd shrink-0 rounded px-1.5 py-0.5 text-[10px] font-medium">
+                Esc
+              </kbd>
+            </div>
+            <Command.List className="max-h-72 overflow-y-auto p-1.5">
+              <Command.Empty className="ui-command-empty px-3 py-6 text-center text-sm">
+                无匹配页面
+              </Command.Empty>
+              {commands.map((c) => {
+                const Icon = c.icon;
+                return (
+                  <Command.Item
+                    key={c.id}
+                    value={`${c.label} ${c.id}`}
+                    onSelect={() => run(c.id)}
+                    className="ui-command-item flex cursor-pointer items-center gap-3 rounded-lg px-3 py-2.5 text-sm transition-colors"
+                  >
+                    <Icon size={16} />
+                    <span className="font-medium">{c.label}</span>
+                    {c.hint && (
+                      <kbd className="ui-command-kbd ml-auto border-0 bg-transparent text-[10px]">Ctrl+{c.hint}</kbd>
+                    )}
+                  </Command.Item>
+                );
+              })}
+            </Command.List>
+          </Command>
+        </Dialog.Content>
+      </Dialog.Portal>
+    </Dialog.Root>
   );
 }

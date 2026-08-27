@@ -1,33 +1,38 @@
 import { useRef, useState } from "react";
 import { motion } from "framer-motion";
-import { Bot, DatabaseBackup, Download, Palette, Plug } from "lucide-react";
+import { Bot, DatabaseBackup, Download, Monitor, Moon, Palette, Plug, Settings, SlidersHorizontal, Sun } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
+import type { ThemeMode } from "../App";
 import AIPanel from "./settings/AIPanel";
 import ConnectionPanel from "./settings/ConnectionPanel";
 import BackupPanel from "./settings/BackupPanel";
 import ExportPanel from "./settings/ExportPanel";
+import ReviewSettingsPanel from "./settings/ReviewSettingsPanel";
+import PageHeader from "./ui/PageHeader";
 
-type Tab = "connect" | "ai" | "backup" | "export" | "appearance";
+type Tab = "connect" | "review" | "ai" | "backup" | "export" | "appearance";
 
 interface SettingsPageProps {
   accentTheme: string;
   onChangeAccentTheme: (theme: string) => void;
+  themeMode: ThemeMode;
+  onChangeThemeMode: (mode: ThemeMode) => void;
 }
 
 const THEMES = [
-  { id: "", name: "靛蓝", color: "#6366f1" },
-  { id: "violet", name: "紫罗兰", color: "#8b5cf6" },
-  { id: "blue", name: "天蓝", color: "#3b82f6" },
-  { id: "emerald", name: "翡翠", color: "#10b981" },
-  { id: "rose", name: "玫瑰", color: "#f43f5e" },
-  { id: "cyan", name: "青色", color: "#06b6d4" },
+  { id: "", name: "档案绿", color: "#0d7468" },
+  { id: "violet", name: "浆果紫", color: "#8a5f78" },
+  { id: "blue", name: "铁蓝", color: "#2e7180" },
+  { id: "emerald", name: "苔绿", color: "#2f896b" },
+  { id: "rose", name: "赭红", color: "#a85d56" },
+  { id: "cyan", name: "青铜青", color: "#187e82" },
 ];
 
-export default function SettingsPage({ accentTheme, onChangeAccentTheme }: SettingsPageProps) {
+export default function SettingsPage({ accentTheme, onChangeAccentTheme, themeMode, onChangeThemeMode }: SettingsPageProps) {
   const [tab, setTab] = useState<Tab>("connect");
   const contentRef = useRef<HTMLDivElement>(null);
-  const labels: Record<Tab, string> = { connect: "连接", ai: "AI", backup: "备份", export: "导出", appearance: "外观" };
-  const icons: Record<Tab, LucideIcon> = { connect: Plug, ai: Bot, backup: DatabaseBackup, export: Download, appearance: Palette };
+  const labels: Record<Tab, string> = { connect: "连接", review: "复习", ai: "AI", backup: "备份", export: "导出", appearance: "外观" };
+  const icons: Record<Tab, LucideIcon> = { connect: Plug, review: SlidersHorizontal, ai: Bot, backup: DatabaseBackup, export: Download, appearance: Palette };
   const switchTab = (next: Tab) => {
     setTab(next);
     requestAnimationFrame(() => {
@@ -39,19 +44,20 @@ export default function SettingsPage({ accentTheme, onChangeAccentTheme }: Setti
     <motion.div
       initial={{ opacity: 0, y: 10 }}
       animate={{ opacity: 1, y: 0 }}
-      className="flex h-full min-h-0 flex-col overflow-hidden"
+      className="page-surface page-surface-settings flex h-full min-h-0 flex-col overflow-hidden"
     >
-      <div className="shrink-0 border-b border-gray-100 bg-surface px-3 pb-3 pt-[calc(env(safe-area-inset-top,0px)+1rem)] dark:border-white/10 dark:bg-surface-dark sm:px-4 md:px-8 md:pb-5 md:pt-6">
-        <h2 className="mb-4 text-xl font-bold text-gray-800 dark:text-gray-100">设置</h2>
-        <div className="flex w-full gap-1 overflow-x-auto rounded-xl bg-gray-100 p-1 dark:bg-white/5 sm:w-fit">
+      <div className="settings-header ui-soft-divider shrink-0 border-b px-3 pb-3 pt-[calc(env(safe-area-inset-top,0px)+1rem)] sm:px-4 md:px-8 md:pb-5 md:pt-6">
+        <PageHeader icon={Settings} title="设置" description="连接服务、复习计划、AI、备份与外观偏好" className="mb-4" />
+        <div className="ui-segment flex w-full gap-1 overflow-x-auto sm:w-fit">
           {(Object.keys(labels) as Tab[]).map((id) => (
             (() => {
               const Icon = icons[id];
               return (
                 <button
                   key={id}
+                  type="button"
                   onClick={() => switchTab(id)}
-                  className={`inline-flex h-10 min-w-[74px] shrink-0 items-center justify-center gap-1.5 whitespace-nowrap rounded-lg px-3 text-sm font-medium transition-all duration-200 ${tab === id ? "bg-white dark:bg-white/10 text-gray-800 dark:text-gray-100 shadow-xs" : "text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300"}`}
+                  className={`ui-segment-item h-10 min-w-[74px] shrink-0 whitespace-nowrap ${tab === id ? "ui-segment-item-active" : ""}`}
                 >
                   <Icon size={15} />
                   {labels[id]}
@@ -61,26 +67,53 @@ export default function SettingsPage({ accentTheme, onChangeAccentTheme }: Setti
           ))}
         </div>
       </div>
-      <div ref={contentRef} className="min-h-0 flex-1 overflow-y-auto px-3 py-4 sm:px-4 md:px-8 md:py-6">
+      <div ref={contentRef} className="settings-content min-h-0 flex-1 overflow-y-auto px-3 py-4 sm:px-4 md:px-8 md:py-6">
         {tab === "connect" && <ConnectionPanel />}
+        {tab === "review" && <ReviewSettingsPanel />}
         {tab === "ai" && <AIPanel />}
         {tab === "backup" && <BackupPanel />}
         {tab === "export" && <ExportPanel />}
         {tab === "appearance" && (
-          <div className="ui-panel p-5">
-            <h3 className="text-sm font-semibold text-gray-800 dark:text-gray-100">主题色</h3>
-            <p className="mt-1 text-xs leading-5 text-gray-400 dark:text-gray-500">选择应用的强调色，即时生效并自动保存</p>
-            <div className="mt-4 flex flex-wrap gap-3">
-              {THEMES.map((t) => (
-                <button
-                  key={t.id || "default"}
-                  onClick={() => onChangeAccentTheme(t.id)}
-                  className={`flex items-center gap-2 rounded-xl border px-3 py-2 transition-all ${accentTheme === t.id ? "border-accent bg-accent-light shadow-xs" : "border-gray-200 hover:border-gray-300 dark:border-white/10 dark:hover:border-white/20"}`}
-                >
-                  <span className="h-5 w-5 rounded-full" style={{ backgroundColor: t.color }} />
-                  <span className="text-sm font-medium text-gray-700 dark:text-gray-200">{t.name}</span>
-                </button>
-              ))}
+          <div className="grid w-full max-w-3xl gap-4">
+            <div className="ui-panel p-5">
+              <h3 className="text-sm font-semibold text-[var(--ui-text)]">显示模式</h3>
+              <p className="mt-1 text-xs leading-5 text-[var(--ui-text-subtle)]">选择跟随系统、浅色或深色，偏好会保存在当前设备。</p>
+              <div className="mt-4 grid grid-cols-3 gap-2" role="group" aria-label="显示模式">
+                {([
+                  ["system", "跟随系统", Monitor],
+                  ["light", "浅色", Sun],
+                  ["dark", "深色", Moon],
+                ] as const).map(([id, label, Icon]) => (
+                  <button
+                    key={id}
+                    type="button"
+                    onClick={() => onChangeThemeMode(id)}
+                    aria-pressed={themeMode === id}
+                    className={`flex min-h-11 items-center justify-center gap-1.5 rounded-xl px-2 text-xs font-semibold transition-colors ${themeMode === id ? "ui-status-accent shadow-xs" : "ui-theme-choice"}`}
+                  >
+                    <Icon size={15} /> {label}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div className="ui-panel p-5">
+              <h3 className="text-sm font-semibold text-[var(--ui-text)]">主题色</h3>
+              <p className="mt-1 text-xs leading-5 text-[var(--ui-text-subtle)]">选择应用的强调色，即时生效并自动保存</p>
+              <div className="mt-4 flex flex-wrap gap-3">
+                {THEMES.map((t) => (
+                  <button
+                    key={t.id || "default"}
+                    type="button"
+                    onClick={() => onChangeAccentTheme(t.id)}
+                    aria-pressed={accentTheme === t.id}
+                    className={`ui-theme-choice flex items-center gap-2 rounded-xl px-3 py-2 transition-all ${accentTheme === t.id ? "ui-theme-choice-active" : ""}`}
+                  >
+                    <span className="h-5 w-5 rounded-full" style={{ backgroundColor: t.color }} />
+                    <span className="text-sm font-medium text-[var(--ui-text)]">{t.name}</span>
+                  </button>
+                ))}
+              </div>
             </div>
           </div>
         )}

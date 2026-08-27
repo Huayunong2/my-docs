@@ -1,14 +1,14 @@
 use crate::db::Database;
 use crate::helpers::format_date;
 use crate::models::{
-    DueQuery, DueReviewResponse, GradeCardPayload, HeatmapQuery, KnowledgeCard, ReviewHistoryEntry,
-    ReviewStatsResponse,
+    DueQuery, DueReviewResponse, GradeCardPayload, HeatmapQuery, KnowledgeCard, ReviewGradePreview,
+    ReviewHistoryEntry, ReviewSettings, ReviewStatsResponse, UpdateReviewSettingsPayload,
 };
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::Json;
 use chrono::{Duration, Local, NaiveDate};
-use fsrs::{FSRS, MemoryState};
+use fsrs::{MemoryState, FSRS};
 use std::sync::{Arc, Mutex};
 
 type AppState = Arc<Mutex<Database>>;
@@ -50,12 +50,8 @@ pub(crate) fn apply_grade_rule(
     let memory_state = if review_count == 0 {
         None
     } else if ease <= 3.0 {
-        fsrs.memory_state_from_sm2(
-            ease as f32,
-            interval_days as f32,
-            DESIRED_RETENTION as f32,
-        )
-        .ok()
+        fsrs.memory_state_from_sm2(ease as f32, interval_days as f32, DESIRED_RETENTION as f32)
+            .ok()
     } else {
         Some(MemoryState {
             stability: interval_days as f32,
@@ -98,11 +94,16 @@ pub(crate) async fn due_cards(
     State(db): State<AppState>,
     Query(query): Query<DueQuery>,
 ) -> Result<Json<DueReviewResponse>, (StatusCode, String)> {
-    let limit = query.limit.unwrap_or(20).clamp(1, 100);
     let today = Local::now().format("%Y-%m-%d").to_string();
     let mut db = db
         .lock()
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let settings = db
+        .review_settings()
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    // 客户端可以临时请求更小批次，但不能绕过用户设置的服务端上限。
+    let requested_limit = query.limit.unwrap_or(settings.session_limit).clamp(1, 100);
+    let limit = requested_limit.min(settings.session_limit);
     let cards = db
         .knowledge()
         .due(limit, &today)
@@ -112,6 +113,87 @@ pub(crate) async fn due_cards(
         .stats(&today)
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     Ok(Json(DueReviewResponse { cards, stats }))
+}
+
+pub(crate) async fn review_settings(
+    State(db): State<AppState>,
+) -> Result<Json<ReviewSettings>, (StatusCode, String)> {
+    let db = db
+        .lock()
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    db.review_settings()
+        .map(Json)
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))
+}
+
+pub(crate) async fn update_review_settings(
+    State(db): State<AppState>,
+    Json(payload): Json<UpdateReviewSettingsPayload>,
+) -> Result<Json<ReviewSettings>, (StatusCode, String)> {
+    if !(0..=100).contains(&payload.new_cards_per_day) {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "new_cards_per_day must be between 0 and 100".into(),
+        ));
+    }
+    if !(1..=100).contains(&payload.session_limit) {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "session_limit must be between 1 and 100".into(),
+        ));
+    }
+    let settings = ReviewSettings {
+        new_cards_per_day: payload.new_cards_per_day,
+        session_limit: payload.session_limit,
+    };
+    let mut db = db
+        .lock()
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    db.update_review_settings(&settings)
+        .map(Json)
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))
+}
+
+/// 只读返回当前卡片在四种评分下的下一次复习安排，不写入卡片或复习日志。
+pub(crate) async fn preview_card(
+    State(db): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<Vec<ReviewGradePreview>>, (StatusCode, String)> {
+    let today = Local::now().format("%Y-%m-%d").to_string();
+    let today_date = NaiveDate::parse_from_str(&today, "%Y-%m-%d")
+        .expect("server local date always parses as YYYY-MM-DD");
+    let mut db = db
+        .lock()
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let card = db
+        .knowledge()
+        .find(&id)
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+        .ok_or((StatusCode::NOT_FOUND, "Knowledge card not found".into()))?;
+    if card.status != "confirmed" {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "Knowledge card is not in the review queue".into(),
+        ));
+    }
+    let previews = ["again", "hard", "good", "easy"]
+        .into_iter()
+        .map(|grade| {
+            let outcome = apply_grade_rule(
+                card.review_interval_days,
+                card.review_ease,
+                card.review_count,
+                grade,
+                today_date,
+            );
+            ReviewGradePreview {
+                grade: grade.to_string(),
+                interval_days: outcome.interval_days,
+                next_review_at: outcome.next_review_at,
+            }
+        })
+        .collect();
+    Ok(Json(previews))
 }
 
 pub(crate) async fn grade_card(

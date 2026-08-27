@@ -39,6 +39,8 @@ export class ApiError extends Error {
   }
 }
 
+type ReadRequestOptions = Pick<RequestInit, "signal">;
+
 function getBaseUrl(): string {
   const configured = normalizeBaseUrl(localStorage.getItem("server_url") || "");
   // In Tauri, relative paths are invalid — skip them
@@ -195,7 +197,7 @@ export function importArticles(articles: Array<{ date: string; title: string; co
 }
 
 export function exportFullBackup() {
-  return httpRequest<{ version: number; articles: any[]; reviews: any[]; knowledge_cards?: any[] }>("/export/full", { method: "POST", body: "{}" });
+  return httpRequest<{ version: number; articles: any[]; reviews: any[]; knowledge_cards?: any[]; knowledge_projects?: string[] }>("/export/full", { method: "POST", body: "{}" });
 }
 
 export function importFullBackup(data: any) {
@@ -218,8 +220,8 @@ export function listArticles(page: number, pageSize: number) {
   return httpRequest<ArticleSummary[]>(`/articles?page=${page}&page_size=${pageSize}`).then((items) => items.map(mapArticle));
 }
 
-export function searchArticles(query: string) {
-  return httpRequest<ArticleSummary[]>(`/articles/search?q=${encodeURIComponent(query)}`).then((items) => items.map(mapArticle));
+export function searchArticles(query: string, options?: ReadRequestOptions) {
+  return httpRequest<ArticleSummary[]>(`/articles/search?q=${encodeURIComponent(query)}`, options).then((items) => items.map(mapArticle));
 }
 
 // ── Knowledge cards ─────────────────────────────────
@@ -259,11 +261,75 @@ export interface KnowledgeTagCount {
   count: number;
 }
 
+export interface KnowledgeProject {
+  name: string;
+  count: number;
+}
+
+export interface KnowledgeCardsPage {
+  cards: KnowledgeCard[];
+  total: number;
+  page: number;
+  page_size: number;
+  has_more: boolean;
+}
+
+export interface KnowledgeSummary {
+  total: number;
+  draft: number;
+  confirmed: number;
+  outdated: number;
+  missing_source: number;
+  missing_project: number;
+  missing_tags: number;
+  short_content: number;
+}
+
+export type KnowledgeCardQuality = "missing_source" | "missing_project" | "missing_tags" | "short_content";
+
+export type KnowledgeCardSort = "updated" | "created" | "usage" | "review";
+
+export interface KnowledgeViewFilters {
+  q?: string;
+  project?: string;
+  tag?: string;
+  status?: KnowledgeCardStatus | "all";
+  type?: KnowledgeCardType;
+  usage?: "never_used";
+  sort?: KnowledgeCardSort;
+  quality?: KnowledgeCardQuality;
+}
+
+export interface KnowledgeSavedView {
+  id: string;
+  name: string;
+  filters: KnowledgeViewFilters;
+  created_at: string;
+  updated_at: string;
+}
+
+export const knowledgeQueryKeys = {
+  cards: (filters: Record<string, string>) => ["knowledgeCards", "filtered", filters] as const,
+  allCards: ["knowledgeCards", "all"] as const,
+  cardsRoot: ["knowledgeCards"] as const,
+  card: (id: string) => ["knowledgeCards", "card", id] as const,
+  summary: ["knowledgeCards", "summary"] as const,
+  tags: ["knowledgeTags"] as const,
+  projects: ["knowledgeProjects"] as const,
+  savedViews: ["knowledgeSavedViews"] as const,
+  search: (scope: "articles" | "cards", query: string, page = 1, pageSize = 24) => ["knowledgeSearch", scope, { query, page, pageSize }] as const,
+};
+
+export const reviewQueryKeys = {
+  settings: ["reviewSettings"] as const,
+  preview: (cardId: string) => ["reviewPreview", cardId] as const,
+};
+
 function mapKnowledgeCard(card: KnowledgeCard): KnowledgeCard {
   return { ...card, tags: readTagList(card.tags), projects: Array.isArray(card.projects) ? card.projects : [] };
 }
 
-export function listKnowledgeCards(filters: { card_type?: string; status?: string; q?: string; usage?: "never_used"; tag?: string; project?: string } = {}) {
+export function listKnowledgeCards(filters: { card_type?: string; status?: string; q?: string; usage?: "never_used"; tag?: string; project?: string; quality?: KnowledgeCardQuality } = {}, options?: ReadRequestOptions) {
   const params = new URLSearchParams();
   if (filters.card_type) params.set("card_type", filters.card_type);
   if (filters.status) params.set("status", filters.status);
@@ -271,27 +337,105 @@ export function listKnowledgeCards(filters: { card_type?: string; status?: strin
   if (filters.usage) params.set("usage", filters.usage);
   if (filters.tag) params.set("tag", filters.tag);
   if (filters.project) params.set("project", filters.project);
+  if (filters.quality) params.set("quality", filters.quality);
   const query = params.toString();
-  return httpRequest<KnowledgeCard[]>(`/knowledge-cards${query ? `?${query}` : ""}`).then((items) => items.map(mapKnowledgeCard));
+  return httpRequest<KnowledgeCard[]>(`/knowledge-cards${query ? `?${query}` : ""}`, options).then((items) => items.map(mapKnowledgeCard));
 }
 
-export function listKnowledgeTags() {
-  return httpRequest<KnowledgeTagCount[]>("/knowledge-cards/tags");
+export function getKnowledgeCard(id: string, options?: ReadRequestOptions) {
+  return httpRequest<KnowledgeCard>(`/knowledge-cards/${encodeURIComponent(id)}`, options).then(mapKnowledgeCard);
 }
 
-export function listKnowledgeProjects() {
-  return httpRequest<KnowledgeTagCount[]>("/knowledge-cards/projects");
+export function getKnowledgeSummary(options?: ReadRequestOptions) {
+  return httpRequest<KnowledgeSummary>("/knowledge-cards/summary", options);
+}
+
+export function listDeletedKnowledgeCards(options?: ReadRequestOptions) {
+  return httpRequest<KnowledgeCard[]>("/knowledge-cards/trash", options).then((items) => items.map(mapKnowledgeCard));
+}
+
+export function queryKnowledgeCards(filters: {
+  card_type?: string;
+  status?: string;
+  q?: string;
+  usage?: "never_used";
+  tag?: string;
+  project?: string;
+  quality?: KnowledgeCardQuality;
+  sort?: "updated" | "created" | "usage" | "review";
+  page?: number;
+  page_size?: number;
+} = {}, options?: ReadRequestOptions) {
+  const params = new URLSearchParams();
+  if (filters.card_type) params.set("card_type", filters.card_type);
+  if (filters.status) params.set("status", filters.status);
+  if (filters.q) params.set("q", filters.q);
+  if (filters.usage) params.set("usage", filters.usage);
+  if (filters.tag) params.set("tag", filters.tag);
+  if (filters.project) params.set("project", filters.project);
+  if (filters.quality) params.set("quality", filters.quality);
+  if (filters.sort) params.set("sort", filters.sort);
+  if (filters.page) params.set("page", String(filters.page));
+  if (filters.page_size) params.set("page_size", String(filters.page_size));
+  const query = params.toString();
+  return httpRequest<KnowledgeCardsPage>(`/knowledge-cards/query${query ? `?${query}` : ""}`, options).then((result) => ({
+    ...result,
+    cards: result.cards.map(mapKnowledgeCard),
+  }));
+}
+
+export function listKnowledgeTags(options?: ReadRequestOptions) {
+  return httpRequest<KnowledgeTagCount[]>("/knowledge-cards/tags", options);
+}
+
+export function listKnowledgeProjects(options?: ReadRequestOptions) {
+  return httpRequest<Array<KnowledgeProject | { tag: string; count: number }>>("/knowledge-cards/projects", options).then((items) =>
+    items.map((item) => "name" in item ? item : { name: item.tag, count: item.count })
+  );
+}
+
+export function createKnowledgeProject(name: string) {
+  return httpRequest<KnowledgeProject>("/knowledge-cards/projects", {
+    method: "POST",
+    body: JSON.stringify({ name }),
+  });
+}
+
+export function listKnowledgeSavedViews(options?: ReadRequestOptions) {
+  return httpRequest<KnowledgeSavedView[]>("/knowledge-cards/views", options);
+}
+
+export function createKnowledgeSavedView(name: string, filters: KnowledgeViewFilters) {
+  return httpRequest<KnowledgeSavedView>("/knowledge-cards/views", {
+    method: "POST",
+    body: JSON.stringify({ name, filters }),
+  });
+}
+
+export function updateKnowledgeSavedView(id: string, payload: Partial<{ name: string; filters: KnowledgeViewFilters }>) {
+  return httpRequest<KnowledgeSavedView>(`/knowledge-cards/views/${encodeURIComponent(id)}`, {
+    method: "PUT",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function deleteKnowledgeSavedView(id: string) {
+  return httpRequest<void>(`/knowledge-cards/views/${encodeURIComponent(id)}`, { method: "DELETE" });
 }
 
 export function batchKnowledgeCards(payload: {
   ids: string[];
-  action: "confirm" | "add_tags" | "add_projects" | "delete";
+  action: "confirm" | "set_status" | "add_tags" | "remove_tags" | "add_projects" | "set_projects" | "remove_projects" | "delete" | "restore";
   values?: string[];
 }) {
   return httpRequest<{ updated: number }>("/knowledge-cards/batch", {
     method: "POST",
     body: JSON.stringify(payload),
   });
+}
+
+export function restoreKnowledgeCards(ids: string[]) {
+  return batchKnowledgeCards({ ids, action: "restore" });
 }
 
 export function createKnowledgeCard(payload: {
@@ -349,6 +493,8 @@ export type ReviewGrade = "again" | "hard" | "good" | "easy";
 
 export interface DueReviewStats {
   due: number;
+  due_reviews: number;
+  new_cards: number;
   reviewed_today: number;
   total_confirmed: number;
 }
@@ -356,6 +502,17 @@ export interface DueReviewStats {
 export interface DueReviewResponse {
   cards: KnowledgeCard[];
   stats: DueReviewStats;
+}
+
+export interface ReviewSettings {
+  new_cards_per_day: number;
+  session_limit: number;
+}
+
+export interface ReviewGradePreview {
+  grade: ReviewGrade;
+  interval_days: number;
+  next_review_at: string;
 }
 
 export interface DailyReviewCount {
@@ -388,6 +545,17 @@ export function getReviewStats() {
   return httpRequest<ReviewStatsResponse>("/review/stats");
 }
 
+export function getReviewSettings() {
+  return httpRequest<ReviewSettings>("/review/settings");
+}
+
+export function updateReviewSettings(payload: ReviewSettings) {
+  return httpRequest<ReviewSettings>("/review/settings", {
+    method: "PUT",
+    body: JSON.stringify(payload),
+  });
+}
+
 export function getReviewHistory(cardId: string) {
   return httpRequest<ReviewHistoryEntry[]>(`/review/history/${encodeURIComponent(cardId)}`);
 }
@@ -396,11 +564,16 @@ export function getReviewHeatmap(days = 365) {
   return httpRequest<DailyReviewCount[]>(`/review/heatmap?days=${days}`);
 }
 
-export function getDueReviewCards(limit = 20) {
-  return httpRequest<DueReviewResponse>(`/review/due?limit=${limit}`).then((res) => ({
+export function getDueReviewCards(limit?: number) {
+  const query = typeof limit === "number" ? `?limit=${limit}` : "";
+  return httpRequest<DueReviewResponse>(`/review/due${query}`).then((res) => ({
     ...res,
     cards: res.cards.map(mapKnowledgeCard),
   }));
+}
+
+export function getReviewPreview(cardId: string, options?: ReadRequestOptions) {
+  return httpRequest<ReviewGradePreview[]>(`/review/${encodeURIComponent(cardId)}/preview`, options);
 }
 
 export function gradeReviewCard(id: string, grade: ReviewGrade) {
