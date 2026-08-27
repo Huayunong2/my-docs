@@ -1,4 +1,4 @@
-use crate::db::Database;
+use crate::db::{Database, GradeUpdate};
 use crate::helpers::format_date;
 use crate::models::{
     DueQuery, DueReviewResponse, GradeCardPayload, HeatmapQuery, KnowledgeCard, ReviewGradePreview,
@@ -230,15 +230,15 @@ pub(crate) async fn grade_card(
         today_date,
     );
     db.knowledge()
-        .apply_grade(
-            &id,
-            &grade,
-            outcome.stability,
-            outcome.difficulty,
-            outcome.interval_days,
-            &outcome.next_review_at,
-            &today,
-        )
+        .apply_grade(GradeUpdate {
+            id: &id,
+            grade: &grade,
+            stability: outcome.stability,
+            difficulty: outcome.difficulty,
+            interval_days: outcome.interval_days,
+            next_review_at: &outcome.next_review_at,
+            today: &today,
+        })
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
         .map(Json)
         .ok_or((StatusCode::NOT_FOUND, "Knowledge card not found".into()))

@@ -1,5 +1,5 @@
 use crate::ai::call_ai;
-use crate::db::{Database, KnowledgeCardDraft};
+use crate::db::{Database, KnowledgeCardDraft, KnowledgePageQuery};
 use crate::helpers::*;
 use crate::models::*;
 use axum::extract::{Path, Query, State};
@@ -281,18 +281,18 @@ pub(crate) async fn query_cards(
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     let (cards, total) = db
         .knowledge()
-        .query_page(
-            q.q.as_deref().unwrap_or_default(),
-            q.card_type.as_deref(),
-            q.status.as_deref(),
-            q.usage.as_deref(),
-            q.tag.as_deref(),
-            q.project.as_deref(),
-            q.quality.as_deref(),
+        .query_page(KnowledgePageQuery {
+            query: q.q.as_deref().unwrap_or_default(),
+            card_type: q.card_type.as_deref(),
+            status: q.status.as_deref(),
+            usage: q.usage.as_deref(),
+            tag: q.tag.as_deref(),
+            project: q.project.as_deref(),
+            quality: q.quality.as_deref(),
             sort,
             page,
             page_size,
-        )
+        })
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     Ok(Json(KnowledgeCardsPage {
         cards,
