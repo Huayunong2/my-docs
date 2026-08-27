@@ -58,6 +58,31 @@ pub(crate) struct KnowledgePersistence<'a> {
     conn: &'a mut Connection,
 }
 
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct KnowledgePageQuery<'a> {
+    pub(crate) query: &'a str,
+    pub(crate) card_type: Option<&'a str>,
+    pub(crate) status: Option<&'a str>,
+    pub(crate) usage: Option<&'a str>,
+    pub(crate) tag: Option<&'a str>,
+    pub(crate) project: Option<&'a str>,
+    pub(crate) quality: Option<&'a str>,
+    pub(crate) sort: &'a str,
+    pub(crate) page: i64,
+    pub(crate) page_size: i64,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct GradeUpdate<'a> {
+    pub(crate) id: &'a str,
+    pub(crate) grade: &'a str,
+    pub(crate) stability: f64,
+    pub(crate) difficulty: f64,
+    pub(crate) interval_days: f64,
+    pub(crate) next_review_at: &'a str,
+    pub(crate) today: &'a str,
+}
+
 #[derive(Debug, Clone)]
 pub(crate) struct ReviewDraft {
     pub(crate) kind: String,
@@ -1723,17 +1748,20 @@ impl KnowledgePersistence<'_> {
     /// 服务端全文查询的分页入口。旧的 list() 保留给复习/关联等需要完整集合的内部流程。
     pub(crate) fn query_page(
         &mut self,
-        query: &str,
-        card_type: Option<&str>,
-        status: Option<&str>,
-        usage: Option<&str>,
-        tag: Option<&str>,
-        project: Option<&str>,
-        quality: Option<&str>,
-        sort: &str,
-        page: i64,
-        page_size: i64,
+        request: KnowledgePageQuery<'_>,
     ) -> Result<(Vec<KnowledgeCard>, i64)> {
+        let KnowledgePageQuery {
+            query,
+            card_type,
+            status,
+            usage,
+            tag,
+            project,
+            quality,
+            sort,
+            page,
+            page_size,
+        } = request;
         let page = page.max(1);
         let page_size = page_size.clamp(1, 100);
         let mut conditions = vec!["c.deleted_at=''".to_string()];
@@ -2002,16 +2030,16 @@ impl KnowledgePersistence<'_> {
         })
     }
 
-    pub(crate) fn apply_grade(
-        &mut self,
-        id: &str,
-        grade: &str,
-        stability: f64,
-        difficulty: f64,
-        interval_days: f64,
-        next_review_at: &str,
-        today: &str,
-    ) -> Result<Option<KnowledgeCard>> {
+    pub(crate) fn apply_grade(&mut self, update: GradeUpdate<'_>) -> Result<Option<KnowledgeCard>> {
+        let GradeUpdate {
+            id,
+            grade,
+            stability,
+            difficulty,
+            interval_days,
+            next_review_at,
+            today,
+        } = update;
         let tx = self.conn.transaction()?;
         let updated = tx.execute(
             "UPDATE knowledge_cards SET review_interval_days=?1, review_ease=?2,
