@@ -67,3 +67,19 @@ Thumbs.db
 
 # Local helper scripts generated ad hoc
 gen_icons.py
+
+# Internal research and agent workspace metadata
+# These files are useful during local development but are not part of the
+# distributable open-source project.
+docs/
+.agents/
+.codex/
+.impeccable/
+
+# Test, type-checker, and local tooling output
+coverage/
+.nyc_output/
+playwright-report/
+test-results/
+*.tsbuildinfo
+.eslintcache
