@@ -13,6 +13,7 @@ import {
   ChevronDown,
   FileText,
   MoreHorizontal,
+  Monitor,
   Moon,
   NotebookPen,
   PanelLeftClose,
@@ -25,6 +26,7 @@ import {
 import type { LucideIcon } from "lucide-react";
 import type { Page } from "../App";
 import { readLocalStorage, writeLocalStorage } from "../lib/storage";
+import { themeModeLabels, themeModes, type ThemeMode } from "../lib/theme";
 
 type NavItem = { id: Page; label: string; icon: LucideIcon; description?: string };
 
@@ -77,16 +79,24 @@ const mobileMoreNav: NavItem[] = [
   { id: "settings", label: "设置", icon: Settings, description: "连接与外观" },
 ];
 
+const themeIcons: Record<ThemeMode, LucideIcon> = {
+  system: Monitor,
+  light: Sun,
+  dark: Moon,
+};
+
 interface SidebarProps {
   page: Page;
   onPrefetch: (p: Page) => void;
   onOpenPalette: () => void;
   dark: boolean;
   onToggleDark: () => void;
+  themeMode: ThemeMode;
+  onChangeThemeMode: (mode: ThemeMode) => void;
   dueCount?: number | null;
 }
 
-export default function Sidebar({ page, onPrefetch, onOpenPalette, dark, onToggleDark, dueCount }: SidebarProps) {
+export default function Sidebar({ page, onPrefetch, onOpenPalette, dark, onToggleDark, themeMode, onChangeThemeMode, dueCount }: SidebarProps) {
   const [moreOpen, setMoreOpen] = useState(false);
   const [collapsed, setCollapsed] = useState(() => typeof window !== "undefined" && readLocalStorage("sidebar-collapsed") === "1");
   const secondaryActive = mobileMoreNav.some((item) => item.id === page);
@@ -123,6 +133,8 @@ export default function Sidebar({ page, onPrefetch, onOpenPalette, dark, onToggl
           onPrefetch={onPrefetch}
           dark={dark}
           onToggleDark={onToggleDark}
+          themeMode={themeMode}
+          onChangeThemeMode={onChangeThemeMode}
           onOpenPalette={onOpenPalette}
           dueCount={dueCount}
           collapsed={collapsed}
@@ -163,7 +175,7 @@ export default function Sidebar({ page, onPrefetch, onOpenPalette, dark, onToggl
 
         <Dialog.Portal>
           <Dialog.Overlay className="ui-overlay fixed inset-0 z-[70] backdrop-blur-[2px] data-[state=open]:animate-fade-in" />
-          <Dialog.Content className="ui-modal-surface fixed inset-x-0 bottom-0 z-[71] max-h-[min(82dvh,560px)] overflow-y-auto rounded-t-2xl border-t px-4 pb-[calc(1rem+env(safe-area-inset-bottom,0px))] outline-hidden data-[state=open]:animate-slide-up">
+          <Dialog.Content className="ui-modal-surface fixed inset-x-0 bottom-0 z-[71] max-h-[min(94dvh,640px)] overflow-y-auto rounded-t-2xl border-t px-4 pb-[calc(1rem+env(safe-area-inset-bottom,0px))] outline-hidden data-[state=open]:animate-slide-up">
             <div className="ui-sheet-grabber mx-auto mt-2 h-1 w-10 rounded-full" aria-hidden="true" />
             <div className="flex items-start justify-between gap-4 py-4">
               <div>
@@ -190,16 +202,27 @@ export default function Sidebar({ page, onPrefetch, onOpenPalette, dark, onToggl
               ))}
             </nav>
             <div className="ui-sidebar-divider mt-4 border-t pt-3">
-              <button
-                type="button"
-                onClick={onToggleDark}
-                className="ui-sidebar-theme flex min-h-11 w-full items-center gap-3 rounded-xl px-3 text-sm font-medium text-[var(--ui-text-muted)] transition-colors"
-              >
-                <span className="ui-mobile-more-icon flex h-8 w-8 items-center justify-center rounded-lg">
-                  {dark ? <Sun size={16} /> : <Moon size={16} />}
-                </span>
-                <span className="flex-1 text-left">{dark ? "切换到浅色模式" : "切换到深色模式"}</span>
-              </button>
+              <div className="mb-2 flex items-center justify-between px-1">
+                <span className="ui-section-kicker">显示模式</span>
+                <span className="text-[11px] text-[var(--ui-text-muted)]">{themeModeLabels[themeMode]}</span>
+              </div>
+              <div className="ui-mobile-theme-switcher grid grid-cols-3 gap-1 rounded-xl p-1" role="group" aria-label="显示模式">
+                {themeModes.map((mode) => {
+                  const Icon = themeIcons[mode];
+                  return (
+                    <button
+                      key={mode}
+                      type="button"
+                      onClick={() => onChangeThemeMode(mode)}
+                      aria-pressed={themeMode === mode}
+                      className={["ui-mobile-theme-option flex min-h-10 items-center justify-center gap-1 rounded-lg px-1.5 text-xs font-semibold transition-colors", themeMode === mode ? "ui-theme-choice-active" : "ui-theme-choice"].join(" ")}
+                    >
+                      <Icon size={14} aria-hidden="true" />
+                      <span>{themeModeLabels[mode]}</span>
+                    </button>
+                  );
+                })}
+              </div>
             </div>
           </Dialog.Content>
         </Dialog.Portal>
