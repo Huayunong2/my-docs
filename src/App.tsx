@@ -7,9 +7,10 @@ import Sidebar from "./components/Sidebar";
 import CommandPalette from "./components/CommandPalette";
 import * as api from "./lib/api";
 import { readLocalStorage, writeLocalStorage } from "./lib/storage";
+import { nextExplicitThemeMode, resolveDarkTheme, themeColorForMode, type ThemeMode } from "./lib/theme";
 
 export type Page = "today" | "history" | "archive" | "search" | "stats" | "reviews" | "review" | "knowledge" | "settings";
-export type ThemeMode = "system" | "light" | "dark";
+export type { ThemeMode } from "./lib/theme";
 
 const pageLoaders: Partial<Record<Page, () => Promise<unknown>>> = {
   today: () => import("./components/TodayPage"),
@@ -107,7 +108,7 @@ export function AppShell() {
     return "";
   });
 
-  const dark = themeMode === "dark" || (themeMode === "system" && systemDark);
+  const dark = resolveDarkTheme(themeMode, systemDark);
 
   // 侧栏「今日到期」角标：useQuery 缓存 + 每分钟自动刷新；失败时静默隐藏。
   const { data: dueCount } = useQuery({
@@ -135,7 +136,7 @@ export function AppShell() {
     const root = document.documentElement;
     root.classList.toggle("dark", dark);
     root.style.colorScheme = dark ? "dark" : "light";
-    document.querySelector('meta[name="theme-color"]')?.setAttribute("content", dark ? "#11151b" : "#6366f1");
+    document.querySelector('meta[name="theme-color"]')?.setAttribute("content", themeColorForMode(dark));
   }, [dark]);
 
   const toggleZen = useCallback(() => setZen((value) => !value), []);
@@ -143,7 +144,7 @@ export function AppShell() {
     setThemeMode(mode);
     if (typeof window !== "undefined") writeLocalStorage("themeMode", mode);
   }, []);
-  const toggleDark = useCallback(() => changeThemeMode(dark ? "light" : "dark"), [changeThemeMode, dark]);
+  const toggleDark = useCallback(() => changeThemeMode(nextExplicitThemeMode(dark)), [changeThemeMode, dark]);
   const openPalette = useCallback(() => setPaletteOpen(true), []);
   const changeAccentTheme = useCallback((theme: string) => {
     setAccentTheme(theme);
@@ -297,6 +298,8 @@ export function AppShell() {
                 onOpenPalette={openPalette}
                 dark={dark}
                 onToggleDark={toggleDark}
+                themeMode={themeMode}
+                onChangeThemeMode={changeThemeMode}
                 dueCount={dueCount}
               />
             )}

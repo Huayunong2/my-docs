@@ -2,7 +2,6 @@ import { useRef, useState } from "react";
 import { motion } from "framer-motion";
 import { Bot, DatabaseBackup, Download, Monitor, Moon, Palette, Plug, Settings, SlidersHorizontal, Sun } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
-import type { ThemeMode } from "../App";
 import AIPanel from "./settings/AIPanel";
 import ConnectionPanel from "./settings/ConnectionPanel";
 import BackupPanel from "./settings/BackupPanel";
@@ -10,6 +9,7 @@ import ExportPanel from "./settings/ExportPanel";
 import ReviewSettingsPanel from "./settings/ReviewSettingsPanel";
 import PageHeader from "./ui/PageHeader";
 import { readSessionStorage, removeSessionStorage } from "../lib/storage";
+import { themeModeLabels, themeModes, type ThemeMode } from "../lib/theme";
 
 type Tab = "connect" | "review" | "ai" | "backup" | "export" | "appearance";
 
@@ -42,11 +42,17 @@ const THEMES = [
   { id: "cyan", name: "青铜青", color: "#187e82" },
 ];
 
+const themeIcons: Record<ThemeMode, LucideIcon> = {
+  system: Monitor,
+  light: Sun,
+  dark: Moon,
+};
+
 export default function SettingsPage({ accentTheme, onChangeAccentTheme, themeMode, onChangeThemeMode }: SettingsPageProps) {
   const [tab, setTab] = useState<Tab>(initialSettingsTab);
   const contentRef = useRef<HTMLDivElement>(null);
   const labels: Record<Tab, string> = { connect: "连接", review: "复习", ai: "AI", backup: "备份", export: "导出", appearance: "外观" };
-  const icons: Record<Tab, LucideIcon> = { connect: Plug, review: SlidersHorizontal, ai: Bot, backup: DatabaseBackup, export: Download, appearance: Palette };
+  const tabIcons: Record<Tab, LucideIcon> = { connect: Plug, review: SlidersHorizontal, ai: Bot, backup: DatabaseBackup, export: Download, appearance: Palette };
   const switchTab = (next: Tab) => {
     setTab(next);
     requestAnimationFrame(() => {
@@ -65,7 +71,7 @@ export default function SettingsPage({ accentTheme, onChangeAccentTheme, themeMo
         <div className="settings-tabs ui-segment grid w-full grid-cols-3 gap-1 sm:flex sm:w-fit sm:overflow-visible">
           {(Object.keys(labels) as Tab[]).map((id) => (
             (() => {
-              const Icon = icons[id];
+              const Icon = tabIcons[id];
               return (
                 <button
                   key={id}
@@ -93,21 +99,20 @@ export default function SettingsPage({ accentTheme, onChangeAccentTheme, themeMo
               <h3 className="text-sm font-semibold text-[var(--ui-text)]">显示模式</h3>
               <p className="mt-1 text-xs leading-5 text-[var(--ui-text-subtle)]">选择跟随系统、浅色或深色，偏好会保存在当前设备。</p>
               <div className="mt-4 grid grid-cols-3 gap-2" role="group" aria-label="显示模式">
-                {([
-                  ["system", "跟随系统", Monitor],
-                  ["light", "浅色", Sun],
-                  ["dark", "深色", Moon],
-                ] as const).map(([id, label, Icon]) => (
-                  <button
-                    key={id}
-                    type="button"
-                    onClick={() => onChangeThemeMode(id)}
-                    aria-pressed={themeMode === id}
-                    className={`flex min-h-11 items-center justify-center gap-1.5 rounded-xl px-2 text-xs font-semibold transition-colors ${themeMode === id ? "ui-status-accent shadow-xs" : "ui-theme-choice"}`}
-                  >
-                    <Icon size={15} /> {label}
-                  </button>
-                ))}
+                {themeModes.map((id) => {
+                  const Icon = themeIcons[id];
+                  return (
+                    <button
+                      key={id}
+                      type="button"
+                      onClick={() => onChangeThemeMode(id)}
+                      aria-pressed={themeMode === id}
+                      className={`flex min-h-11 items-center justify-center gap-1.5 rounded-xl px-2 text-xs font-semibold transition-colors ${themeMode === id ? "ui-status-accent shadow-xs" : "ui-theme-choice"}`}
+                    >
+                      <Icon size={15} /> {themeModeLabels[id]}
+                    </button>
+                  );
+                })}
               </div>
             </div>
 
