@@ -39,7 +39,7 @@ const TASKS: Array<{
   icon: LucideIcon;
 }> = [
   { id: "daily_summary", label: "每日总结", description: "整理当天记录，生成可复习的简短总结", icon: CalendarDays },
-  { id: "knowledge_extract", label: "知识卡片提取", description: "从记录或复盘中提炼知识卡片草稿", icon: BookOpen },
+  { id: "knowledge_extract", label: "卡片导入 / 知识提取", description: "从文档、记录或复盘中提炼知识卡片草稿", icon: BookOpen },
   { id: "weekly_review", label: "周复盘", description: "归纳一周的主题、事实与可复用沉淀", icon: BarChart3 },
   { id: "monthly_review", label: "月复盘", description: "梳理跨周脉络，提炼长期复习材料", icon: FileText },
 ];
@@ -243,7 +243,7 @@ export default function AIRoutingPanel() {
           <span className="ui-status-accent mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg">
             <GitBranch size={16} />
           </span>
-          <SectionTitle desc="按任务选择模型；模型档案共用上方的 API 地址和 API Key。">模型路由</SectionTitle>
+          <SectionTitle desc="按任务选择模型；卡片导入、每日总结和周/月复盘分别使用各自路由，共用上方的 API 地址和 API Key。">模型路由</SectionTitle>
         </div>
         {routing && (
           <span className="ui-status-muted inline-flex w-fit items-center rounded-full px-2.5 py-1 text-[11px] font-semibold">
@@ -281,7 +281,7 @@ export default function AIRoutingPanel() {
                 const Icon = task.icon;
                 const selected = routing.routes[task.id] || routing.fallbackProfile;
                 return (
-                  <div key={task.id} className="grid gap-3 rounded-xl border border-[var(--ui-border)] bg-[var(--ui-surface)] p-3 sm:grid-cols-[minmax(0,1fr)_220px] sm:items-center">
+                  <div key={task.id} className="grid gap-3 rounded-xl border border-[var(--ui-border)] bg-[var(--ui-surface)] p-3 sm:grid-cols-[minmax(0,1fr)_minmax(240px,34%)] sm:items-start">
                     <div className="flex min-w-0 items-start gap-2.5">
                       <span className="ui-status-muted mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-lg">
                         <Icon size={14} />
@@ -291,32 +291,38 @@ export default function AIRoutingPanel() {
                         <p className="mt-0.5 text-[11px] leading-4 text-[var(--ui-text-subtle)]">{task.description}</p>
                       </div>
                     </div>
-                    <SelectField
-                      id={`ai-route-${task.id}`}
-                      ariaLabel={`${task.label}使用的模型档案`}
-                      value={selected}
-                      onChange={(value) => updateRoute(task.id, value)}
-                      options={routing.profiles.map((profile) => ({ value: profile.id, label: `${profile.name || "未命名档案"} · ${profile.model}` }))}
-                    />
+                    <div className="min-w-0">
+                      <span className="mb-1.5 block text-[11px] font-medium text-[var(--ui-text-subtle)]">使用模型档案</span>
+                      <SelectField
+                        id={`ai-route-${task.id}`}
+                        ariaLabel={`${task.label}使用的模型档案`}
+                        value={selected}
+                        onChange={(value) => updateRoute(task.id, value)}
+                        options={routing.profiles.map((profile) => ({ value: profile.id, label: `${profile.name || "未命名档案"} · ${profile.model}` }))}
+                      />
+                    </div>
                   </div>
                 );
               })}
             </div>
-            <div className="mt-3 grid gap-2 border-t border-[var(--ui-border)] pt-3 sm:grid-cols-[minmax(0,1fr)_220px] sm:items-center">
+            <div className="mt-3 grid gap-2 border-t border-[var(--ui-border)] pt-3 sm:grid-cols-[minmax(0,1fr)_minmax(240px,34%)] sm:items-start">
               <div>
                 <p className="text-xs font-semibold text-[var(--ui-text)]">默认模型档案</p>
                 <p className="mt-0.5 text-[11px] leading-4 text-[var(--ui-text-subtle)]">用于未配置的任务，以及后续新增的 AI 功能。</p>
               </div>
-              <SelectField
-                id="ai-fallback-profile"
-                ariaLabel="默认模型档案"
-                value={routing.fallbackProfile}
-                onChange={(value) => {
-                  setRouting((current) => current && { ...current, fallbackProfile: value });
-                  setMessage("");
-                }}
-                options={routing.profiles.map((profile) => ({ value: profile.id, label: `${profile.name || "未命名档案"} · ${profile.model}` }))}
-              />
+              <div className="min-w-0">
+                <span className="mb-1.5 block text-[11px] font-medium text-[var(--ui-text-subtle)]">默认使用</span>
+                <SelectField
+                  id="ai-fallback-profile"
+                  ariaLabel="默认模型档案"
+                  value={routing.fallbackProfile}
+                  onChange={(value) => {
+                    setRouting((current) => current && { ...current, fallbackProfile: value });
+                    setMessage("");
+                  }}
+                  options={routing.profiles.map((profile) => ({ value: profile.id, label: `${profile.name || "未命名档案"} · ${profile.model}` }))}
+                />
+              </div>
             </div>
           </div>
 
@@ -517,7 +523,7 @@ function SelectField({
 }) {
   return (
     <Select value={value} onValueChange={onChange}>
-      <SelectTrigger id={id} aria-label={ariaLabel} className="h-10 min-w-0 text-xs font-medium">
+      <SelectTrigger id={id} aria-label={ariaLabel} className="h-10 w-full min-w-0 text-xs font-medium">
         <SelectValue />
       </SelectTrigger>
       <SelectContent className="max-w-[min(420px,calc(100vw-2rem))]">

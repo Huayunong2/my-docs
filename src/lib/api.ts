@@ -429,35 +429,16 @@ export type KnowledgeCardQuality = "missing_source" | "missing_project" | "missi
 
 export type KnowledgeCardSort = "updated" | "created" | "usage" | "review";
 
-export interface KnowledgeViewFilters {
-  q?: string;
-  project?: string;
-  tag?: string;
-  status?: KnowledgeCardStatus | "all";
-  type?: KnowledgeCardType;
-  usage?: "never_used";
-  sort?: KnowledgeCardSort;
-  quality?: KnowledgeCardQuality;
-}
-
-export interface KnowledgeSavedView {
-  id: string;
-  name: string;
-  filters: KnowledgeViewFilters;
-  created_at: string;
-  updated_at: string;
-}
-
 export const knowledgeQueryKeys = {
   cards: (filters: Record<string, string>) => ["knowledgeCards", "filtered", filters] as const,
   allCards: ["knowledgeCards", "all"] as const,
   cardsRoot: ["knowledgeCards"] as const,
   card: (id: string) => ["knowledgeCards", "card", id] as const,
-  summary: ["knowledgeCards", "summary"] as const,
+  summaryRoot: ["knowledgeCards", "summary"] as const,
+  summary: (project = "") => ["knowledgeCards", "summary", project || "all"] as const,
   tags: ["knowledgeTags"] as const,
   projects: ["knowledgeProjects"] as const,
   spaces: ["knowledgeProjects"] as const,
-  savedViews: ["knowledgeSavedViews"] as const,
   reviewItems: (cardId: string) => ["knowledgeReviewItems", cardId] as const,
   search: (scope: "articles" | "cards", query: string, page = 1, pageSize = 24) => ["knowledgeSearch", scope, { query, page, pageSize }] as const,
 };
@@ -523,8 +504,11 @@ export function getKnowledgeCard(id: string, options?: ReadRequestOptions) {
   return httpRequest<KnowledgeCard>(`/knowledge-cards/${encodeURIComponent(id)}`, options).then(mapKnowledgeCard);
 }
 
-export function getKnowledgeSummary(options?: ReadRequestOptions) {
-  return httpRequest<KnowledgeSummary>("/knowledge-cards/summary", options);
+export function getKnowledgeSummary(project = "", options?: ReadRequestOptions) {
+  const params = new URLSearchParams();
+  if (project.trim()) params.set("project", project.trim());
+  const query = params.toString();
+  return httpRequest<KnowledgeSummary>(`/knowledge-cards/summary${query ? `?${query}` : ""}`, options);
 }
 
 export function listDeletedKnowledgeCards(options?: ReadRequestOptions) {
@@ -576,28 +560,6 @@ export function createKnowledgeProject(name: string) {
     method: "POST",
     body: JSON.stringify({ name }),
   }).then(mapSpace);
-}
-
-export function listKnowledgeSavedViews(options?: ReadRequestOptions) {
-  return httpRequest<KnowledgeSavedView[]>("/knowledge-cards/views", options);
-}
-
-export function createKnowledgeSavedView(name: string, filters: KnowledgeViewFilters) {
-  return httpRequest<KnowledgeSavedView>("/knowledge-cards/views", {
-    method: "POST",
-    body: JSON.stringify({ name, filters }),
-  });
-}
-
-export function updateKnowledgeSavedView(id: string, payload: Partial<{ name: string; filters: KnowledgeViewFilters }>) {
-  return httpRequest<KnowledgeSavedView>(`/knowledge-cards/views/${encodeURIComponent(id)}`, {
-    method: "PUT",
-    body: JSON.stringify(payload),
-  });
-}
-
-export function deleteKnowledgeSavedView(id: string) {
-  return httpRequest<void>(`/knowledge-cards/views/${encodeURIComponent(id)}`, { method: "DELETE" });
 }
 
 function mapSpace(space: KnowledgeProject): KnowledgeProject {

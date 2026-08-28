@@ -163,4 +163,25 @@ describe("review scheduling API", () => {
     expect(summary.total).toBe(3);
     expect(fetchMock.mock.calls[1][0]).toBe("https://example.test/api/knowledge-cards/summary");
   });
+
+  it("scopes a knowledge summary to the selected space", async () => {
+    vi.stubGlobal("window", { __TAURI_INTERNALS__: {} });
+    vi.stubGlobal("localStorage", storage({ server_url: "https://example.test/api" }));
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({
+      total: 1,
+      draft: 0,
+      confirmed: 1,
+      outdated: 0,
+      missing_source: 0,
+      missing_project: 0,
+      missing_tags: 0,
+      short_content: 0,
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const summary = await getKnowledgeSummary("C++");
+
+    expect(summary.total).toBe(1);
+    expect(fetchMock.mock.calls[0][0]).toBe("https://example.test/api/knowledge-cards/summary?project=C%2B%2B");
+  });
 });

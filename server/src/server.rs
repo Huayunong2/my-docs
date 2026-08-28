@@ -299,14 +299,6 @@ fn build_router(db: Database) -> Router {
             axum::routing::get(knowledge::list_projects).post(knowledge::create_project),
         )
         .route(
-            "/knowledge-cards/views",
-            axum::routing::get(knowledge::list_saved_views).post(knowledge::create_saved_view),
-        )
-        .route(
-            "/knowledge-cards/views/:id",
-            axum::routing::put(knowledge::update_saved_view).delete(knowledge::delete_saved_view),
-        )
-        .route(
             "/spaces",
             axum::routing::get(knowledge::list_spaces).post(knowledge::create_project),
         )

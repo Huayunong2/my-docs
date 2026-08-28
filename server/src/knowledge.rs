@@ -8,7 +8,8 @@ use crate::models::*;
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::Json;
-use serde_json::{Map, Value};
+use serde::Deserialize;
+use serde_json::Value;
 use std::collections::{BTreeMap, HashMap};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
@@ -27,6 +28,11 @@ const AI_IMPORT_MAX_RETAINED_JOBS: usize = 32;
 const AI_IMPORT_MAX_RETAINED_SOURCE_BYTES: usize = 64 * 1024 * 1024;
 const MAX_BATCH_CARD_IDS: usize = 500;
 const MAX_BATCH_CARD_ID_CHARS: usize = 128;
+
+#[derive(Debug, Deserialize)]
+pub(crate) struct KnowledgeSummaryQuery {
+    pub(crate) project: Option<String>,
+}
 
 #[derive(Debug)]
 struct AnalyzeJobChunkState {
@@ -91,46 +97,6 @@ fn valid_card_quality(value: &str) -> bool {
         value,
         "missing_source" | "missing_project" | "missing_tags" | "short_content"
     )
-}
-
-fn normalize_saved_view_filters(value: &Value) -> Value {
-    let source = value.as_object();
-    let mut filters = Map::new();
-    for (key, max_len) in [("q", 200usize), ("project", 120), ("tag", 120)] {
-        if let Some(raw) = source
-            .and_then(|object| object.get(key))
-            .and_then(Value::as_str)
-        {
-            let normalized = raw.trim().chars().take(max_len).collect::<String>();
-            if !normalized.is_empty() {
-                filters.insert(key.to_string(), Value::String(normalized));
-            }
-        }
-    }
-    for (key, valid) in [
-        ("status", valid_card_status_filter as fn(&str) -> bool),
-        ("type", valid_card_type as fn(&str) -> bool),
-        ("sort", valid_card_sort as fn(&str) -> bool),
-        ("quality", valid_card_quality as fn(&str) -> bool),
-    ] {
-        if let Some(raw) = source
-            .and_then(|object| object.get(key))
-            .and_then(Value::as_str)
-            .map(str::trim)
-        {
-            if valid(raw) {
-                filters.insert(key.to_string(), Value::String(raw.to_string()));
-            }
-        }
-    }
-    if source
-        .and_then(|object| object.get("usage"))
-        .and_then(Value::as_str)
-        .is_some_and(|usage| usage == "never_used")
-    {
-        filters.insert("usage".into(), Value::String("never_used".into()));
-    }
-    Value::Object(filters)
 }
 
 fn valid_review_item_type(value: &str) -> bool {
@@ -691,12 +657,13 @@ pub(crate) async fn list_trash(
 
 pub(crate) async fn summary(
     State(db): State<AppState>,
+    Query(query): Query<KnowledgeSummaryQuery>,
 ) -> Result<Json<KnowledgeSummary>, (StatusCode, String)> {
     let mut db = db
         .lock()
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     db.knowledge()
-        .summary()
+        .summary_for_project(query.project.as_deref())
         .map(Json)
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))
 }
@@ -796,84 +763,6 @@ pub(crate) async fn list_projects(
         .list_projects()
         .map(Json)
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))
-}
-
-pub(crate) async fn list_saved_views(
-    State(db): State<AppState>,
-) -> Result<Json<Vec<KnowledgeSavedView>>, (StatusCode, String)> {
-    let mut db = db
-        .lock()
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-    db.knowledge()
-        .list_saved_views()
-        .map(Json)
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))
-}
-
-pub(crate) async fn create_saved_view(
-    State(db): State<AppState>,
-    Json(payload): Json<SaveKnowledgeViewPayload>,
-) -> Result<Json<KnowledgeSavedView>, (StatusCode, String)> {
-    let name = payload.name.trim().chars().take(80).collect::<String>();
-    if name.is_empty() {
-        return Err((StatusCode::BAD_REQUEST, "View name is required".into()));
-    }
-    let filters = normalize_saved_view_filters(&payload.filters);
-    let mut db = db
-        .lock()
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-    db.knowledge()
-        .create_saved_view(&name, &filters)
-        .map(Json)
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))
-}
-
-pub(crate) async fn update_saved_view(
-    State(db): State<AppState>,
-    Path(id): Path<String>,
-    Json(payload): Json<UpdateKnowledgeViewPayload>,
-) -> Result<Json<KnowledgeSavedView>, (StatusCode, String)> {
-    let mut db = db
-        .lock()
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-    let existing = db
-        .knowledge()
-        .get_saved_view(&id)
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
-        .ok_or((StatusCode::NOT_FOUND, "Saved view not found".into()))?;
-    let name = payload
-        .name
-        .unwrap_or(existing.name)
-        .trim()
-        .chars()
-        .take(80)
-        .collect::<String>();
-    if name.is_empty() {
-        return Err((StatusCode::BAD_REQUEST, "View name is required".into()));
-    }
-    let filters = normalize_saved_view_filters(&payload.filters.unwrap_or(existing.filters));
-    db.knowledge()
-        .update_saved_view(&id, &name, &filters)
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
-        .map(Json)
-        .ok_or((StatusCode::NOT_FOUND, "Saved view not found".into()))
-}
-
-pub(crate) async fn delete_saved_view(
-    State(db): State<AppState>,
-    Path(id): Path<String>,
-) -> Result<StatusCode, (StatusCode, String)> {
-    let mut db = db
-        .lock()
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-    let deleted = db
-        .knowledge()
-        .delete_saved_view(&id)
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-    if !deleted {
-        return Err((StatusCode::NOT_FOUND, "Saved view not found".into()));
-    }
-    Ok(StatusCode::NO_CONTENT)
 }
 
 /// 新语义下的统一空间目录；旧的 /knowledge-cards/projects 继续作为兼容别名。

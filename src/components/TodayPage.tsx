@@ -19,7 +19,6 @@ import {
   MoreVertical,
   PenLine,
   Save,
-  Share2,
   Smile,
   Sparkles,
   Tag,
@@ -188,52 +187,6 @@ function setLocalStorageFlag(key: string) {
 
 type SaveStatus = "idle" | "saving" | "saved" | "error";
 type MobilePane = "edit" | "preview";
-const MAX_PENDING_SHARE_CHARS = 200_000;
-const MAX_PENDING_SHARE_AGE_MS = 7 * 24 * 60 * 60 * 1000;
-
-function takePendingShare(): { text: string; title: string } | null {
-  if (typeof window === "undefined") return null;
-  let raw = "";
-  const storages: Storage[] = [];
-  try { storages.push(window.localStorage); } catch { /* 尝试 sessionStorage */ }
-  try { storages.push(window.sessionStorage); } catch { /* 存储不可用 */ }
-  for (const storage of storages) {
-    try {
-      raw = storage.getItem("pendingShare") || "";
-      if (raw) {
-        storage.removeItem("pendingShare");
-        break;
-      }
-    } catch {
-      // 尝试下一种存储。
-    }
-  }
-  if (!raw) {
-    const url = new URL(window.location.href);
-    if (url.searchParams.has("share-target")) {
-      raw = JSON.stringify({
-        text: url.searchParams.get("text") || "",
-        title: url.searchParams.get("title") || "",
-        ts: Date.now(),
-      });
-      url.searchParams.delete("share-target");
-      url.searchParams.delete("text");
-      url.searchParams.delete("title");
-      window.history.replaceState({}, "", `${url.pathname}${url.search}${url.hash}`);
-    }
-  }
-  if (!raw) return null;
-  try {
-    const parsed = JSON.parse(raw) as { text?: unknown; title?: unknown; ts?: unknown };
-    const timestamp = typeof parsed.ts === "number" ? parsed.ts : Date.now();
-    if (Number.isFinite(timestamp) && Date.now() - timestamp > MAX_PENDING_SHARE_AGE_MS) return null;
-    const text = typeof parsed.text === "string" ? parsed.text.slice(0, MAX_PENDING_SHARE_CHARS) : "";
-    const title = typeof parsed.title === "string" ? parsed.title.trim().slice(0, 200) : "";
-    return text || title ? { text, title } : null;
-  } catch {
-    return null;
-  }
-}
 
 export default function TodayPage({
   targetDate,
@@ -356,18 +309,6 @@ export default function TodayPage({
         } else {
           restoreLocalDraft(null);
         }
-        const shared = takePendingShare();
-        if (shared) {
-          if (shared.text) {
-            setContent((previous) => previous ? `${previous}\n\n${shared.text}` : shared.text);
-          }
-          if (shared.title) {
-            setTitle((previous) => previous.trim() ? previous : shared.title);
-          }
-          setDirty(true);
-          setSaveStatus("idle");
-          toast.info("已将分享内容追加到当前记录，保存后写入服务器");
-        }
       })
       .catch((e) => {
         if (cancelled) return;
@@ -476,28 +417,6 @@ export default function TodayPage({
   // Manual save
   const handleManualSave = () => {
     doSave(title, content, mood, tags, spaces);
-  };
-
-  const handleShare = async () => {
-    const text = `${title || date}${content ? `\n\n${content}` : ""}`.trim();
-    if (!text) {
-      toast.info("当前记录没有可分享的内容");
-      return;
-    }
-    try {
-      if (navigator.share) {
-        await navigator.share({ title: title || date, text });
-      } else if (navigator.clipboard) {
-        await navigator.clipboard.writeText(text);
-        toast.success("已复制到剪贴板");
-      } else {
-        toast.error("当前环境不支持分享或复制");
-      }
-    } catch (err) {
-      if ((err as Error)?.name !== "AbortError") {
-        toast.error("分享失败");
-      }
-    }
   };
 
   const requestDateChange = useCallback(async (nextDate: string) => {
@@ -900,7 +819,7 @@ export default function TodayPage({
               <DropdownMenuTrigger className="ui-button-secondary w-full md:w-auto">
                 <ClipboardList size={14} /> 模板
               </DropdownMenuTrigger>
-              <DropdownMenuContent align="start" className="w-[360px] p-2">
+              <DropdownMenuContent align="start" className="w-[calc(100vw-1.5rem)] max-w-[360px] p-2">
                 {TEMPLATES.map((t) => (
                   <DropdownMenuItem
                     key={t.name}
@@ -952,15 +871,6 @@ export default function TodayPage({
 
             <button
               type="button"
-              onClick={() => void handleShare()}
-              className="ui-button-ghost hidden md:inline-flex"
-              title="分享当前记录"
-            >
-              <Share2 size={14} /> 分享
-            </button>
-
-            <button
-              type="button"
               onClick={onToggleZen}
               className="ui-button-ghost hidden md:inline-flex"
               title="专注模式（隐藏侧栏与干扰）"
@@ -968,60 +878,63 @@ export default function TodayPage({
               <Maximize2 size={14} /> 专注
             </button>
 
-            <button
-              type="button"
-              onClick={() => setMetaExpanded((value) => !value)}
-              className="ui-button-secondary col-span-2 w-full md:hidden"
-            >
-              <Smile size={14} />
-              心情与标签
-              {metaExpanded ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
-            </button>
-
-            {article && (
-            <div className="relative md:hidden" data-mobile-more>
+            <div className="col-span-2 flex items-center gap-2 md:hidden">
               <button
                 type="button"
-                onClick={() => setShowMobileMore((value) => !value)}
-                className="ui-icon-button"
-                title="更多操作"
+                onClick={() => setMetaExpanded((value) => !value)}
+                className="ui-button-secondary min-w-0 flex-1"
               >
-                <MoreVertical size={16} />
+                <Smile size={14} />
+                心情与标签
+                {metaExpanded ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
               </button>
-              <AnimatePresence>
-                {showMobileMore && (
-                  <motion.div
-                    initial={{ opacity: 0, y: -4 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    exit={{ opacity: 0, y: -4 }}
-                    transition={{ duration: 0.12 }}
-                    className="ui-floating-surface absolute right-0 top-full z-30 mt-2 w-36 rounded-xl p-1.5"
-                  >
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setShowMobileMore(false);
-                          void handleShare();
-                        }}
-                        className="ui-button-ghost h-9 min-h-9 w-full justify-start gap-2 border-0 bg-transparent px-2.5 text-xs"
-                      >
-                        <Share2 size={14} /> 分享记录
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setShowMobileMore(false);
-                          handleDelete();
-                        }}
-                        className="ui-button-danger h-9 min-h-9 w-full justify-start gap-2 border-0 bg-transparent px-2.5 text-xs"
-                      >
-                        <Trash2 size={14} /> 删除记录
-                      </button>
-                  </motion.div>
-                )}
-              </AnimatePresence>
+
+              <div className="relative shrink-0" data-mobile-more>
+                <button
+                  type="button"
+                  onClick={() => setShowMobileMore((value) => !value)}
+                  className="ui-button-secondary h-10 w-10 px-0"
+                  aria-label="打开更多操作"
+                  title="更多操作"
+                >
+                  <MoreVertical size={16} />
+                </button>
+                <AnimatePresence>
+                  {showMobileMore && (
+                    <motion.div
+                      initial={{ opacity: 0, y: -4 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      exit={{ opacity: 0, y: -4 }}
+                      transition={{ duration: 0.12 }}
+                      className="ui-floating-surface absolute right-0 top-full z-30 mt-2 w-36 rounded-xl p-1.5"
+                    >
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setShowMobileMore(false);
+                            onToggleZen?.();
+                          }}
+                          className="ui-button-ghost h-9 min-h-9 w-full justify-start gap-2 border-0 bg-transparent px-2.5 text-xs"
+                        >
+                          <Maximize2 size={14} /> 专注模式
+                        </button>
+                        {article && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setShowMobileMore(false);
+                              handleDelete();
+                            }}
+                            className="ui-button-danger h-9 min-h-9 w-full justify-start gap-2 border-0 bg-transparent px-2.5 text-xs"
+                          >
+                            <Trash2 size={14} /> 删除记录
+                          </button>
+                        )}
+                    </motion.div>
+                  )}
+                </AnimatePresence>
+              </div>
             </div>
-            )}
 
             {article && (
               <motion.button

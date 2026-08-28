@@ -1,5 +1,4 @@
 use serde::{Deserialize, Deserializer, Serialize};
-use serde_json::Value;
 use std::collections::BTreeMap;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -242,15 +241,6 @@ pub(crate) struct KnowledgeSummary {
     pub(crate) missing_project: i64,
     pub(crate) missing_tags: i64,
     pub(crate) short_content: i64,
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone)]
-pub(crate) struct KnowledgeSavedView {
-    pub(crate) id: String,
-    pub(crate) name: String,
-    pub(crate) filters: Value,
-    pub(crate) created_at: String,
-    pub(crate) updated_at: String,
 }
 
 fn default_review_ease() -> f64 {
@@ -600,19 +590,6 @@ pub(crate) struct KnowledgeListQuery {
     pub(crate) sort: Option<String>,
     pub(crate) page: Option<i64>,
     pub(crate) page_size: Option<i64>,
-}
-
-#[derive(Debug, Deserialize)]
-pub(crate) struct SaveKnowledgeViewPayload {
-    pub(crate) name: String,
-    #[serde(default)]
-    pub(crate) filters: Value,
-}
-
-#[derive(Debug, Deserialize)]
-pub(crate) struct UpdateKnowledgeViewPayload {
-    pub(crate) name: Option<String>,
-    pub(crate) filters: Option<Value>,
 }
 
 #[derive(Debug, Deserialize)]

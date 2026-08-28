@@ -67,7 +67,7 @@ export function ReviewViewerModal({
       <Dialog.Portal>
         <Dialog.Overlay className="ui-overlay fixed inset-0 z-50 data-[state=open]:animate-fade-in" />
         <Dialog.Content
-          className="ui-modal-surface fixed inset-x-3 bottom-3 z-50 flex max-h-[92vh] max-w-3xl flex-col overflow-hidden outline-hidden sm:left-1/2 sm:right-auto sm:top-1/2 sm:bottom-auto sm:w-[calc(100%-1.5rem)] sm:-translate-x-1/2 sm:-translate-y-1/2"
+          className="ui-modal-surface fixed inset-x-3 bottom-3 z-50 flex max-h-[min(92dvh,860px)] max-w-5xl flex-col overflow-hidden outline-hidden sm:left-1/2 sm:right-auto sm:top-1/2 sm:bottom-auto sm:w-[calc(100%-1.5rem)] sm:-translate-x-1/2 sm:-translate-y-1/2"
           onCloseAutoFocus={(event) => {
             if (!onRestoreFocus) return;
             event.preventDefault();
@@ -131,24 +131,38 @@ export function ReviewViewerModal({
 
         {/* Body */}
         {editing ? (
-          <div className="grid min-h-0 flex-1 gap-0 overflow-y-auto lg:grid-cols-2">
-            <div className="ui-soft-divider border-b p-4 lg:border-b-0 lg:border-r">
-              <label className="mb-1 block text-xs font-medium text-[var(--ui-text-muted)]">标题</label>
+          <div className="grid min-h-0 flex-1 overflow-hidden md:grid-cols-2">
+            <div className="ui-soft-divider min-h-0 overflow-y-auto border-b p-4 md:border-b-0 md:border-r">
+              <div className="mb-1.5 flex items-center justify-between gap-2">
+                <label htmlFor="review-editor-title" className="text-xs font-semibold text-[var(--ui-text)]">标题</label>
+                <span className="text-[10px] text-[var(--ui-text-subtle)]">可直接修改</span>
+              </div>
               <input
+                id="review-editor-title"
                 value={title}
                 onChange={(e) => onTitleChange(e.target.value)}
-                className="ui-field mb-3 rounded-lg"
+                className="ui-field h-10 rounded-lg text-sm font-medium"
               />
-              <label className="mb-1 block text-xs font-medium text-[var(--ui-text-muted)]">正文</label>
+              <label htmlFor="review-editor-content" className="mb-1.5 mt-4 block text-xs font-semibold text-[var(--ui-text)]">正文</label>
               <textarea
+                id="review-editor-content"
                 value={content}
                 onChange={(e) => onContentChange(e.target.value)}
-                className="ui-textarea h-[48vh] min-h-[320px] rounded-lg font-mono"
+                className="ui-textarea min-h-[320px] h-[48vh] rounded-lg font-mono text-xs leading-5"
               />
             </div>
-            <div className="min-h-[320px] overflow-y-auto p-4">
-              <div className="mb-3 text-xs font-medium text-[var(--ui-text-muted)]">预览</div>
-              <MarkdownContent content={content} />
+            <div className="min-h-0 overflow-y-auto p-4">
+              <div className="mb-1.5 flex h-[18px] items-center justify-between gap-2">
+                <span className="text-xs font-semibold text-[var(--ui-text)]">预览</span>
+                <span className="text-[10px] text-[var(--ui-text-subtle)]">实时同步</span>
+              </div>
+              <div className="ui-panel-muted flex h-10 items-center rounded-lg px-3 text-sm font-medium text-[var(--ui-text)]">
+                <span className="truncate">{title.trim() || "未填写标题"}</span>
+              </div>
+              <div className="mb-1.5 mt-4 text-xs font-semibold text-[var(--ui-text)]">正文预览</div>
+              <div className="ui-panel-muted min-h-[320px] p-4">
+                <MarkdownContent content={content} />
+              </div>
             </div>
           </div>
         ) : (
@@ -158,7 +172,7 @@ export function ReviewViewerModal({
         )}
 
         {/* Footer */}
-        <div className="ui-soft-divider flex flex-col-reverse gap-2 border-t px-5 py-4 sm:flex-row sm:justify-between">
+        <div className="ui-soft-divider flex flex-col-reverse gap-2 border-t px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
           <button
             type="button"
             onClick={onDelete}
@@ -167,7 +181,7 @@ export function ReviewViewerModal({
           >
             删除
           </button>
-          <div className="flex gap-2">
+          <div className="flex flex-wrap justify-end gap-2">
             {editing ? (
               <>
                 <button type="button" onClick={() => setEditing(false)} disabled={saving}

@@ -7,10 +7,17 @@
     <meta name="color-scheme" content="light dark" />
     <script>
       (() => {
-        const mode = localStorage.getItem("themeMode");
-        const isDark = mode === "dark" || (mode !== "light" && window.matchMedia("(prefers-color-scheme: dark)").matches);
-        document.documentElement.classList.toggle("dark", isDark);
-        document.documentElement.style.colorScheme = isDark ? "dark" : "light";
+        try {
+          const storage = globalThis.localStorage;
+          const mode = storage?.getItem("themeMode");
+          const accentTheme = storage?.getItem("accentTheme");
+          const isDark = mode === "dark" || (mode !== "light" && window.matchMedia("(prefers-color-scheme: dark)").matches);
+          document.documentElement.classList.toggle("dark", isDark);
+          document.documentElement.style.colorScheme = isDark ? "dark" : "light";
+          if (accentTheme) document.documentElement.dataset.theme = accentTheme;
+        } catch {
+          // 隐私模式下存储读取失败时由 React 在挂载后接管主题。
+        }
       })();
     </script>
     <title>每日总结</title>

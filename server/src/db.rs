@@ -1,7 +1,7 @@
 use crate::models::{
     AiConfig, AiRoutingConfig, AiTask, ArchiveMonth, Article, ArticleSummary, DailyReviewCount,
-    DayExemption, KnowledgeCard, KnowledgeProject, KnowledgeSavedView, KnowledgeSummary, Review,
-    ReviewCard, ReviewHistoryEntry, ReviewItem, ReviewSettings, ReviewStats, ReviewStatsResponse,
+    DayExemption, KnowledgeCard, KnowledgeProject, KnowledgeSummary, Review, ReviewCard,
+    ReviewHistoryEntry, ReviewItem, ReviewSettings, ReviewStats, ReviewStatsResponse,
 };
 use chrono::{Duration, Local, NaiveDate};
 use rusqlite::types::{Type, Value as SqlValue};
@@ -1194,24 +1194,6 @@ impl Database {
                 .execute("INSERT INTO schema_version (version) VALUES (13)", [])?;
         }
 
-        if current < 14 {
-            // 保存视图是服务端实体；保留这张表使筛选条件可跨设备复用。
-            self.conn.execute_batch(
-                "CREATE TABLE IF NOT EXISTS knowledge_saved_views (
-                    id           TEXT PRIMARY KEY,
-                    name         TEXT NOT NULL,
-                    filters_json TEXT NOT NULL DEFAULT '{}',
-                    created_at   TEXT NOT NULL,
-                    updated_at   TEXT NOT NULL
-                );
-
-                CREATE INDEX IF NOT EXISTS idx_knowledge_saved_views_updated
-                    ON knowledge_saved_views(updated_at DESC, name COLLATE NOCASE ASC);",
-            )?;
-            self.conn
-                .execute("INSERT INTO schema_version (version) VALUES (14)", [])?;
-        }
-
         if current < 15 {
             // 复习计划设置由服务端持久化，避免只保存在浏览器导致多设备/刷新后不一致。
             self.conn.execute_batch(
@@ -1506,6 +1488,16 @@ impl Database {
             // AI 模型档案和任务路由沿用 app_settings，以 JSON 保存且不包含 API Key。
             self.conn
                 .execute("INSERT INTO schema_version (version) VALUES (21)", [])?;
+        }
+
+        if current < 22 {
+            // 保存视图已从产品中移除；删除旧表及索引，避免继续保留筛选条件。
+            self.conn.execute_batch(
+                "DROP INDEX IF EXISTS idx_knowledge_saved_views_updated;
+                 DROP TABLE IF EXISTS knowledge_saved_views;",
+            )?;
+            self.conn
+                .execute("INSERT INTO schema_version (version) VALUES (22)", [])?;
         }
 
         Ok(())
@@ -2699,17 +2691,40 @@ impl KnowledgePersistence<'_> {
     }
 
     pub(crate) fn summary(&mut self) -> Result<KnowledgeSummary> {
+        self.summary_for_project(None)
+    }
+
+    pub(crate) fn summary_for_project(
+        &mut self,
+        project: Option<&str>,
+    ) -> Result<KnowledgeSummary> {
+        let mut conditions = vec!["c.deleted_at=''".to_string()];
+        let mut values = Vec::<SqlValue>::new();
+        if let Some(project) = project.map(str::trim).filter(|value| !value.is_empty()) {
+            conditions.push(
+                "EXISTS (
+                    SELECT 1 FROM knowledge_card_projects AS filter_cp
+                    INNER JOIN knowledge_projects AS filter_p ON filter_p.id=filter_cp.project_id
+                    WHERE filter_cp.card_id=c.id AND filter_p.name=? COLLATE NOCASE
+                )"
+                .into(),
+            );
+            values.push(SqlValue::Text(project.to_string()));
+        }
+        let where_clause = conditions.join(" AND ");
         let mut summary = self.conn.query_row(
-            "SELECT COUNT(*),
-                    COALESCE(SUM(CASE WHEN trim(source_date)='' AND trim(source_article_id)=''
-                                      AND trim(source_review_id)='' AND trim(source_excerpt)='' THEN 1 ELSE 0 END), 0),
-                    COALESCE(SUM(CASE WHEN NOT EXISTS (
-                        SELECT 1 FROM knowledge_card_projects AS cp WHERE cp.card_id=knowledge_cards.id
-                    ) THEN 1 ELSE 0 END), 0),
-                    COALESCE(SUM(CASE WHEN trim(tags)='' OR tags='[]' OR tags='null' THEN 1 ELSE 0 END), 0),
-                    COALESCE(SUM(CASE WHEN length(trim(content)) < 24 THEN 1 ELSE 0 END), 0)
-             FROM knowledge_cards WHERE deleted_at=''",
-            [],
+            &format!(
+                "SELECT COUNT(*),
+                        COALESCE(SUM(CASE WHEN trim(c.source_date)='' AND trim(c.source_article_id)=''
+                                          AND trim(c.source_review_id)='' AND trim(c.source_excerpt)='' THEN 1 ELSE 0 END), 0),
+                        COALESCE(SUM(CASE WHEN NOT EXISTS (
+                            SELECT 1 FROM knowledge_card_projects AS cp WHERE cp.card_id=c.id
+                        ) THEN 1 ELSE 0 END), 0),
+                        COALESCE(SUM(CASE WHEN trim(c.tags)='' OR c.tags='[]' OR c.tags='null' THEN 1 ELSE 0 END), 0),
+                        COALESCE(SUM(CASE WHEN length(trim(c.content)) < 24 THEN 1 ELSE 0 END), 0)
+                 FROM knowledge_cards AS c WHERE {where_clause}"
+            ),
+            params_from_iter(values.iter()),
             |row| {
                 Ok(KnowledgeSummary {
                     total: row.get(0)?,
@@ -2721,11 +2736,11 @@ impl KnowledgePersistence<'_> {
                 })
             },
         )?;
-        let mut statement = self.conn.prepare(
-            "SELECT status, COUNT(*) FROM knowledge_cards
-             WHERE deleted_at='' GROUP BY status",
-        )?;
-        let rows = statement.query_map([], |row| {
+        let mut statement = self.conn.prepare(&format!(
+            "SELECT c.status, COUNT(*) FROM knowledge_cards AS c
+             WHERE {where_clause} GROUP BY c.status"
+        ))?;
+        let rows = statement.query_map(params_from_iter(values.iter()), |row| {
             Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
         })?;
         for row in rows {
@@ -2797,83 +2812,6 @@ impl KnowledgePersistence<'_> {
             .collect::<Result<Vec<_>>>()?;
         self.resolve_related_ids(&mut cards)?;
         Ok(cards)
-    }
-
-    pub(crate) fn list_saved_views(&mut self) -> Result<Vec<KnowledgeSavedView>> {
-        let mut statement = self.conn.prepare(
-            "SELECT id, name, filters_json, created_at, updated_at
-             FROM knowledge_saved_views
-             ORDER BY updated_at DESC, name COLLATE NOCASE ASC",
-        )?;
-        let views = statement
-            .query_map([], row_to_knowledge_saved_view)?
-            .collect::<Result<Vec<_>>>()?;
-        Ok(views)
-    }
-
-    pub(crate) fn create_saved_view(
-        &mut self,
-        name: &str,
-        filters: &Value,
-    ) -> Result<KnowledgeSavedView> {
-        let id = Uuid::new_v4().to_string();
-        let now = Local::now().format("%Y-%m-%dT%H:%M:%S").to_string();
-        self.conn.execute(
-            "INSERT INTO knowledge_saved_views (id, name, filters_json, created_at, updated_at)
-             VALUES (?1, ?2, ?3, ?4, ?4)",
-            params![
-                id,
-                name,
-                serde_json::to_string(filters).map_err(json_to_sql_error)?,
-                now
-            ],
-        )?;
-        self.find_saved_view(&id)?
-            .ok_or(rusqlite::Error::QueryReturnedNoRows)
-    }
-
-    pub(crate) fn update_saved_view(
-        &mut self,
-        id: &str,
-        name: &str,
-        filters: &Value,
-    ) -> Result<Option<KnowledgeSavedView>> {
-        let now = Local::now().format("%Y-%m-%dT%H:%M:%S").to_string();
-        let updated = self.conn.execute(
-            "UPDATE knowledge_saved_views SET name=?1, filters_json=?2, updated_at=?3 WHERE id=?4",
-            params![
-                name,
-                serde_json::to_string(filters).map_err(json_to_sql_error)?,
-                now,
-                id
-            ],
-        )?;
-        if updated == 0 {
-            return Ok(None);
-        }
-        self.find_saved_view(id)
-    }
-
-    pub(crate) fn delete_saved_view(&mut self, id: &str) -> Result<bool> {
-        Ok(self
-            .conn
-            .execute("DELETE FROM knowledge_saved_views WHERE id=?1", params![id])?
-            > 0)
-    }
-
-    fn find_saved_view(&mut self, id: &str) -> Result<Option<KnowledgeSavedView>> {
-        self.conn
-            .query_row(
-                "SELECT id, name, filters_json, created_at, updated_at
-                 FROM knowledge_saved_views WHERE id=?1",
-                params![id],
-                row_to_knowledge_saved_view,
-            )
-            .optional()
-    }
-
-    pub(crate) fn get_saved_view(&mut self, id: &str) -> Result<Option<KnowledgeSavedView>> {
-        self.find_saved_view(id)
     }
 
     /// 服务端全文查询的分页入口。旧的 list() 保留给复习/关联等需要完整集合的内部流程。
@@ -4437,18 +4375,6 @@ fn row_to_review(row: &rusqlite::Row<'_>) -> Result<Review> {
     })
 }
 
-fn row_to_knowledge_saved_view(row: &rusqlite::Row<'_>) -> Result<KnowledgeSavedView> {
-    let filters_json: String = row.get(2)?;
-    let filters = serde_json::from_str(&filters_json).map_err(json_to_sql_error)?;
-    Ok(KnowledgeSavedView {
-        id: row.get(0)?,
-        name: row.get(1)?,
-        filters,
-        created_at: row.get(3)?,
-        updated_at: row.get(4)?,
-    })
-}
-
 fn row_to_knowledge_card(row: &rusqlite::Row<'_>) -> Result<KnowledgeCard> {
     Ok(KnowledgeCard {
         id: row.get(0)?,
@@ -4542,6 +4468,49 @@ fn dirs_next() -> Option<PathBuf> {
 mod migration_tests {
     use super::*;
     use crate::models::AiModelProfile;
+
+    #[test]
+    fn removes_legacy_saved_view_storage() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE schema_version (version INTEGER NOT NULL);
+             INSERT INTO schema_version (version) VALUES (21);
+             CREATE TABLE knowledge_saved_views (
+                 id TEXT PRIMARY KEY,
+                 name TEXT NOT NULL,
+                 filters TEXT NOT NULL,
+                 created_at TEXT NOT NULL,
+                 updated_at TEXT NOT NULL
+             );
+             CREATE INDEX idx_knowledge_saved_views_updated
+                 ON knowledge_saved_views(updated_at DESC);",
+        )
+        .unwrap();
+
+        let db = Database { conn };
+        db.initialize().unwrap();
+
+        let table_exists: i64 = db
+            .conn
+            .query_row(
+                "SELECT EXISTS(
+                    SELECT 1 FROM sqlite_master
+                    WHERE type = 'table' AND name = 'knowledge_saved_views'
+                )",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(table_exists, 0);
+
+        let version: i64 = db
+            .conn
+            .query_row("SELECT MAX(version) FROM schema_version", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(version, 22);
+    }
 
     fn v3_knowledge_cards_table() -> &'static str {
         "CREATE TABLE knowledge_cards (
@@ -4707,7 +4676,7 @@ mod migration_tests {
                 row.get(0)
             })
             .expect("read schema version");
-        assert_eq!(version, 21);
+        assert_eq!(version, 22);
 
         // 已迁移的库再次 initialize 必须幂等，不报重复列错误
         db.initialize().expect("re-initialize is idempotent");
@@ -4741,7 +4710,7 @@ mod migration_tests {
                 row.get(0)
             })
             .expect("read schema version");
-        assert_eq!(version, 21);
+        assert_eq!(version, 22);
 
         let settings = db.review_settings().expect("default review settings");
         assert_eq!(settings.new_cards_per_day, 20);
@@ -4809,11 +4778,53 @@ mod migration_tests {
     }
 
     #[test]
+    fn knowledge_summary_filters_by_space() {
+        let mut db = Database::new_in_memory().expect("in-memory database");
+        let draft = |title: &str, status: &str, project: &str| KnowledgeCardDraft {
+            card_type: "fact".into(),
+            status: status.into(),
+            title: title.into(),
+            content: "这是一段足够长的内容，用于验证空间摘要筛选不会混入其他空间。".into(),
+            tags: vec!["测试".into()],
+            source_article_id: String::new(),
+            source_review_id: String::new(),
+            source_date: "2026-08-28".into(),
+            source_excerpt: "测试来源".into(),
+            related_ids: vec![],
+            projects: vec![project.into()],
+        };
+
+        db.knowledge()
+            .save_many(vec![
+                draft("C++ 卡片", "confirmed", "C++"),
+                draft("FPGA 卡片", "draft", "FPGA-DIAG"),
+            ])
+            .expect("save cards in separate spaces");
+
+        let cpp = db
+            .knowledge()
+            .summary_for_project(Some("C++"))
+            .expect("summarize selected space");
+        assert_eq!(cpp.total, 1);
+        assert_eq!(cpp.confirmed, 1);
+        assert_eq!(cpp.draft, 0);
+
+        let all = db.knowledge().summary().expect("summarize all spaces");
+        assert_eq!(all.total, 2);
+        assert_eq!(all.confirmed, 1);
+        assert_eq!(all.draft, 1);
+    }
+
+    #[test]
     fn ai_routing_defaults_and_persisted_profiles_resolve_by_task() {
         let mut db = Database::new_in_memory().expect("in-memory database");
         let defaults = db.ai_routing().expect("default AI routing");
         assert_eq!(defaults.profiles.len(), 2);
         assert_eq!(defaults.routes.get("daily_summary"), Some(&"fast".into()));
+        assert_eq!(
+            defaults.routes.get("knowledge_extract"),
+            Some(&"fast".into())
+        );
         assert_eq!(defaults.routes.get("weekly_review"), Some(&"pro".into()));
 
         let routing = AiRoutingConfig {
@@ -4855,6 +4866,13 @@ mod migration_tests {
         assert_eq!(profile_id, "pro");
         assert_eq!(config.model, "deepseek-pro");
         assert_eq!(config.max_tokens, 5000);
+
+        let (config, profile_id) = db
+            .ai_config_for_task(AiTask::KnowledgeExtract)
+            .expect("resolve knowledge extraction route");
+        assert_eq!(profile_id, "fast");
+        assert_eq!(config.model, "deepseek-flash");
+        assert_eq!(config.max_tokens, 1200);
 
         db.initialize().expect("re-initialize keeps AI routing");
         assert_eq!(
@@ -4962,7 +4980,7 @@ mod migration_v5_tests {
                 row.get(0)
             })
             .expect("read schema version");
-        assert_eq!(version, 21);
+        assert_eq!(version, 22);
         db.initialize()
             .expect("re-initialize after v5 is idempotent");
     }
