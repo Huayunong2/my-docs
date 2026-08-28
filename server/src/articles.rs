@@ -23,6 +23,7 @@ pub(crate) async fn create_article(
             content: payload.content,
             mood: payload.mood,
             tags: payload.tags.unwrap_or_default(),
+            spaces: payload.spaces.unwrap_or_default(),
         })
         .map(Json)
         .map_err(storage_error)
@@ -41,7 +42,8 @@ pub(crate) async fn update_article(
                 title: payload.title,
                 content: payload.content,
                 mood: payload.mood,
-                tags: payload.tags.unwrap_or_default(),
+                tags: payload.tags,
+                spaces: payload.spaces,
             },
         )
         .map_err(storage_error)?
@@ -88,6 +90,22 @@ pub(crate) async fn list_articles(
     let mut db = db.lock().map_err(lock_error)?;
     db.articles()
         .list(query.page.unwrap_or(1), query.page_size.unwrap_or(20))
+        .map(Json)
+        .map_err(storage_error)
+}
+
+pub(crate) async fn list_space_articles(
+    State(db): State<AppState>,
+    Path(space): Path<String>,
+    Query(query): Query<ListQuery>,
+) -> Result<Json<Vec<ArticleSummary>>, HttpError> {
+    let mut db = db.lock().map_err(lock_error)?;
+    db.articles()
+        .list_by_space(
+            &space,
+            query.page.unwrap_or(1),
+            query.page_size.unwrap_or(12),
+        )
         .map(Json)
         .map_err(storage_error)
 }

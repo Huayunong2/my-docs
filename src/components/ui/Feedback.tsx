@@ -145,19 +145,28 @@ export function ConfirmDialog({
     >
       <Dialog.Portal>
         <Dialog.Overlay className="ui-overlay fixed inset-0 z-[80] data-[state=open]:animate-fade-in" />
-        <Dialog.Content className="ui-modal-surface fixed left-1/2 top-1/2 z-[81] w-[calc(100%-1.5rem)] max-w-sm -translate-x-1/2 -translate-y-1/2 p-4 outline-hidden data-[state=open]:animate-fade-in">
-          <Dialog.Title className="text-base font-semibold text-[var(--ui-text)]">{title}</Dialog.Title>
-          <Dialog.Description className="mt-2 whitespace-pre-wrap text-sm leading-6 text-[var(--ui-text-muted)]">
-            {message}
-          </Dialog.Description>
-          <div className="mt-5 flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+        <Dialog.Content className="ui-modal-surface fixed left-1/2 top-1/2 z-[81] w-[calc(100%-1.5rem)] max-w-sm -translate-x-1/2 -translate-y-1/2 p-5 outline-hidden data-[state=open]:animate-fade-in sm:p-6">
+          <div className="flex items-start gap-3">
+            {danger && (
+              <span className="ui-status-danger flex h-9 w-9 shrink-0 items-center justify-center rounded-lg" aria-hidden="true">
+                <AlertTriangle size={17} />
+              </span>
+            )}
+            <div className="min-w-0 flex-1">
+              <Dialog.Title className="text-[15px] font-semibold leading-6 text-[var(--ui-text)]">{title}</Dialog.Title>
+              <Dialog.Description className="mt-2 whitespace-pre-wrap text-[13px] leading-6 text-[var(--ui-text-muted)]">
+                {message}
+              </Dialog.Description>
+            </div>
+          </div>
+          <div className="mt-6 flex flex-col-reverse items-stretch gap-2 sm:flex-row sm:items-center sm:justify-end">
             <Dialog.Close asChild>
-              <button type="button" className="ui-button-secondary h-10 px-4 text-sm">{cancelText}</button>
+              <button type="button" className="ui-button-secondary h-10 min-h-10 min-w-[64px] px-4 text-sm">{cancelText}</button>
             </Dialog.Close>
             <button
               type="button"
               onClick={onConfirm}
-              className={danger ? "ui-button-danger text-sm" : "ui-button-primary text-sm"}
+              className={danger ? "ui-button-danger h-10 min-h-10 min-w-[104px] px-4 text-sm" : "ui-button-primary h-10 min-h-10 min-w-[80px] px-4 text-sm"}
             >
               {confirmText}
             </button>

@@ -1,3 +1,4 @@
+use crate::models::AiConfig;
 use crate::models::ChatCompletionResponse;
 use async_trait::async_trait;
 use axum::http::StatusCode;
@@ -6,6 +7,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+const MAX_AI_RESPONSE_BYTES: usize = 8 * 1024 * 1024;
 static LAST_HTTP_AI_REQUEST_MS: AtomicU64 = AtomicU64::new(0);
 static CONSECUTIVE_AI_FAILURES: AtomicU64 = AtomicU64::new(0);
 static LAST_AI_FAILURE_UNIX: AtomicU64 = AtomicU64::new(0);
@@ -76,22 +78,21 @@ pub(crate) struct HttpAiAdapter {
     model: String,
     temperature: f32,
     max_tokens: u64,
+    min_interval_ms: u64,
 }
 
 impl HttpAiAdapter {
-    pub(crate) fn from_env() -> Result<Self, AiFailure> {
-        let api_key = std::env::var("DAILY_SUMMARY_AI_API_KEY").map_err(|_| AiFailure {
-            status: StatusCode::SERVICE_UNAVAILABLE,
-            message: "AI API key is not configured".into(),
-            retryable: false,
-        })?;
-        let base_url = std::env::var("DAILY_SUMMARY_AI_BASE_URL")
-            .unwrap_or_else(|_| "https://api.openai.com/v1".into())
-            .trim_end_matches('/')
-            .to_string();
-        let timeout = env_u64("DAILY_SUMMARY_AI_TIMEOUT_SECS", 45);
+    pub(crate) fn from_config(config: &AiConfig) -> Result<Self, AiFailure> {
+        if config.api_key.trim().is_empty() {
+            return Err(AiFailure {
+                status: StatusCode::SERVICE_UNAVAILABLE,
+                message: "AI API key is not configured".into(),
+                retryable: false,
+            });
+        }
+        let base_url = config.base_url.trim_end_matches('/');
         let client = reqwest::Client::builder()
-            .timeout(Duration::from_secs(timeout))
+            .timeout(Duration::from_secs(config.timeout_secs.max(1)))
             .build()
             .map_err(|error| AiFailure {
                 status: StatusCode::INTERNAL_SERVER_ERROR,
@@ -101,10 +102,11 @@ impl HttpAiAdapter {
         Ok(Self {
             client,
             endpoint: format!("{base_url}/chat/completions"),
-            api_key,
-            model: std::env::var("DAILY_SUMMARY_AI_MODEL").unwrap_or_else(|_| "gpt-4o-mini".into()),
-            temperature: env_f32("DAILY_SUMMARY_AI_TEMPERATURE", 0.2),
-            max_tokens: env_u64("DAILY_SUMMARY_AI_MAX_TOKENS", 0),
+            api_key: config.api_key.clone(),
+            model: config.model.clone(),
+            temperature: config.temperature,
+            max_tokens: config.max_tokens,
+            min_interval_ms: config.min_interval_ms,
         })
     }
 }
@@ -112,7 +114,7 @@ impl HttpAiAdapter {
 #[async_trait]
 impl AiAdapter for HttpAiAdapter {
     async fn complete_once(&self, prompt: &str, system: &str) -> Result<AiResponse, AiFailure> {
-        throttle_http_requests().await;
+        throttle_http_requests(self.min_interval_ms).await;
         let mut body = serde_json::json!({
             "model": self.model,
             "messages": [
@@ -150,10 +152,34 @@ impl AiAdapter for HttpAiAdapter {
                 retryable: upstream == 429 || upstream >= 500,
             });
         }
-        let data = response
-            .json::<ChatCompletionResponse>()
-            .await
-            .map_err(|_| AiFailure {
+        if response
+            .content_length()
+            .is_some_and(|length| length > MAX_AI_RESPONSE_BYTES as u64)
+        {
+            return Err(AiFailure {
+                status: StatusCode::BAD_GATEWAY,
+                message: "AI 返回内容过大，已拒绝处理。".into(),
+                retryable: false,
+            });
+        }
+        let mut body = Vec::new();
+        let mut response = response;
+        while let Some(chunk) = response.chunk().await.map_err(|_| AiFailure {
+            status: StatusCode::BAD_GATEWAY,
+            message: "AI 返回格式无法读取。".into(),
+            retryable: true,
+        })? {
+            if body.len().saturating_add(chunk.len()) > MAX_AI_RESPONSE_BYTES {
+                return Err(AiFailure {
+                    status: StatusCode::BAD_GATEWAY,
+                    message: "AI 返回内容过大，已拒绝处理。".into(),
+                    retryable: false,
+                });
+            }
+            body.extend_from_slice(&chunk);
+        }
+        let data =
+            serde_json::from_slice::<ChatCompletionResponse>(&body).map_err(|_| AiFailure {
                 status: StatusCode::BAD_GATEWAY,
                 message: "AI 返回格式无法解析。".into(),
                 retryable: true,
@@ -213,22 +239,7 @@ pub(crate) async fn complete_with_retry(
     unreachable!("retry loop always returns")
 }
 
-fn env_u64(key: &str, default: u64) -> u64 {
-    std::env::var(key)
-        .ok()
-        .and_then(|value| value.parse().ok())
-        .unwrap_or(default)
-}
-
-fn env_f32(key: &str, default: f32) -> f32 {
-    std::env::var(key)
-        .ok()
-        .and_then(|value| value.parse().ok())
-        .unwrap_or(default)
-}
-
-async fn throttle_http_requests() {
-    let min_interval = env_u64("DAILY_SUMMARY_AI_MIN_INTERVAL_MS", 1200);
+async fn throttle_http_requests(min_interval: u64) {
     if min_interval == 0 {
         return;
     }

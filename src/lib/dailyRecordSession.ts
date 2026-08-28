@@ -6,6 +6,8 @@ export interface DailyRecordDraft {
   content: string;
   mood: string;
   tags: string[];
+  /** 可选的主题/项目空间；缺省保持旧客户端的无空间记录语义。 */
+  spaces?: string[];
 }
 
 export interface DailyRecordPort {
@@ -87,6 +89,7 @@ export class DailyRecordSession {
             content: draft.content,
             mood: draft.mood,
             tags: draft.tags,
+            spaces: draft.spaces || [],
           })
         : await this.port.create(draft);
     } catch (error) {

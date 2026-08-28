@@ -22,7 +22,7 @@
   --shadow-modal: 0 0 0 1px rgba(0, 0, 0, 0.05), 0 8px 32px rgba(0, 0, 0, 0.12);
 
   /* ── 字体 ── */
-  --font-sans: 'Inter', system-ui, -apple-system, 'Segoe UI', Roboto, 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans SC', 'Source Han Sans SC', sans-serif;
+  --font-sans: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans CJK SC', 'Source Han Sans SC', sans-serif;
 
   /* ── 圆角 ── */
   --radius-xl: 12px;
@@ -209,8 +209,14 @@
     color: var(--ui-text);
     font-synthesis: none;
     text-rendering: optimizeLegibility;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
     overflow: hidden; height: 100vh; min-height: 100dvh;
     -webkit-tap-highlight-color: transparent;
+  }
+
+  :where(button, input, select, textarea) {
+    font: inherit;
   }
 
   .dark { color-scheme: dark; }
@@ -279,7 +285,7 @@
   }
 
   .ui-field {
-    @apply w-full rounded-xl px-3.5 py-2.5 text-sm outline-hidden transition-all focus:border-accent/40 focus:ring-2 focus:ring-accent/15;
+    @apply w-full rounded-xl px-3.5 py-2.5 text-sm leading-5 outline-hidden transition-all focus:border-accent/40 focus:ring-2 focus:ring-accent/15;
     border: 1px solid var(--ui-border);
     background: var(--ui-surface);
     color: var(--ui-text);
@@ -410,7 +416,7 @@
   }
 
   .ui-icon-button {
-    @apply inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-lg transition-colors disabled:opacity-50 sm:h-9 sm:w-9;
+    @apply inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-lg leading-none transition-colors disabled:opacity-50 sm:h-9 sm:w-9;
     color: var(--ui-text-muted);
     &:hover { background: var(--ui-surface-hover); color: var(--ui-text); }
   }
@@ -421,13 +427,17 @@
   }
 
   .ui-button-primary {
-    @apply inline-flex h-10 items-center justify-center gap-1.5 rounded-lg px-3.5 text-xs font-semibold text-white shadow-xs transition-all disabled:opacity-50 sm:h-9;
+    @apply inline-flex h-10 items-center justify-center gap-1.5 rounded-lg px-3.5 text-xs font-semibold leading-none text-white shadow-xs transition-all disabled:opacity-50 sm:h-9;
     background: var(--ui-accent-solid);
     &:hover { background: var(--color-accent-hover); }
   }
 
+  .ui-date-picker-day-selected {
+    border-radius: 9999px !important;
+  }
+
   .ui-button-secondary {
-    @apply inline-flex h-10 items-center justify-center gap-1.5 rounded-lg px-3.5 text-xs font-medium transition-colors sm:h-9;
+    @apply inline-flex h-10 items-center justify-center gap-1.5 rounded-lg px-3.5 text-xs font-medium leading-none transition-colors sm:h-9;
     border: 1px solid var(--ui-border);
     background: var(--ui-surface);
     color: var(--ui-text-muted);
@@ -435,7 +445,7 @@
   }
 
   .ui-button-danger {
-    @apply inline-flex h-10 items-center justify-center gap-1.5 rounded-lg border px-3.5 text-xs font-medium transition-colors sm:h-9;
+    @apply inline-flex h-10 items-center justify-center gap-1.5 rounded-lg border px-3.5 text-xs font-medium leading-none transition-colors sm:h-9;
     border-color: var(--ui-danger-border);
     background: var(--ui-danger-surface);
     color: var(--ui-danger-text);
@@ -443,7 +453,7 @@
   }
 
   .ui-button-success {
-    @apply inline-flex h-10 items-center justify-center gap-1.5 rounded-lg px-3.5 text-xs font-semibold text-white shadow-xs transition-all disabled:opacity-50 sm:h-9;
+    @apply inline-flex h-10 items-center justify-center gap-1.5 rounded-lg px-3.5 text-xs font-semibold leading-none text-white shadow-xs transition-all disabled:opacity-50 sm:h-9;
     background: var(--ui-success-action);
     &:hover { background: var(--ui-success-action-hover); }
   }
@@ -478,7 +488,7 @@
   }
 
   .ui-button-ghost {
-    @apply inline-flex h-10 items-center justify-center gap-1.5 rounded-lg px-3.5 text-xs font-medium transition-colors sm:h-9;
+    @apply inline-flex h-10 items-center justify-center gap-1.5 rounded-lg px-3.5 text-xs font-medium leading-none transition-colors sm:h-9;
     color: var(--ui-text-muted);
     &:hover { background: var(--ui-surface-hover); color: var(--ui-text); }
   }
@@ -634,13 +644,13 @@
   }
 
   .ui-segment {
-    @apply inline-flex rounded-xl p-1;
+    @apply inline-flex rounded-lg p-0.5;
     border: 1px solid var(--ui-border);
     background: var(--ui-surface-inset);
   }
 
   .ui-segment-item {
-    @apply inline-flex h-8 items-center justify-center rounded-lg px-3 text-xs font-semibold transition-colors;
+    @apply inline-flex h-8 items-center justify-center rounded-md px-3 text-xs font-semibold leading-none transition-colors;
     color: var(--ui-text-muted);
     &:hover { color: var(--ui-text); }
   }
@@ -654,7 +664,7 @@
   .ui-segment-item[data-state="active"] {
     color: var(--ui-accent-text);
     background: var(--ui-surface-raised);
-    box-shadow: var(--shadow-card);
+    box-shadow: var(--ui-shadow-panel);
   }
 
   .ui-theme-choice {
@@ -677,14 +687,14 @@
   }
 
   .ui-chip {
-    @apply inline-flex h-7 items-center gap-1 rounded-full px-2.5 text-xs font-medium shadow-xs;
+    @apply inline-flex h-7 items-center gap-1 rounded-full px-2.5 text-xs font-medium leading-none shadow-xs;
     border: 1px solid var(--ui-border);
     background: var(--ui-surface-raised);
     color: var(--ui-text-muted);
   }
 
   .ui-section-kicker {
-    @apply text-[11px] font-semibold uppercase tracking-[0.12em];
+    @apply text-xs font-semibold uppercase leading-4 tracking-[0.08em];
     color: var(--ui-text-subtle);
   }
 
@@ -793,7 +803,7 @@
   }
 
   .ui-filter-button {
-    @apply inline-flex min-h-9 items-center justify-center rounded-lg px-2.5 text-left text-xs font-medium transition-colors;
+    @apply inline-flex min-h-9 items-center justify-center rounded-lg px-2.5 text-center text-xs font-medium leading-5 transition-colors;
     border: 1px solid var(--ui-border);
     background: var(--ui-surface);
     color: var(--ui-text-muted);
@@ -813,7 +823,7 @@
   }
 
   .ui-bulk-action {
-    @apply flex min-h-12 items-center gap-3 rounded-xl px-3 text-left transition-colors;
+    @apply flex min-h-12 items-center gap-3 rounded-xl px-3 text-left leading-5 transition-colors;
     border: 1px solid var(--ui-border);
     background: var(--ui-surface);
     color: var(--ui-text);
@@ -959,18 +969,9 @@
   }
 
   .knowledge-card-row[data-state="active"] {
-    border-color: color-mix(in srgb, var(--ui-focus) 22%, transparent);
-    background: var(--ui-surface-soft);
-    box-shadow: inset 3px 0 0 var(--color-accent);
-  }
-
-  .knowledge-card-row[data-state="selected"]::before {
-    content: "";
-    position: absolute;
-    inset: 9px auto 9px 0;
-    width: 3px;
-    border-radius: 0 999px 999px 0;
-    background: var(--color-accent);
+    border-color: var(--ui-selected-border);
+    background: var(--ui-surface-selected);
+    box-shadow: var(--ui-shadow-panel);
   }
 }
 
@@ -1217,31 +1218,13 @@
 
 .mermaid-diagram .nodeLabel,
 .mermaid-diagram .edgeLabel {
-  font-family: 'Inter', system-ui, -apple-system, 'Segoe UI', Roboto, 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans SC', 'Source Han Sans SC', sans-serif;
+  font-family: var(--font-sans);
   font-size: 12px;
 }
 
 .mermaid-diagram .label,
 .mermaid-diagram .edgeLabel {
   line-height: 1.25;
-}
-
-/* react-day-picker 暗色适配 */
-.dark .rdp-root {
-  --rdp-accent-color: #818cf8;
-  --rdp-accent-background-color: rgba(99, 102, 241, 0.2);
-  --rdp-today-color: #a5b4fc;
-}
-.dark .rdp-root,
-.dark .rdp-month_caption,
-.dark .rdp-nav {
-  color: #d1d5db;
-}
-.dark .rdp-day:not(.rdp-selected):not(.rdp-disabled) {
-  color: #e5e7eb;
-}
-.dark .rdp-day:not(.rdp-selected):not(.rdp-disabled):hover {
-  background-color: rgba(255, 255, 255, 0.08);
 }
 
 /* Mobile: main content gets bottom padding for tab bar */

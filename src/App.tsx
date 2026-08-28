@@ -6,6 +6,7 @@ import { Toaster } from "sonner";
 import Sidebar from "./components/Sidebar";
 import CommandPalette from "./components/CommandPalette";
 import * as api from "./lib/api";
+import { readLocalStorage, writeLocalStorage } from "./lib/storage";
 
 export type Page = "today" | "history" | "archive" | "search" | "stats" | "reviews" | "review" | "knowledge" | "settings";
 export type ThemeMode = "system" | "light" | "dark";
@@ -92,7 +93,7 @@ export function AppShell() {
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [themeMode, setThemeMode] = useState<ThemeMode>(() => {
     if (typeof window !== "undefined") {
-      const stored = localStorage.getItem("themeMode");
+      const stored = readLocalStorage("themeMode");
       if (stored === "light" || stored === "dark" || stored === "system") return stored;
     }
     return "system";
@@ -102,7 +103,7 @@ export function AppShell() {
     return false;
   });
   const [accentTheme, setAccentTheme] = useState<string>(() => {
-    if (typeof window !== "undefined") return localStorage.getItem("accentTheme") || "";
+    if (typeof window !== "undefined") return readLocalStorage("accentTheme") || "";
     return "";
   });
 
@@ -139,13 +140,13 @@ export function AppShell() {
   const toggleZen = useCallback(() => setZen((value) => !value), []);
   const changeThemeMode = useCallback((mode: ThemeMode) => {
     setThemeMode(mode);
-    if (typeof window !== "undefined") localStorage.setItem("themeMode", mode);
+    if (typeof window !== "undefined") writeLocalStorage("themeMode", mode);
   }, []);
   const toggleDark = useCallback(() => changeThemeMode(dark ? "light" : "dark"), [changeThemeMode, dark]);
   const openPalette = useCallback(() => setPaletteOpen(true), []);
   const changeAccentTheme = useCallback((theme: string) => {
     setAccentTheme(theme);
-    if (typeof window !== "undefined") localStorage.setItem("accentTheme", theme);
+    if (typeof window !== "undefined") writeLocalStorage("accentTheme", theme);
   }, []);
 
   const go = useCallback((to: string, search: Record<string, unknown> = {}, params?: Record<string, string>) => {

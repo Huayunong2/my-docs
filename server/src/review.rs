@@ -20,8 +20,8 @@ pub(crate) fn valid_grade(value: &str) -> bool {
 /// FSRS 评分结果：新的稳定性、新的难度、实际间隔天数、下次复习日期。
 ///
 /// 字段语义（与数据库字段复用）：
-/// - `stability` → 存 `knowledge_cards.review_interval_days`（FSRS 稳定性）
-/// - `difficulty` → 存 `knowledge_cards.review_ease`（FSRS 难度 1~10）
+/// - `stability` → 存 `review_items.review_interval_days`（FSRS 稳定性）
+/// - `difficulty` → 存 `review_items.review_ease`（FSRS 难度 1~10）
 /// - `interval_days` → 存 `review_log.interval_days`（实际间隔，供历史趋势图）
 #[derive(Debug, PartialEq)]
 pub(crate) struct GradeOutcome {
@@ -165,24 +165,24 @@ pub(crate) async fn preview_card(
     let mut db = db
         .lock()
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-    let card = db
+    let item = db
         .knowledge()
-        .find(&id)
+        .find_review_item_for_review(&id)
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
-        .ok_or((StatusCode::NOT_FOUND, "Knowledge card not found".into()))?;
-    if card.status != "confirmed" {
+        .ok_or((StatusCode::NOT_FOUND, "Review item not found".into()))?;
+    if item.status != "active" {
         return Err((
             StatusCode::BAD_REQUEST,
-            "Knowledge card is not in the review queue".into(),
+            "Review item is not active in the review queue".into(),
         ));
     }
     let previews = ["again", "hard", "good", "easy"]
         .into_iter()
         .map(|grade| {
             let outcome = apply_grade_rule(
-                card.review_interval_days,
-                card.review_ease,
-                card.review_count,
+                item.review_interval_days,
+                item.review_ease,
+                item.review_count,
                 grade,
                 today_date,
             );
@@ -200,7 +200,7 @@ pub(crate) async fn grade_card(
     State(db): State<AppState>,
     Path(id): Path<String>,
     Json(payload): Json<GradeCardPayload>,
-) -> Result<Json<KnowledgeCard>, (StatusCode, String)> {
+) -> Result<Json<crate::models::ReviewCard>, (StatusCode, String)> {
     let grade = payload.grade.trim().to_string();
     if !valid_grade(&grade) {
         return Err((StatusCode::BAD_REQUEST, "Invalid grade".into()));
@@ -211,21 +211,21 @@ pub(crate) async fn grade_card(
     let mut db = db
         .lock()
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-    let card = db
+    let item = db
         .knowledge()
-        .find(&id)
+        .find_review_item_for_review(&id)
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
-        .ok_or((StatusCode::NOT_FOUND, "Knowledge card not found".into()))?;
-    if card.status != "confirmed" {
+        .ok_or((StatusCode::NOT_FOUND, "Review item not found".into()))?;
+    if item.status != "active" {
         return Err((
             StatusCode::BAD_REQUEST,
-            "Knowledge card is not in the review queue".into(),
+            "Review item is not active in the review queue".into(),
         ));
     }
     let outcome = apply_grade_rule(
-        card.review_interval_days,
-        card.review_ease,
-        card.review_count,
+        item.review_interval_days,
+        item.review_ease,
+        item.review_count,
         &grade,
         today_date,
     );
@@ -241,7 +241,7 @@ pub(crate) async fn grade_card(
         })
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
         .map(Json)
-        .ok_or((StatusCode::NOT_FOUND, "Knowledge card not found".into()))
+        .ok_or((StatusCode::NOT_FOUND, "Review item not found".into()))
 }
 
 pub(crate) async fn review_stats(

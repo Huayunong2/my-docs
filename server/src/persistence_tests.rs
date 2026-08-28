@@ -1,5 +1,6 @@
 use crate::db::{
-    ArticleDraft, Database, GradeUpdate, KnowledgeCardDraft, KnowledgePageQuery, ReviewDraft,
+    ArticleChanges, ArticleDraft, Database, GradeUpdate, KnowledgeCardDraft, KnowledgePageQuery,
+    ReviewDraft, ReviewItemDraft,
 };
 use crate::models::{Article, KnowledgeCard, Review};
 use serde_json::json;
@@ -20,6 +21,7 @@ fn saving_a_daily_record_applies_record_invariants() {
             content: "  persistence module\n完成  ".into(),
             mood: "专注".into(),
             tags: vec![" 架构 ".into(), "架构".into(), "Rust".into()],
+            spaces: vec![],
         })
         .expect("save daily record");
 
@@ -30,6 +32,110 @@ fn saving_a_daily_record_applies_record_invariants() {
         .get("2026-07-16")
         .expect("load exemption")
         .is_none());
+}
+
+#[test]
+fn daily_records_and_knowledge_cards_share_named_spaces() {
+    let mut db = Database::new_in_memory().expect("in-memory database");
+
+    let topic = db
+        .knowledge()
+        .create_space("  C++  ", "topic", "语言、标准库与工程实践")
+        .expect("create topic")
+        .expect("topic should be created");
+    assert_eq!(topic.name, "C++");
+    assert_eq!(topic.kind, "topic");
+    assert_eq!(topic.description, "语言、标准库与工程实践");
+
+    let article = db
+        .articles()
+        .save(ArticleDraft {
+            date: "2026-07-17".into(),
+            title: "C++ 学习记录".into(),
+            content: "今天整理了 RAII。".into(),
+            mood: "专注".into(),
+            tags: vec!["学习".into()],
+            spaces: vec!["C++".into(), "系统设计".into(), "C++".into()],
+        })
+        .expect("save daily record");
+    assert_eq!(article.spaces.len(), 2);
+    assert!(article.spaces.contains(&"C++".to_string()));
+    assert!(article.spaces.contains(&"系统设计".to_string()));
+    let summaries = db.articles().list(1, 20).expect("list daily summaries");
+    assert_eq!(summaries[0].spaces.len(), 2);
+    assert!(summaries[0].spaces.contains(&"C++".to_string()));
+    assert!(summaries[0].spaces.contains(&"系统设计".to_string()));
+    assert_eq!(
+        db.articles()
+            .list(0, -1)
+            .expect("clamp invalid article pagination")
+            .len(),
+        1,
+        "invalid page and page size must not turn into an unbounded query"
+    );
+    let cpp_articles = db
+        .articles()
+        .list_by_space(" c++ ", 1, 20)
+        .expect("list records in C++ space");
+    assert_eq!(cpp_articles.len(), 1);
+    assert_eq!(cpp_articles[0].id, article.id);
+    assert!(db
+        .articles()
+        .list_by_space("不存在的空间", 1, 20)
+        .expect("list empty space")
+        .is_empty());
+
+    let mut card = card_draft("confirmed");
+    card.title = "RAII 的核心价值".into();
+    card.projects = vec!["C++".into()];
+    let card = db.knowledge().save(card).expect("save knowledge card");
+    assert_eq!(card.projects, vec!["C++"]);
+
+    let spaces = db.knowledge().list_projects().expect("list spaces");
+    let cpp = spaces
+        .iter()
+        .find(|space| space.name == "C++")
+        .expect("C++ space exists");
+    assert_eq!(cpp.kind, "topic");
+    assert_eq!(
+        cpp.count, 1,
+        "knowledge count remains distinct from daily count"
+    );
+    assert_eq!(cpp.article_count, 1);
+    assert_eq!(cpp.total_count, 2);
+    let system_design = spaces
+        .iter()
+        .find(|space| space.name == "系统设计")
+        .expect("auto-created daily-record space exists");
+    assert_eq!(system_design.count, 0);
+    assert_eq!(system_design.article_count, 1);
+    assert_eq!(system_design.total_count, 1);
+
+    let restored = db
+        .articles()
+        .find_by_date("2026-07-17")
+        .expect("load daily record")
+        .expect("daily record exists");
+    assert_eq!(restored.spaces.len(), 2);
+    assert!(restored.spaces.contains(&"C++".to_string()));
+    assert!(restored.spaces.contains(&"系统设计".to_string()));
+
+    let updated = db
+        .articles()
+        .update(
+            &article.id,
+            ArticleChanges {
+                title: "只改正文".into(),
+                content: "更新后的记录".into(),
+                mood: "专注".into(),
+                tags: None,
+                spaces: None,
+            },
+        )
+        .expect("update daily record")
+        .expect("daily record still exists");
+    assert_eq!(updated.spaces, restored.spaces);
+    assert_eq!(updated.tags, vec!["学习"]);
 }
 
 #[test]
@@ -85,6 +191,7 @@ fn portable_archive_round_trip_preserves_daily_records_as_domain_values() {
             content: "round trip".into(),
             mood: "稳定".into(),
             tags: vec!["Rust".into(), "备份".into()],
+            spaces: vec!["C++".into()],
         })
         .expect("seed record");
 
@@ -93,6 +200,7 @@ fn portable_archive_round_trip_preserves_daily_records_as_domain_values() {
         .export_json()
         .expect("export archive");
     assert_eq!(archive["articles"][0]["tags"], json!(["Rust", "备份"]));
+    assert_eq!(archive["articles"][0]["spaces"], json!(["C++"]));
 
     let mut target = Database::new_in_memory().expect("target database");
     let report = target
@@ -109,6 +217,7 @@ fn portable_archive_round_trip_preserves_daily_records_as_domain_values() {
     assert_eq!(restored.content, "round trip");
     assert_eq!(restored.word_count, 9);
     assert_eq!(restored.tags, vec!["Rust", "备份"]);
+    assert_eq!(restored.spaces, vec!["C++"]);
 }
 
 #[test]
@@ -121,6 +230,7 @@ fn sqlite_snapshot_can_be_verified_before_restore() {
             content: "快照必须能够独立打开。".into(),
             mood: "平静".into(),
             tags: vec!["backup".into()],
+            spaces: vec![],
         })
         .unwrap();
     let path = std::env::temp_dir().join(format!("daily-summary-{}.db", uuid::Uuid::new_v4()));
@@ -151,6 +261,7 @@ fn daily_record_http_shape_uses_tag_values() {
         word_count: 12,
         created_at: "2026-07-16T09:00:00".into(),
         updated_at: "2026-07-16T09:00:00".into(),
+        spaces: vec![],
     };
 
     let json = serde_json::to_value(record).expect("serialize daily record");
@@ -187,6 +298,7 @@ fn review_and_knowledge_http_shapes_hide_storage_serialization() {
         source_excerpt: "excerpt".into(),
         created_at: "2026-07-16T09:00:00".into(),
         updated_at: "2026-07-16T09:00:00".into(),
+        content_version: 1,
         review_state: "new".into(),
         review_interval_days: 0.0,
         review_ease: 2.5,
@@ -271,9 +383,17 @@ fn card_draft(status: &str) -> KnowledgeCardDraft {
 fn projects_survive_without_cards_and_batch_moves_keep_counts_consistent() {
     let mut db = Database::new_in_memory().expect("in-memory database");
 
+    let long_space_name = "abcdefghijklmnopqrst".repeat(4);
+    let long_space = db
+        .knowledge()
+        .create_space(&long_space_name, "topic", "")
+        .expect("create long space")
+        .expect("long space should be created");
+    assert_eq!(long_space.name, long_space_name);
+
     let empty = db
         .knowledge()
-        .create_project("  FPGA-DIAG  ")
+        .create_space("  FPGA-DIAG  ", "project", "")
         .expect("create project")
         .expect("project should be created");
     assert_eq!(empty.name, "FPGA-DIAG");
@@ -338,6 +458,139 @@ fn projects_survive_without_cards_and_batch_moves_keep_counts_consistent() {
             .map(|project| project.count),
         Some(1)
     );
+}
+
+#[test]
+fn spaces_can_be_renamed_archived_and_restored_without_losing_relations() {
+    let mut db = Database::new_in_memory().expect("in-memory database");
+
+    db.knowledge()
+        .create_space("C++", "topic", "语言与工程实践")
+        .expect("create space")
+        .expect("space exists");
+    let article = db
+        .articles()
+        .save(ArticleDraft {
+            date: "2026-07-20".into(),
+            title: "C++ 学习记录".into(),
+            content: "整理 RAII 与异常安全。".into(),
+            mood: "专注".into(),
+            tags: vec![],
+            spaces: vec!["C++".into()],
+        })
+        .expect("save article");
+    let mut draft = card_draft("confirmed");
+    draft.projects = vec!["C++".into()];
+    draft.source_article_id = article.id.clone();
+    let card = db.knowledge().save(draft).expect("save card");
+
+    let renamed = db
+        .knowledge()
+        .update_space("C++", "C++ 学习", "topic", "标准库、语言特性与工程实践")
+        .expect("rename space")
+        .expect("renamed space exists");
+    assert_eq!(renamed.name, "C++ 学习");
+    assert_eq!(renamed.description, "标准库、语言特性与工程实践");
+    assert_eq!(
+        db.knowledge()
+            .find(&card.id)
+            .expect("find card")
+            .expect("card exists")
+            .projects,
+        vec!["C++ 学习"]
+    );
+    assert_eq!(
+        db.articles()
+            .find_by_id(&article.id)
+            .expect("find article")
+            .expect("article exists")
+            .spaces,
+        vec!["C++ 学习"]
+    );
+
+    db.knowledge()
+        .archive_space("C++ 学习")
+        .expect("archive space")
+        .expect("active space exists");
+    assert!(!db
+        .knowledge()
+        .list_projects()
+        .expect("list active spaces")
+        .iter()
+        .any(|space| space.name == "C++ 学习"));
+    assert_eq!(
+        db.knowledge()
+            .list_spaces(true)
+            .expect("list all spaces")
+            .iter()
+            .find(|space| space.name == "C++ 学习")
+            .map(|space| space.status.as_str()),
+        Some("archived")
+    );
+
+    let restored = db
+        .knowledge()
+        .restore_space("C++ 学习")
+        .expect("restore space")
+        .expect("archived space exists");
+    assert_eq!(restored.status, "active");
+    assert!(db
+        .knowledge()
+        .list_projects()
+        .expect("list restored spaces")
+        .iter()
+        .any(|space| space.name == "C++ 学习"));
+}
+
+#[test]
+fn archived_space_can_be_deleted_without_deleting_its_content() {
+    let mut db = Database::new_in_memory().expect("in-memory database");
+    db.knowledge()
+        .create_space("待清理项目", "project", "一次性目标")
+        .expect("create space")
+        .expect("space exists");
+    let article = db
+        .articles()
+        .save(ArticleDraft {
+            date: "2026-07-21".into(),
+            title: "项目记录".into(),
+            content: "保留这条记录，但解除空间归属。".into(),
+            mood: "专注".into(),
+            tags: vec![],
+            spaces: vec!["待清理项目".into()],
+        })
+        .expect("save article");
+    let mut draft = card_draft("draft");
+    draft.title = "保留的知识卡片".into();
+    draft.projects = vec!["待清理项目".into()];
+    let card = db.knowledge().save(draft).expect("save card");
+
+    db.knowledge()
+        .archive_space("待清理项目")
+        .expect("archive space")
+        .expect("archived space exists");
+    assert!(db
+        .knowledge()
+        .delete_space_permanently("待清理项目")
+        .expect("delete space"));
+
+    assert!(db.knowledge().list_spaces(true).unwrap().is_empty());
+    assert!(db.knowledge().find_space("待清理项目").unwrap().is_none());
+    assert!(db.knowledge().find(&card.id).unwrap().is_some());
+    assert!(db
+        .knowledge()
+        .find(&card.id)
+        .unwrap()
+        .unwrap()
+        .projects
+        .is_empty());
+    assert!(db
+        .articles()
+        .find_by_id(&article.id)
+        .unwrap()
+        .unwrap()
+        .spaces
+        .is_empty());
 }
 
 #[test]
@@ -462,6 +715,129 @@ fn soft_deleted_cards_stay_recoverable_without_affecting_active_views() {
         Some(1)
     );
     assert!(db.knowledge().list_trash().expect("empty trash").is_empty());
+}
+
+#[test]
+fn soft_deleted_cards_keep_review_data_and_related_links_until_restore() {
+    let mut db = Database::new_in_memory().expect("in-memory database");
+    let mut target_draft = card_draft("confirmed");
+    target_draft.title = "永久删除的卡片".into();
+    let target = db.knowledge().save(target_draft).expect("save target");
+    let mut keeper_draft = card_draft("confirmed");
+    keeper_draft.title = "仍然保留的卡片".into();
+    let keeper = db.knowledge().save(keeper_draft).expect("save keeper");
+
+    let mut linked = card_draft("confirmed");
+    linked.title = "带关联的卡片".into();
+    linked.related_ids = vec![target.id.clone(), keeper.id.clone()];
+    let linked = db.knowledge().save(linked).expect("save linked card");
+    db.knowledge()
+        .apply_grade(GradeUpdate {
+            id: &target.id,
+            grade: "good",
+            stability: 3.0,
+            difficulty: 5.0,
+            interval_days: 3.0,
+            next_review_at: "2026-07-24",
+            today: "2026-07-21",
+        })
+        .expect("grade target");
+
+    db.knowledge()
+        .batch_update(std::slice::from_ref(&target.id), "delete", &[])
+        .expect("move target to trash");
+    assert!(db.knowledge().find(&target.id).unwrap().is_none());
+    assert_eq!(db.knowledge().list_trash().unwrap().len(), 1);
+    assert!(db
+        .knowledge()
+        .list_review_items(&target.id)
+        .unwrap()
+        .iter()
+        .any(|item| item.review_count == 1));
+    assert_eq!(db.knowledge().due(20, "2026-07-21").unwrap().len(), 2);
+
+    let archive = db.portable_archive().export_json().expect("export backup");
+    let archived_card = archive["knowledge_cards"]
+        .as_array()
+        .expect("knowledge cards in backup")
+        .iter()
+        .find(|card| card["id"].as_str() == Some(target.id.as_str()))
+        .expect("trash card is included in backup");
+    assert!(archived_card["deleted_at"]
+        .as_str()
+        .is_some_and(|deleted_at| !deleted_at.is_empty()));
+    assert!(archive["review_items"]
+        .as_array()
+        .expect("review items in backup")
+        .iter()
+        .any(|item| item["knowledge_card_id"].as_str() == Some(target.id.as_str())));
+
+    let mut restored_db = Database::new_in_memory().expect("restore target database");
+    restored_db
+        .portable_archive()
+        .import_json(archive)
+        .expect("restore backup");
+    assert!(restored_db.knowledge().find(&target.id).unwrap().is_none());
+    assert_eq!(restored_db.knowledge().list_trash().unwrap().len(), 1);
+    assert!(restored_db
+        .knowledge()
+        .list_review_items(&target.id)
+        .unwrap()
+        .iter()
+        .any(|item| item.review_count == 1));
+
+    let linked = db.knowledge().find(&linked.id).unwrap().unwrap();
+    assert_eq!(linked.related_ids, vec![keeper.id.clone()]);
+    assert_eq!(
+        linked.declared_related_ids,
+        vec![target.id.clone(), keeper.id.clone()]
+    );
+
+    db.knowledge()
+        .batch_update(std::slice::from_ref(&target.id), "restore", &[])
+        .expect("restore card");
+    assert!(db.knowledge().find(&target.id).unwrap().is_some());
+    let linked = db.knowledge().find(&linked.id).unwrap().unwrap();
+    assert_eq!(linked.related_ids, vec![target.id, keeper.id]);
+}
+
+#[test]
+fn saved_knowledge_views_round_trip_and_update_filters() {
+    let mut db = Database::new_in_memory().expect("in-memory database");
+    let filters = json!({
+        "q": "中文检索",
+        "status": "draft",
+        "sort": "created"
+    });
+    let created = db
+        .knowledge()
+        .create_saved_view("待确认知识", &filters)
+        .expect("create saved view");
+    assert_eq!(created.name, "待确认知识");
+    assert_eq!(created.filters, filters);
+
+    let listed = db.knowledge().list_saved_views().expect("list saved views");
+    assert_eq!(listed.len(), 1);
+    assert_eq!(listed[0].id, created.id);
+
+    let updated_filters = json!({ "project": "Rust", "usage": "never_used" });
+    let updated = db
+        .knowledge()
+        .update_saved_view(&created.id, "未使用的 Rust 卡片", &updated_filters)
+        .expect("update saved view")
+        .expect("saved view exists");
+    assert_eq!(updated.name, "未使用的 Rust 卡片");
+    assert_eq!(updated.filters, updated_filters);
+
+    assert!(db
+        .knowledge()
+        .delete_saved_view(&created.id)
+        .expect("delete saved view"));
+    assert!(db
+        .knowledge()
+        .list_saved_views()
+        .expect("list saved views")
+        .is_empty());
 }
 
 #[test]
@@ -665,9 +1041,475 @@ fn confirmed_card_enters_due_queue_with_default_fields() {
 
     let due = db.knowledge().due(20, "2026-07-16").expect("due cards");
     assert_eq!(due.len(), 1);
-    assert_eq!(due[0].id, card.id);
+    assert_eq!(due[0].knowledge_card_id, card.id);
     assert_eq!(due[0].next_review_at, "");
-    assert_eq!(due[0].status, "confirmed");
+    assert_eq!(due[0].card_status, "confirmed");
+}
+
+#[test]
+fn batch_confirmation_requires_source_and_creates_default_review_items() {
+    let mut db = Database::new_in_memory().expect("in-memory database");
+
+    let mut missing_source_for_confirm = card_draft("draft");
+    missing_source_for_confirm.source_date.clear();
+    missing_source_for_confirm.source_excerpt.clear();
+    let missing_source_for_confirm = db
+        .knowledge()
+        .save(missing_source_for_confirm)
+        .expect("save draft without source");
+    assert!(matches!(
+        db.knowledge().batch_update(
+            std::slice::from_ref(&missing_source_for_confirm.id),
+            "confirm",
+            &[]
+        ),
+        Err(rusqlite::Error::InvalidQuery)
+    ));
+    assert_eq!(
+        db.knowledge()
+            .find(&missing_source_for_confirm.id)
+            .unwrap()
+            .unwrap()
+            .status,
+        "draft"
+    );
+
+    let mut missing_source_for_set_status = card_draft("draft");
+    missing_source_for_set_status.source_date.clear();
+    missing_source_for_set_status.source_excerpt.clear();
+    let missing_source_for_set_status = db
+        .knowledge()
+        .save(missing_source_for_set_status)
+        .expect("save second draft without source");
+    assert!(matches!(
+        db.knowledge().batch_update(
+            std::slice::from_ref(&missing_source_for_set_status.id),
+            "set_status",
+            &["confirmed".into()]
+        ),
+        Err(rusqlite::Error::InvalidQuery)
+    ));
+
+    let mut confirm_draft = card_draft("draft");
+    confirm_draft.title = "批量确认创建复习题".into();
+    let confirm_draft = db
+        .knowledge()
+        .save(confirm_draft)
+        .expect("save confirm draft");
+    assert_eq!(
+        db.knowledge()
+            .batch_update(std::slice::from_ref(&confirm_draft.id), "confirm", &[])
+            .expect("batch confirm"),
+        1
+    );
+    assert_eq!(
+        db.knowledge()
+            .list_review_items(&confirm_draft.id)
+            .unwrap()
+            .len(),
+        1
+    );
+
+    let mut set_status_draft = card_draft("draft");
+    set_status_draft.title = "批量状态创建复习题".into();
+    let set_status_draft = db
+        .knowledge()
+        .save(set_status_draft)
+        .expect("save status draft");
+    assert_eq!(
+        db.knowledge()
+            .batch_update(
+                std::slice::from_ref(&set_status_draft.id),
+                "set_status",
+                &["confirmed".into()]
+            )
+            .expect("batch set confirmed"),
+        1
+    );
+    assert_eq!(
+        db.knowledge()
+            .list_review_items(&set_status_draft.id)
+            .unwrap()
+            .len(),
+        1
+    );
+}
+
+#[test]
+fn review_items_are_atomic_questions_and_track_content_versions() {
+    let mut db = Database::new_in_memory().expect("in-memory database");
+    let card = db
+        .knowledge()
+        .save(card_draft("confirmed"))
+        .expect("save confirmed card");
+
+    let original_items = db
+        .knowledge()
+        .list_review_items(&card.id)
+        .expect("list default review item");
+    assert_eq!(original_items.len(), 1);
+    assert_eq!(original_items[0].prompt, card.title);
+    assert_eq!(original_items[0].answer, card.content);
+    assert_eq!(original_items[0].source_version, 1);
+    assert_eq!(original_items[0].status, "active");
+
+    let second = db
+        .knowledge()
+        .create_review_item(
+            &card.id,
+            ReviewItemDraft {
+                item_type: "code".into(),
+                status: "active".into(),
+                prompt: "如何保证资源在异常路径也能释放？".into(),
+                answer: "用 RAII，让对象生命周期绑定资源生命周期。".into(),
+                hint: "看构造与析构".into(),
+            },
+        )
+        .expect("create second review item")
+        .expect("second item exists");
+    assert_eq!(db.knowledge().list_review_items(&card.id).unwrap().len(), 2);
+
+    let due = db.knowledge().due(20, "2026-07-16").expect("due items");
+    assert_eq!(due.len(), 2);
+    assert!(due
+        .iter()
+        .any(|item| item.id == second.id && item.prompt.contains("异常路径")));
+    // ReviewCard 的领域类型没有正文 content 字段，防止复习接口重新退化成长文卡片。
+    assert!(due.iter().all(|item| !item.answer.is_empty()));
+
+    let mut changed = card_draft("confirmed");
+    changed.title = "RAII 的核心价值".into();
+    changed.content = "更新后的正文：资源获取与对象生命周期绑定。".into();
+    db.knowledge()
+        .update(&card.id, changed)
+        .expect("update knowledge content")
+        .expect("card exists");
+
+    let stale_items = db
+        .knowledge()
+        .list_review_items(&card.id)
+        .expect("list stale review items");
+    assert_eq!(stale_items.len(), 2);
+    assert!(stale_items.iter().all(|item| item.status == "stale"));
+    assert!(db.knowledge().due(20, "2026-07-16").unwrap().is_empty());
+
+    let repaired = db
+        .knowledge()
+        .update_review_item(
+            &second.id,
+            ReviewItemDraft {
+                item_type: "code".into(),
+                status: "active".into(),
+                prompt: "如何保证资源在异常路径也能释放？".into(),
+                answer: "用 RAII，让对象生命周期绑定资源生命周期。".into(),
+                hint: "看构造与析构".into(),
+            },
+        )
+        .expect("repair stale item")
+        .expect("item exists");
+    assert_eq!(repaired.status, "active");
+    assert_eq!(repaired.source_version, 2);
+    assert_eq!(db.knowledge().due(20, "2026-07-16").unwrap().len(), 1);
+
+    assert!(db
+        .knowledge()
+        .archive_review_item(&second.id)
+        .expect("archive item"));
+    let remaining_items = db
+        .knowledge()
+        .list_review_items(&card.id)
+        .expect("list remaining item");
+    assert_eq!(remaining_items.len(), 1);
+    assert_eq!(remaining_items[0].status, "stale");
+    assert!(db.knowledge().due(20, "2026-07-16").unwrap().is_empty());
+}
+
+#[test]
+fn editing_an_active_review_item_does_not_keep_the_old_schedule() {
+    let mut db = Database::new_in_memory().expect("in-memory database");
+    let card = db
+        .knowledge()
+        .save(card_draft("confirmed"))
+        .expect("save confirmed card");
+    let item = db
+        .knowledge()
+        .list_review_items(&card.id)
+        .expect("list review item")
+        .into_iter()
+        .next()
+        .expect("default review item");
+
+    db.knowledge()
+        .apply_grade(GradeUpdate {
+            id: &item.id,
+            grade: "good",
+            stability: 3.0,
+            difficulty: 5.0,
+            interval_days: 3.0,
+            next_review_at: "2026-07-19",
+            today: "2026-07-16",
+        })
+        .expect("grade review item");
+
+    let edited = db
+        .knowledge()
+        .update_review_item(
+            &item.id,
+            ReviewItemDraft {
+                item_type: "basic".into(),
+                status: "active".into(),
+                prompt: "修改后的问题".into(),
+                answer: "修改后的答案".into(),
+                hint: "新的提示".into(),
+            },
+        )
+        .expect("edit review item")
+        .expect("review item exists");
+    assert_eq!(edited.status, "stale");
+    assert_eq!(edited.review_count, 0);
+    assert_eq!(edited.review_state, "new");
+    assert_eq!(edited.next_review_at, "");
+    assert!(db.knowledge().due(20, "2026-07-16").unwrap().is_empty());
+
+    let restored = db
+        .knowledge()
+        .update_review_item(
+            &item.id,
+            ReviewItemDraft {
+                item_type: "basic".into(),
+                status: "active".into(),
+                prompt: edited.prompt,
+                answer: edited.answer,
+                hint: edited.hint,
+            },
+        )
+        .expect("restore reviewed item")
+        .expect("review item exists");
+    assert_eq!(restored.status, "active");
+    assert_eq!(restored.review_count, 0);
+    assert_eq!(db.knowledge().due(20, "2026-07-16").unwrap().len(), 1);
+}
+
+#[test]
+fn unconfirmed_cards_suspend_active_review_items_without_reactivating_them() {
+    let mut db = Database::new_in_memory().expect("in-memory database");
+    let card = db
+        .knowledge()
+        .save(card_draft("confirmed"))
+        .expect("save confirmed card");
+    let item = db
+        .knowledge()
+        .list_review_items(&card.id)
+        .expect("list review item")
+        .into_iter()
+        .next()
+        .expect("default review item");
+
+    let mut draft = card_draft("draft");
+    draft.title = "待整理的知识".into();
+    db.knowledge()
+        .update(&card.id, draft)
+        .expect("move card back to draft")
+        .expect("card exists");
+    let suspended = db
+        .knowledge()
+        .list_review_items(&card.id)
+        .expect("list suspended item")
+        .into_iter()
+        .find(|candidate| candidate.id == item.id)
+        .expect("item exists");
+    assert_eq!(suspended.status, "suspended");
+    assert!(db.knowledge().due(20, "2026-07-16").unwrap().is_empty());
+
+    let mut confirmed = card_draft("confirmed");
+    confirmed.title = "待整理的知识".into();
+    db.knowledge()
+        .update(&card.id, confirmed)
+        .expect("confirm card again")
+        .expect("card exists");
+    assert_eq!(
+        db.knowledge()
+            .list_review_items(&card.id)
+            .unwrap()
+            .into_iter()
+            .find(|candidate| candidate.id == item.id)
+            .unwrap()
+            .status,
+        "suspended",
+        "re-confirming a card should not silently opt the review item back in"
+    );
+
+    let second = db
+        .knowledge()
+        .save({
+            let mut draft = card_draft("confirmed");
+            draft.title = "批量状态传播".into();
+            draft
+        })
+        .expect("save second confirmed card");
+    db.knowledge()
+        .batch_update(
+            std::slice::from_ref(&second.id),
+            "set_status",
+            &["draft".into()],
+        )
+        .expect("batch move card to draft");
+    assert_eq!(
+        db.knowledge()
+            .list_review_items(&second.id)
+            .unwrap()
+            .into_iter()
+            .next()
+            .unwrap()
+            .status,
+        "suspended"
+    );
+}
+
+#[test]
+fn portable_archive_preserves_spaces_and_multiple_review_items() {
+    let mut source = Database::new_in_memory().expect("source database");
+    source
+        .knowledge()
+        .create_space("C++", "topic", "长期学习领域")
+        .expect("create topic")
+        .expect("topic exists");
+    let article = source
+        .articles()
+        .save(ArticleDraft {
+            date: "2026-07-18".into(),
+            title: "空间归档".into(),
+            content: "记录与知识条目共享空间目录。".into(),
+            mood: "".into(),
+            tags: vec![],
+            spaces: vec!["C++".into()],
+        })
+        .expect("save article");
+    let mut card = card_draft("confirmed");
+    card.title = "RAII".into();
+    card.source_article_id = article.id.clone();
+    card.projects = vec!["C++".into()];
+    let card = source.knowledge().save(card).expect("save card");
+    source
+        .knowledge()
+        .create_review_item(
+            &card.id,
+            ReviewItemDraft {
+                item_type: "compare".into(),
+                status: "active".into(),
+                prompt: "RAII 与手动释放的差异是什么？".into(),
+                answer: "前者由生命周期自动管理，后者依赖调用者遵守约定。".into(),
+                hint: "比较异常路径".into(),
+            },
+        )
+        .expect("create review item")
+        .expect("review item exists");
+
+    let archive = source
+        .portable_archive()
+        .export_json()
+        .expect("export archive");
+    assert_eq!(archive["version"], json!(3));
+    assert_eq!(archive["articles"][0]["spaces"], json!(["C++"]));
+    assert_eq!(archive["review_items"].as_array().unwrap().len(), 2);
+
+    let mut target = Database::new_in_memory().expect("target database");
+    target
+        .portable_archive()
+        .import_json(archive)
+        .expect("import archive");
+    let restored_article = target
+        .articles()
+        .find_by_id(&article.id)
+        .expect("find article")
+        .expect("article exists");
+    assert_eq!(restored_article.spaces, vec!["C++"]);
+    let restored_items = target
+        .knowledge()
+        .list_review_items(&card.id)
+        .expect("list restored review items");
+    assert_eq!(restored_items.len(), 2);
+    assert!(restored_items
+        .iter()
+        .any(|item| item.prompt.contains("手动释放")));
+}
+
+#[test]
+fn portable_archive_import_preserves_article_ids_when_dates_collide() {
+    let mut source = Database::new_in_memory().expect("source database");
+    let source_article = source
+        .articles()
+        .save(ArticleDraft {
+            date: "2026-07-20".into(),
+            title: "来源记录".into(),
+            content: "归档里的内容".into(),
+            mood: "".into(),
+            tags: vec![],
+            spaces: vec![],
+        })
+        .expect("save source article");
+    let mut source_card = card_draft("draft");
+    source_card.title = "归档来源卡".into();
+    source_card.source_article_id = source_article.id.clone();
+    let source_card = source
+        .knowledge()
+        .save(source_card)
+        .expect("save source card");
+    let archive = source
+        .portable_archive()
+        .export_json()
+        .expect("export archive");
+
+    let mut target = Database::new_in_memory().expect("target database");
+    let target_article = target
+        .articles()
+        .save(ArticleDraft {
+            date: "2026-07-20".into(),
+            title: "目标记录".into(),
+            content: "将被归档覆盖".into(),
+            mood: "".into(),
+            tags: vec![],
+            spaces: vec![],
+        })
+        .expect("save target article");
+    let mut local_card = card_draft("draft");
+    local_card.title = "本地来源卡".into();
+    local_card.source_article_id = target_article.id.clone();
+    let local_card = target
+        .knowledge()
+        .save(local_card)
+        .expect("save local card");
+
+    target
+        .portable_archive()
+        .import_json(archive)
+        .expect("import archive");
+
+    let restored_article = target
+        .articles()
+        .find_by_date("2026-07-20")
+        .expect("find collided article")
+        .expect("article exists");
+    assert_eq!(restored_article.id, target_article.id);
+    assert_eq!(restored_article.title, "来源记录");
+    assert_eq!(
+        target
+            .knowledge()
+            .find(&source_card.id)
+            .expect("find imported card")
+            .expect("imported card exists")
+            .source_article_id,
+        target_article.id
+    );
+    assert_eq!(
+        target
+            .knowledge()
+            .find(&local_card.id)
+            .expect("find local card")
+            .expect("local card exists")
+            .source_article_id,
+        target_article.id
+    );
 }
 
 #[test]
@@ -783,13 +1625,42 @@ fn status_change_away_from_confirmed_clears_next_review_at() {
         .expect("due cards")
         .is_empty());
 
-    // 重新确认后 next_review_at 为空 → 视为到期（确认即可复习）
+    // 重新确认不会自动重新启用复习题；需要用户明确恢复，避免状态切换意外改变学习计划。
     let confirmed = db
         .knowledge()
         .update(&card.id, card_draft("confirmed"))
         .expect("reconfirm card")
         .expect("card exists");
     assert_eq!(confirmed.next_review_at, "");
+    let suspended_item = db
+        .knowledge()
+        .list_review_items(&card.id)
+        .expect("review items")
+        .into_iter()
+        .next()
+        .expect("default review item");
+    assert_eq!(suspended_item.status, "suspended");
+    assert!(db
+        .knowledge()
+        .due(20, "2026-07-19")
+        .expect("due cards")
+        .is_empty());
+
+    let resumed = db
+        .knowledge()
+        .update_review_item(
+            &suspended_item.id,
+            ReviewItemDraft {
+                item_type: suspended_item.item_type,
+                status: "active".into(),
+                prompt: suspended_item.prompt,
+                answer: suspended_item.answer,
+                hint: suspended_item.hint,
+            },
+        )
+        .expect("resume review item")
+        .expect("review item exists");
+    assert_eq!(resumed.status, "active");
     assert_eq!(
         db.knowledge()
             .due(20, "2026-07-19")
@@ -1221,7 +2092,7 @@ fn due_queue_limits_new_cards_to_daily_cap() {
         due.iter().filter(|c| c.next_review_at.is_empty()).count(),
         20
     );
-    assert!(due.iter().any(|c| c.id == due_card.id));
+    assert!(due.iter().any(|c| c.knowledge_card_id == due_card.id));
 }
 
 #[test]
@@ -1290,6 +2161,9 @@ fn review_history_and_heatmap_track_per_day_counts() {
     assert_eq!(history[0].grade, "good");
     assert_eq!(history[1].grade, "again");
     assert_eq!(history[0].reviewed_at, "2026-07-16");
+    assert_eq!(history[0].prompt_snapshot, card.title);
+    assert_eq!(history[0].answer_snapshot, card.content);
+    assert_eq!(history[0].review_item_source_version, 1);
 
     let heatmap = db
         .knowledge()
@@ -1333,6 +2207,43 @@ fn related_ids_are_persisted_and_round_trip() {
         .expect("find")
         .expect("exists");
     assert_eq!(restored.related_ids, vec![second.id]);
+}
+
+#[test]
+fn knowledge_card_limits_and_related_ids_are_normalized_at_persistence_boundary() {
+    let mut db = Database::new_in_memory().expect("in-memory database");
+
+    let mut oversized_title = card_draft("draft");
+    oversized_title.title = "标题".repeat(81);
+    assert!(db.knowledge().save(oversized_title).is_err());
+
+    let mut oversized_content = card_draft("draft");
+    oversized_content.content = "正文".repeat(10_001);
+    assert!(db.knowledge().save(oversized_content).is_err());
+
+    let first = db.knowledge().save(card_draft("draft")).expect("save card");
+    let second = db
+        .knowledge()
+        .save({
+            let mut draft = card_draft("draft");
+            draft.title = "被关联的卡".into();
+            draft
+        })
+        .expect("save related card");
+
+    let mut update = card_draft("draft");
+    update.related_ids = vec![
+        format!("  {} ", second.id),
+        second.id.clone(),
+        first.id.clone(),
+        "x".repeat(129),
+    ];
+    let updated = db
+        .knowledge()
+        .update(&first.id, update)
+        .expect("update related ids")
+        .expect("card exists");
+    assert_eq!(updated.declared_related_ids, vec![second.id]);
 }
 
 #[test]
@@ -1445,45 +2356,4 @@ fn deleting_a_card_hides_related_ids_until_the_card_is_restored() {
         restored_a.related_ids.contains(&b.id),
         "恢复 B 后原有关联应自动回来"
     );
-}
-
-#[test]
-fn saved_knowledge_views_round_trip_and_update_filters() {
-    let mut db = Database::new_in_memory().expect("in-memory database");
-    let filters = json!({
-        "q": "  中文检索 ",
-        "status": "draft",
-        "sort": "created",
-        "unknown": "discarded"
-    });
-
-    let created = db
-        .knowledge()
-        .create_saved_view("待确认知识", &filters)
-        .expect("create saved view");
-    assert_eq!(created.name, "待确认知识");
-    assert_eq!(created.filters, filters);
-
-    let listed = db.knowledge().list_saved_views().expect("list saved views");
-    assert_eq!(listed.len(), 1);
-    assert_eq!(listed[0].id, created.id);
-
-    let updated_filters = json!({ "project": "Rust", "usage": "never_used" });
-    let updated = db
-        .knowledge()
-        .update_saved_view(&created.id, "未使用的 Rust 卡片", &updated_filters)
-        .expect("update saved view")
-        .expect("saved view exists");
-    assert_eq!(updated.name, "未使用的 Rust 卡片");
-    assert_eq!(updated.filters, updated_filters);
-
-    assert!(db
-        .knowledge()
-        .delete_saved_view(&created.id)
-        .expect("delete saved view"));
-    assert!(db
-        .knowledge()
-        .list_saved_views()
-        .expect("list saved views")
-        .is_empty());
 }

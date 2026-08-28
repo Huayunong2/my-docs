@@ -1,7 +1,7 @@
 use crate::models::{
-    ArchiveMonth, Article, ArticleSummary, DailyReviewCount, DayExemption, KnowledgeCard,
-    KnowledgeProject, KnowledgeSavedView, KnowledgeSummary, Review, ReviewHistoryEntry,
-    ReviewSettings, ReviewStats, ReviewStatsResponse,
+    AiConfig, AiRoutingConfig, AiTask, ArchiveMonth, Article, ArticleSummary, DailyReviewCount,
+    DayExemption, KnowledgeCard, KnowledgeProject, KnowledgeSavedView, KnowledgeSummary, Review,
+    ReviewCard, ReviewHistoryEntry, ReviewItem, ReviewSettings, ReviewStats, ReviewStatsResponse,
 };
 use chrono::{Duration, Local, NaiveDate};
 use rusqlite::types::{Type, Value as SqlValue};
@@ -15,11 +15,49 @@ use std::fmt;
 use std::path::PathBuf;
 use uuid::Uuid;
 
+type LegacyCardReviewFields = (
+    String,
+    String,
+    String,
+    String,
+    String,
+    String,
+    String,
+    f64,
+    f64,
+    i64,
+    String,
+    String,
+    String,
+);
+
 pub(crate) const DEFAULT_REVIEW_NEW_DAILY_LIMIT: i64 = 20;
 pub(crate) const DEFAULT_REVIEW_SESSION_LIMIT: i64 = 20;
+pub(crate) const MAX_KNOWLEDGE_CARD_TITLE_CHARS: usize = 160;
+pub(crate) const MAX_KNOWLEDGE_CARD_CONTENT_CHARS: usize = 20_000;
+const MAX_KNOWLEDGE_RELATED_ID_CHARS: usize = 128;
+const MAX_KNOWLEDGE_RELATED_IDS: usize = 64;
 
 const REVIEW_NEW_DAILY_LIMIT_KEY: &str = "review_new_daily_limit";
 const REVIEW_SESSION_LIMIT_KEY: &str = "review_session_limit";
+
+const DEFAULT_AI_BASE_URL: &str = "https://api.openai.com/v1";
+const DEFAULT_AI_MODEL: &str = "gpt-4o-mini";
+const DEFAULT_AI_TEMPERATURE: f32 = 0.2;
+const DEFAULT_AI_MAX_TOKENS: u64 = 0;
+const DEFAULT_AI_TIMEOUT_SECS: u64 = 45;
+const DEFAULT_AI_RETRIES: u64 = 2;
+const DEFAULT_AI_MIN_INTERVAL_MS: u64 = 1200;
+
+const AI_API_KEY_KEY: &str = "ai_api_key";
+const AI_BASE_URL_KEY: &str = "ai_base_url";
+const AI_MODEL_KEY: &str = "ai_model";
+const AI_TEMPERATURE_KEY: &str = "ai_temperature";
+const AI_MAX_TOKENS_KEY: &str = "ai_max_tokens";
+const AI_TIMEOUT_SECS_KEY: &str = "ai_timeout_secs";
+const AI_RETRIES_KEY: &str = "ai_retries";
+const AI_MIN_INTERVAL_MS_KEY: &str = "ai_min_interval_ms";
+const AI_ROUTING_KEY: &str = "ai_routing";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ArticleDraft {
@@ -28,6 +66,7 @@ pub(crate) struct ArticleDraft {
     pub(crate) content: String,
     pub(crate) mood: String,
     pub(crate) tags: Vec<String>,
+    pub(crate) spaces: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -35,7 +74,12 @@ pub(crate) struct ArticleChanges {
     pub(crate) title: String,
     pub(crate) content: String,
     pub(crate) mood: String,
-    pub(crate) tags: Vec<String>,
+    /// `None` means the caller is using the legacy update shape and did not
+    /// intend to change tags.
+    pub(crate) tags: Option<Vec<String>>,
+    /// `None` means the caller is using the legacy update shape and did not
+    /// intend to change space membership.
+    pub(crate) spaces: Option<Vec<String>>,
 }
 
 pub(crate) struct ArticlePersistence<'a> {
@@ -110,6 +154,15 @@ pub(crate) struct KnowledgeCardDraft {
     pub(crate) projects: Vec<String>,
 }
 
+#[derive(Debug, Clone)]
+pub(crate) struct ReviewItemDraft {
+    pub(crate) item_type: String,
+    pub(crate) status: String,
+    pub(crate) prompt: String,
+    pub(crate) answer: String,
+    pub(crate) hint: String,
+}
+
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) struct ArchiveImportReport {
     pub(crate) imported_articles: usize,
@@ -158,6 +211,8 @@ struct PortableArchiveInput {
     #[serde(default)]
     knowledge_cards: Vec<PortableKnowledgeCard>,
     #[serde(default)]
+    review_items: Vec<PortableReviewItem>,
+    #[serde(default)]
     knowledge_projects: Vec<String>,
 }
 
@@ -173,6 +228,8 @@ struct PortableArticle {
     mood: String,
     #[serde(default, deserialize_with = "deserialize_string_vec")]
     tags: Vec<String>,
+    #[serde(default, deserialize_with = "deserialize_string_vec")]
+    spaces: Vec<String>,
     #[serde(default)]
     created_at: String,
     #[serde(default)]
@@ -230,6 +287,8 @@ struct PortableKnowledgeCard {
     created_at: String,
     #[serde(default)]
     updated_at: String,
+    #[serde(default = "default_content_version")]
+    content_version: i64,
     #[serde(default = "default_review_state")]
     review_state: String,
     #[serde(default)]
@@ -252,22 +311,104 @@ struct PortableKnowledgeCard {
     first_reviewed_at: String,
     #[serde(default, deserialize_with = "deserialize_string_vec")]
     projects: Vec<String>,
+    /// 空字符串表示活动卡片；非空值表示仍可从回收站恢复的软删除时间。
+    #[serde(default)]
+    deleted_at: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct PortableReviewItem {
+    id: String,
+    knowledge_card_id: String,
+    #[serde(default = "default_review_item_type")]
+    item_type: String,
+    #[serde(default = "default_review_item_status")]
+    status: String,
+    #[serde(default)]
+    prompt: String,
+    #[serde(default)]
+    answer: String,
+    #[serde(default)]
+    hint: String,
+    #[serde(default = "default_content_version")]
+    source_version: i64,
+    #[serde(default)]
+    created_at: String,
+    #[serde(default)]
+    updated_at: String,
+    #[serde(default = "default_review_state")]
+    review_state: String,
+    #[serde(default)]
+    review_interval_days: f64,
+    #[serde(default = "default_review_ease")]
+    review_ease: f64,
+    #[serde(default)]
+    review_count: i64,
+    #[serde(default)]
+    last_reviewed_at: String,
+    #[serde(default)]
+    next_review_at: String,
+    #[serde(default)]
+    first_reviewed_at: String,
 }
 
 pub struct Database {
     conn: Connection,
 }
 
+fn read_setting(conn: &Connection, key: &str) -> Result<Option<String>> {
+    conn.query_row(
+        "SELECT value FROM app_settings WHERE key=?1",
+        params![key],
+        |row| row.get(0),
+    )
+    .optional()
+}
+
 fn read_setting_i64(conn: &Connection, key: &str, default: i64) -> Result<i64> {
-    let raw: Option<String> = conn
-        .query_row(
-            "SELECT value FROM app_settings WHERE key=?1",
-            params![key],
-            |row| row.get(0),
-        )
-        .optional()?;
-    Ok(raw
+    Ok(read_setting(conn, key)?
         .and_then(|value| value.trim().parse::<i64>().ok())
+        .unwrap_or(default))
+}
+
+fn read_setting_text(
+    conn: &Connection,
+    setting_key: &str,
+    env_key: &str,
+    default: &str,
+) -> Result<String> {
+    let value = read_setting(conn, setting_key)?
+        .or_else(|| std::env::var(env_key).ok())
+        .unwrap_or_else(|| default.to_string());
+    let value = value.trim();
+    Ok(if value.is_empty() {
+        default.to_string()
+    } else {
+        value.to_string()
+    })
+}
+
+fn read_setting_u64(
+    conn: &Connection,
+    setting_key: &str,
+    env_key: &str,
+    default: u64,
+) -> Result<u64> {
+    Ok(read_setting(conn, setting_key)?
+        .or_else(|| std::env::var(env_key).ok())
+        .and_then(|value| value.trim().parse::<u64>().ok())
+        .unwrap_or(default))
+}
+
+fn read_setting_f32(
+    conn: &Connection,
+    setting_key: &str,
+    env_key: &str,
+    default: f32,
+) -> Result<f32> {
+    Ok(read_setting(conn, setting_key)?
+        .or_else(|| std::env::var(env_key).ok())
+        .and_then(|value| value.trim().parse::<f32>().ok())
         .unwrap_or(default))
 }
 
@@ -338,6 +479,164 @@ impl Database {
         })
     }
 
+    pub(crate) fn ai_config(&self) -> Result<AiConfig> {
+        let api_key = read_setting(&self.conn, AI_API_KEY_KEY)?
+            .or_else(|| std::env::var("DAILY_SUMMARY_AI_API_KEY").ok())
+            .unwrap_or_default()
+            .trim()
+            .to_string();
+        Ok(AiConfig {
+            api_key,
+            base_url: read_setting_text(
+                &self.conn,
+                AI_BASE_URL_KEY,
+                "DAILY_SUMMARY_AI_BASE_URL",
+                DEFAULT_AI_BASE_URL,
+            )?
+            .trim_end_matches('/')
+            .to_string(),
+            model: read_setting_text(
+                &self.conn,
+                AI_MODEL_KEY,
+                "DAILY_SUMMARY_AI_MODEL",
+                DEFAULT_AI_MODEL,
+            )?,
+            temperature: read_setting_f32(
+                &self.conn,
+                AI_TEMPERATURE_KEY,
+                "DAILY_SUMMARY_AI_TEMPERATURE",
+                DEFAULT_AI_TEMPERATURE,
+            )?,
+            max_tokens: read_setting_u64(
+                &self.conn,
+                AI_MAX_TOKENS_KEY,
+                "DAILY_SUMMARY_AI_MAX_TOKENS",
+                DEFAULT_AI_MAX_TOKENS,
+            )?,
+            timeout_secs: read_setting_u64(
+                &self.conn,
+                AI_TIMEOUT_SECS_KEY,
+                "DAILY_SUMMARY_AI_TIMEOUT_SECS",
+                DEFAULT_AI_TIMEOUT_SECS,
+            )?,
+            retries: read_setting_u64(
+                &self.conn,
+                AI_RETRIES_KEY,
+                "DAILY_SUMMARY_AI_RETRIES",
+                DEFAULT_AI_RETRIES,
+            )?,
+            min_interval_ms: read_setting_u64(
+                &self.conn,
+                AI_MIN_INTERVAL_MS_KEY,
+                "DAILY_SUMMARY_AI_MIN_INTERVAL_MS",
+                DEFAULT_AI_MIN_INTERVAL_MS,
+            )?,
+        })
+    }
+
+    pub(crate) fn ai_routing(&self) -> Result<AiRoutingConfig> {
+        let global = self.ai_config()?;
+        let Some(value) = read_setting(&self.conn, AI_ROUTING_KEY)? else {
+            return Ok(AiRoutingConfig::from_global(&global));
+        };
+        serde_json::from_str(&value).map_err(|error| {
+            rusqlite::Error::FromSqlConversionFailure(0, Type::Text, Box::new(error))
+        })
+    }
+
+    pub(crate) fn ai_config_for_task(&self, task: AiTask) -> Result<(AiConfig, String)> {
+        let global = self.ai_config()?;
+        let routing = self.ai_routing()?;
+        let requested_profile = routing
+            .routes
+            .get(task.key())
+            .map(String::as_str)
+            .unwrap_or(routing.fallback_profile.as_str());
+        let profile = routing
+            .profiles
+            .iter()
+            .find(|profile| profile.id == requested_profile)
+            .or_else(|| {
+                routing
+                    .profiles
+                    .iter()
+                    .find(|profile| profile.id == routing.fallback_profile)
+            })
+            .or_else(|| routing.profiles.first())
+            .ok_or(rusqlite::Error::InvalidQuery)?;
+        let mut config = global;
+        config.model = profile.model.clone();
+        config.temperature = profile.temperature;
+        config.max_tokens = profile.max_tokens;
+        config.timeout_secs = profile.timeout_secs;
+        config.retries = profile.retries;
+        config.min_interval_ms = profile.min_interval_ms;
+        Ok((config, profile.id.clone()))
+    }
+
+    pub(crate) fn update_ai_routing(
+        &mut self,
+        routing: &AiRoutingConfig,
+    ) -> Result<AiRoutingConfig> {
+        let value = serde_json::to_string(routing)
+            .map_err(|error| rusqlite::Error::ToSqlConversionFailure(Box::new(error)))?;
+        let now = Local::now().format("%Y-%m-%dT%H:%M:%S").to_string();
+        self.conn.execute(
+            "INSERT INTO app_settings (key, value, updated_at) VALUES (?1, ?2, ?3)
+             ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at",
+            params![AI_ROUTING_KEY, value, now],
+        )?;
+        self.ai_routing()
+    }
+
+    pub(crate) fn ai_api_key_source(&self) -> Result<&'static str> {
+        if read_setting(&self.conn, AI_API_KEY_KEY)?.is_some() {
+            return Ok("settings");
+        }
+        if std::env::var("DAILY_SUMMARY_AI_API_KEY")
+            .ok()
+            .map(|value| !value.trim().is_empty())
+            .unwrap_or(false)
+        {
+            return Ok("environment");
+        }
+        Ok("none")
+    }
+
+    pub(crate) fn update_ai_config(
+        &mut self,
+        config: &AiConfig,
+        update_api_key: bool,
+    ) -> Result<AiConfig> {
+        let now = Local::now().format("%Y-%m-%dT%H:%M:%S").to_string();
+        let tx = self.conn.transaction()?;
+        let values = [
+            (AI_BASE_URL_KEY, config.base_url.clone()),
+            (AI_MODEL_KEY, config.model.clone()),
+            (AI_TEMPERATURE_KEY, config.temperature.to_string()),
+            (AI_MAX_TOKENS_KEY, config.max_tokens.to_string()),
+            (AI_TIMEOUT_SECS_KEY, config.timeout_secs.to_string()),
+            (AI_RETRIES_KEY, config.retries.to_string()),
+            (AI_MIN_INTERVAL_MS_KEY, config.min_interval_ms.to_string()),
+        ];
+        for (key, value) in values {
+            tx.execute(
+                "INSERT INTO app_settings (key, value, updated_at) VALUES (?1, ?2, ?3)
+                 ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at",
+                params![key, value, &now],
+            )?;
+        }
+        if update_api_key {
+            tx.execute(
+                "INSERT INTO app_settings (key, value, updated_at) VALUES (?1, ?2, ?3)
+                 ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at",
+                params![AI_API_KEY_KEY, config.api_key, &now],
+            )?;
+        }
+        tx.commit()?;
+        self.ai_config()
+    }
+
     pub(crate) fn update_review_settings(
         &mut self,
         settings: &ReviewSettings,
@@ -402,14 +701,11 @@ impl Database {
         self.conn.execute_batch(
             "CREATE TABLE IF NOT EXISTS schema_version (version INTEGER NOT NULL);",
         )?;
-        let current: i64 = self
-            .conn
-            .query_row(
-                "SELECT COALESCE(MAX(version), 0) FROM schema_version",
-                [],
-                |r| r.get(0),
-            )
-            .unwrap_or(0);
+        let current: i64 = self.conn.query_row(
+            "SELECT COALESCE(MAX(version), 0) FROM schema_version",
+            [],
+            |r| r.get(0),
+        )?;
 
         // ── v1: base tables ──
         if current < 1 {
@@ -792,7 +1088,7 @@ impl Database {
                 .collect::<Result<_>>()?;
             let now = Local::now().format("%Y-%m-%dT%H:%M:%S").to_string();
             for raw in project_json {
-                for project in normalize_tags(parse_json_vec(&raw)?) {
+                for project in normalize_space_names(parse_json_vec(&raw)?) {
                     self.conn.execute(
                         "INSERT OR IGNORE INTO knowledge_projects (id, name, created_at, updated_at)
                          VALUES (?1, ?2, ?3, ?3)",
@@ -823,7 +1119,7 @@ impl Database {
                 .collect::<Result<_>>()?;
             let now = Local::now().format("%Y-%m-%dT%H:%M:%S").to_string();
             for (card_id, raw) in card_projects {
-                for project in normalize_tags(parse_json_vec(&raw)?) {
+                for project in normalize_space_names(parse_json_vec(&raw)?) {
                     ensure_project(&transaction, &project, &now)?;
                     let project_id: String = transaction.query_row(
                         "SELECT id FROM knowledge_projects WHERE name=?1 COLLATE NOCASE",
@@ -899,7 +1195,7 @@ impl Database {
         }
 
         if current < 14 {
-            // 已保存的知识工作台视图是独立用户数据，不与卡片生命周期绑定。
+            // 保存视图是服务端实体；保留这张表使筛选条件可跨设备复用。
             self.conn.execute_batch(
                 "CREATE TABLE IF NOT EXISTS knowledge_saved_views (
                     id           TEXT PRIMARY KEY,
@@ -934,6 +1230,284 @@ impl Database {
                 .execute("INSERT INTO schema_version (version) VALUES (15)", [])?;
         }
 
+        if current < 16 {
+            // 知识正文与主动回忆题解耦：一个知识条目可以有零到多道复习题。
+            // 旧卡片先迁移为一条复习题；较长正文默认暂停，避免升级后直接把长文塞进复习队列。
+            let existing_columns: Vec<String> = self
+                .conn
+                .prepare("PRAGMA table_info(knowledge_cards)")?
+                .query_map([], |row| row.get(1))?
+                .collect::<Result<_>>()?;
+            let review_log_columns: Vec<String> = self
+                .conn
+                .prepare("PRAGMA table_info(review_log)")?
+                .query_map([], |row| row.get(1))?
+                .collect::<Result<_>>()?;
+
+            // DDL、旧数据回填和版本号必须在同一个事务中完成。否则中途失败时，
+            // 数据库会留下“列已加但版本仍是 15”的半迁移状态，下一次启动会再次
+            // 执行不可重复的 ALTER TABLE。
+            let transaction = self.conn.unchecked_transaction()?;
+            if !existing_columns
+                .iter()
+                .any(|column| column == "content_version")
+            {
+                transaction.execute(
+                    "ALTER TABLE knowledge_cards ADD COLUMN content_version INTEGER NOT NULL DEFAULT 1",
+                    [],
+                )?;
+            }
+
+            transaction.execute_batch(
+                "CREATE TABLE IF NOT EXISTS review_items (
+                    id                    TEXT PRIMARY KEY,
+                    knowledge_card_id     TEXT NOT NULL REFERENCES knowledge_cards(id) ON DELETE CASCADE,
+                    item_type             TEXT NOT NULL CHECK(item_type IN ('basic', 'cloze', 'code', 'compare', 'scenario')),
+                    status                TEXT NOT NULL CHECK(status IN ('active', 'suspended', 'stale', 'archived')),
+                    prompt                TEXT NOT NULL,
+                    answer                TEXT NOT NULL,
+                    hint                  TEXT NOT NULL DEFAULT '',
+                    source_version        INTEGER NOT NULL DEFAULT 1,
+                    created_at            TEXT NOT NULL,
+                    updated_at            TEXT NOT NULL,
+                    review_state          TEXT NOT NULL DEFAULT 'new',
+                    review_interval_days REAL NOT NULL DEFAULT 0,
+                    review_ease           REAL NOT NULL DEFAULT 2.5,
+                    review_count          INTEGER NOT NULL DEFAULT 0,
+                    last_reviewed_at      TEXT NOT NULL DEFAULT '',
+                    next_review_at        TEXT NOT NULL DEFAULT '',
+                    first_reviewed_at     TEXT NOT NULL DEFAULT ''
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_review_items_card
+                    ON review_items(knowledge_card_id, status, updated_at DESC);
+                CREATE INDEX IF NOT EXISTS idx_review_items_due
+                    ON review_items(status, next_review_at, created_at);
+
+                ",
+            )?;
+            if !review_log_columns
+                .iter()
+                .any(|column| column == "review_item_id")
+            {
+                transaction.execute(
+                    "ALTER TABLE review_log ADD COLUMN review_item_id TEXT NOT NULL DEFAULT ''",
+                    [],
+                )?;
+            }
+            transaction.execute(
+                "CREATE INDEX IF NOT EXISTS idx_review_log_item
+                 ON review_log(review_item_id, reviewed_at)",
+                [],
+            )?;
+            let legacy_cards: Vec<LegacyCardReviewFields> = transaction
+                .prepare(
+                    "SELECT id, status, title, content, created_at, updated_at,
+                            review_state, review_interval_days, review_ease, review_count,
+                            last_reviewed_at, next_review_at, first_reviewed_at
+                     FROM knowledge_cards",
+                )?
+                .query_map([], |row| {
+                    Ok((
+                        row.get(0)?,
+                        row.get(1)?,
+                        row.get(2)?,
+                        row.get(3)?,
+                        row.get(4)?,
+                        row.get(5)?,
+                        row.get(6)?,
+                        row.get(7)?,
+                        row.get(8)?,
+                        row.get(9)?,
+                        row.get(10)?,
+                        row.get(11)?,
+                        row.get(12)?,
+                    ))
+                })?
+                .collect::<Result<_>>()?;
+            for (
+                card_id,
+                card_status,
+                title,
+                content,
+                created_at,
+                updated_at,
+                review_state,
+                review_interval_days,
+                review_ease,
+                review_count,
+                last_reviewed_at,
+                next_review_at,
+                first_reviewed_at,
+            ) in legacy_cards
+            {
+                let item_status =
+                    if card_status == "confirmed" && content.trim().chars().count() <= 480 {
+                        "active"
+                    } else {
+                        "suspended"
+                    };
+                transaction.execute(
+                    "INSERT INTO review_items
+                        (id, knowledge_card_id, item_type, status, prompt, answer, hint,
+                         source_version, created_at, updated_at, review_state,
+                         review_interval_days, review_ease, review_count, last_reviewed_at,
+                         next_review_at, first_reviewed_at)
+                     VALUES (?1, ?2, 'basic', ?3, ?4, ?5, '', 1, ?6, ?7, ?8,
+                             ?9, ?10, ?11, ?12, ?13, ?14)",
+                    params![
+                        Uuid::new_v4().to_string(),
+                        card_id,
+                        item_status,
+                        title,
+                        content,
+                        created_at,
+                        updated_at,
+                        review_state,
+                        review_interval_days,
+                        review_ease,
+                        review_count,
+                        last_reviewed_at,
+                        next_review_at,
+                        first_reviewed_at,
+                    ],
+                )?;
+            }
+            transaction.execute(
+                "UPDATE review_log
+                 SET review_item_id=(
+                     SELECT id FROM review_items
+                     WHERE review_items.knowledge_card_id=review_log.card_id
+                     ORDER BY review_items.created_at ASC LIMIT 1
+                 )
+                 WHERE review_item_id=''",
+                [],
+            )?;
+            transaction.execute("INSERT INTO schema_version (version) VALUES (16)", [])?;
+            transaction.commit()?;
+        }
+
+        if current < 17 {
+            // knowledge_projects 是兼容旧 API 的表名；从这一版起它承担统一空间目录，
+            // 用 kind 区分长期主题与有生命周期的项目，避免把 C++ 之类的长期领域硬叫成项目。
+            let existing_columns: Vec<String> = self
+                .conn
+                .prepare("PRAGMA table_info(knowledge_projects)")?
+                .query_map([], |row| row.get(1))?
+                .collect::<Result<_>>()?;
+            if !existing_columns.iter().any(|column| column == "kind") {
+                self.conn.execute(
+                    "ALTER TABLE knowledge_projects
+                     ADD COLUMN kind TEXT NOT NULL DEFAULT 'project'
+                     CHECK(kind IN ('topic', 'project'))",
+                    [],
+                )?;
+            }
+            if !existing_columns
+                .iter()
+                .any(|column| column == "description")
+            {
+                self.conn.execute(
+                    "ALTER TABLE knowledge_projects
+                     ADD COLUMN description TEXT NOT NULL DEFAULT ''",
+                    [],
+                )?;
+            }
+            if !existing_columns.iter().any(|column| column == "status") {
+                self.conn.execute(
+                    "ALTER TABLE knowledge_projects
+                     ADD COLUMN status TEXT NOT NULL DEFAULT 'active'
+                     CHECK(status IN ('active', 'archived'))",
+                    [],
+                )?;
+            }
+            self.conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_knowledge_projects_kind_status
+                 ON knowledge_projects(kind, status, name COLLATE NOCASE)",
+                [],
+            )?;
+            self.conn
+                .execute("INSERT INTO schema_version (version) VALUES (17)", [])?;
+        }
+
+        if current < 18 {
+            // 每日记录仍以日期为主轴，但可选地归入一个或多个主题/项目空间。
+            self.conn.execute_batch(
+                "CREATE TABLE IF NOT EXISTS article_spaces (
+                    article_id TEXT NOT NULL REFERENCES articles(id) ON DELETE CASCADE,
+                    space_id   TEXT NOT NULL REFERENCES knowledge_projects(id) ON DELETE CASCADE,
+                    PRIMARY KEY (article_id, space_id)
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_article_spaces_space
+                    ON article_spaces(space_id, article_id);",
+            )?;
+            self.conn
+                .execute("INSERT INTO schema_version (version) VALUES (18)", [])?;
+        }
+
+        if current < 19 {
+            // 复习日志保留评分当时的题目/答案快照，避免复习题编辑后历史记录失去解释力。
+            let existing_columns: Vec<String> = self
+                .conn
+                .prepare("PRAGMA table_info(review_log)")?
+                .query_map([], |row| row.get(1))?
+                .collect::<Result<_>>()?;
+            let mut pending = Vec::new();
+            for (column, statement) in [
+                (
+                    "review_item_source_version",
+                    "ALTER TABLE review_log ADD COLUMN review_item_source_version INTEGER NOT NULL DEFAULT 1",
+                ),
+                (
+                    "prompt_snapshot",
+                    "ALTER TABLE review_log ADD COLUMN prompt_snapshot TEXT NOT NULL DEFAULT ''",
+                ),
+                (
+                    "answer_snapshot",
+                    "ALTER TABLE review_log ADD COLUMN answer_snapshot TEXT NOT NULL DEFAULT ''",
+                ),
+            ] {
+                if !existing_columns.iter().any(|existing| existing == column) {
+                    pending.push(statement);
+                }
+            }
+            if !pending.is_empty() {
+                self.conn.execute_batch(&pending.join(";"))?;
+            }
+            self.conn.execute(
+                "UPDATE review_log SET
+                    review_item_source_version=COALESCE((
+                        SELECT source_version FROM review_items
+                        WHERE review_items.id=review_log.review_item_id
+                    ), 1),
+                    prompt_snapshot=COALESCE((
+                        SELECT prompt FROM review_items
+                        WHERE review_items.id=review_log.review_item_id
+                    ), ''),
+                    answer_snapshot=COALESCE((
+                        SELECT answer FROM review_items
+                        WHERE review_items.id=review_log.review_item_id
+                    ), '')",
+                [],
+            )?;
+            self.conn
+                .execute("INSERT INTO schema_version (version) VALUES (19)", [])?;
+        }
+
+        if current < 20 {
+            // AI 配置沿用 app_settings：环境变量继续作为未保存字段的回退值，
+            // 设置页保存后仅覆盖对应的服务端运行配置。
+            self.conn
+                .execute("INSERT INTO schema_version (version) VALUES (20)", [])?;
+        }
+
+        if current < 21 {
+            // AI 模型档案和任务路由沿用 app_settings，以 JSON 保存且不包含 API Key。
+            self.conn
+                .execute("INSERT INTO schema_version (version) VALUES (21)", [])?;
+        }
+
         Ok(())
     }
 }
@@ -941,6 +1515,7 @@ impl Database {
 impl ArticlePersistence<'_> {
     pub(crate) fn save(&mut self, draft: ArticleDraft) -> Result<Article> {
         let tags = normalize_tags(draft.tags);
+        let spaces = normalize_space_names(draft.spaces);
         let tags_json = serde_json::to_string(&tags)
             .map_err(|error| rusqlite::Error::ToSqlConversionFailure(Box::new(error)))?;
         let word_count = draft.content.chars().filter(|c| !c.is_whitespace()).count() as i64;
@@ -962,31 +1537,35 @@ impl ArticlePersistence<'_> {
                updated_at=excluded.updated_at",
             params![id, draft.date, draft.title, draft.content, draft.mood, tags_json, word_count, now],
         )?;
+        sync_article_space_links(&tx, &id, &spaces, &now)?;
         tx.execute(
             "DELETE FROM day_exemptions WHERE date=?1",
             params![draft.date],
         )?;
-        let saved = tx.query_row(
-            "SELECT id, date, title, content, mood, tags, word_count, created_at, updated_at
-             FROM articles WHERE date=?1",
-            params![draft.date],
-            row_to_article,
-        )?;
         tx.commit()?;
-        Ok(saved)
+        self.find_by_id(&id)?
+            .ok_or(rusqlite::Error::QueryReturnedNoRows)
     }
 
     pub(crate) fn update(&mut self, id: &str, changes: ArticleChanges) -> Result<Option<Article>> {
-        let tags = serde_json::to_string(&normalize_tags(changes.tags))
-            .map_err(|error| rusqlite::Error::ToSqlConversionFailure(Box::new(error)))?;
+        let tags = changes
+            .tags
+            .map(normalize_tags)
+            .map(|tags| {
+                serde_json::to_string(&tags)
+                    .map_err(|error| rusqlite::Error::ToSqlConversionFailure(Box::new(error)))
+            })
+            .transpose()?;
+        let spaces = changes.spaces.map(normalize_space_names);
         let word_count = changes
             .content
             .chars()
             .filter(|c| !c.is_whitespace())
             .count() as i64;
         let now = Local::now().format("%Y-%m-%dT%H:%M:%S").to_string();
-        let updated = self.conn.execute(
-            "UPDATE articles SET title=?1, content=?2, mood=?3, tags=?4, word_count=?5,
+        let tx = self.conn.transaction()?;
+        let updated = tx.execute(
+            "UPDATE articles SET title=?1, content=?2, mood=?3, tags=COALESCE(?4, tags), word_count=?5,
              updated_at=?6 WHERE id=?7",
             params![
                 changes.title,
@@ -999,8 +1578,13 @@ impl ArticlePersistence<'_> {
             ],
         )?;
         if updated == 0 {
+            tx.rollback()?;
             return Ok(None);
         }
+        if let Some(spaces) = spaces {
+            sync_article_space_links(&tx, id, &spaces, &now)?;
+        }
+        tx.commit()?;
         self.find_by_id(id)
     }
 
@@ -1012,35 +1596,91 @@ impl ArticlePersistence<'_> {
     }
 
     pub(crate) fn find_by_id(&mut self, id: &str) -> Result<Option<Article>> {
-        self.conn
+        let mut article = self
+            .conn
             .query_row(
                 "SELECT id, date, title, content, mood, tags, word_count, created_at, updated_at
                  FROM articles WHERE id=?1",
                 params![id],
                 row_to_article,
             )
-            .optional()
+            .optional()?;
+        if let Some(article) = article.as_mut() {
+            resolve_article_spaces(self.conn, article)?;
+        }
+        Ok(article)
     }
 
     pub(crate) fn find_by_date(&mut self, date: &str) -> Result<Option<Article>> {
-        self.conn
+        let mut article = self
+            .conn
             .query_row(
                 "SELECT id, date, title, content, mood, tags, word_count, created_at, updated_at
                  FROM articles WHERE date=?1 LIMIT 1",
                 params![date],
                 row_to_article,
             )
-            .optional()
+            .optional()?;
+        if let Some(article) = article.as_mut() {
+            resolve_article_spaces(self.conn, article)?;
+        }
+        Ok(article)
     }
 
     pub(crate) fn list(&mut self, page: i64, page_size: i64) -> Result<Vec<ArticleSummary>> {
-        let offset = (page.max(1) - 1) * page_size;
+        let page = page.max(1);
+        let page_size = page_size.clamp(1, 100);
+        let offset = (page - 1).saturating_mul(page_size);
         let mut statement = self.conn.prepare(
-            "SELECT id, date, title, mood, tags, word_count, content FROM articles
-             ORDER BY date DESC, updated_at DESC LIMIT ?1 OFFSET ?2",
+            "SELECT a.id, a.date, a.title, a.mood, a.tags, a.word_count, a.content,
+                    COALESCE((
+                        SELECT json_group_array(p.name)
+                        FROM article_spaces AS aps
+                        INNER JOIN knowledge_projects AS p ON p.id=aps.space_id
+                        WHERE aps.article_id=a.id
+                        ORDER BY p.name COLLATE NOCASE ASC
+                    ), '[]') AS spaces
+             FROM articles AS a
+             ORDER BY a.date DESC, a.updated_at DESC LIMIT ?1 OFFSET ?2",
         )?;
         let rows = statement
             .query_map(params![page_size, offset], row_to_article_summary)?
+            .collect::<Result<Vec<_>>>()?;
+        Ok(rows)
+    }
+
+    /// 按统一空间读取每日记录。每日记录仍以日期为主轴，这个入口只提供空间上下文下的最近记录。
+    pub(crate) fn list_by_space(
+        &mut self,
+        space: &str,
+        page: i64,
+        page_size: i64,
+    ) -> Result<Vec<ArticleSummary>> {
+        let space = space.trim();
+        if space.is_empty() {
+            return Ok(Vec::new());
+        }
+        let page = page.max(1);
+        let page_size = page_size.clamp(1, 100);
+        let offset = (page - 1).saturating_mul(page_size);
+        let mut statement = self.conn.prepare(
+            "SELECT a.id, a.date, a.title, a.mood, a.tags, a.word_count, a.content,
+                    COALESCE((
+                        SELECT json_group_array(p2.name)
+                        FROM article_spaces AS aps2
+                        INNER JOIN knowledge_projects AS p2 ON p2.id=aps2.space_id
+                        WHERE aps2.article_id=a.id
+                        ORDER BY p2.name COLLATE NOCASE ASC
+                    ), '[]') AS spaces
+             FROM articles AS a
+             INNER JOIN article_spaces AS aps ON aps.article_id=a.id
+             INNER JOIN knowledge_projects AS p ON p.id=aps.space_id
+             WHERE p.name=?1 COLLATE NOCASE
+             ORDER BY a.date DESC, a.updated_at DESC
+             LIMIT ?2 OFFSET ?3",
+        )?;
+        let rows = statement
+            .query_map(params![space, page_size, offset], row_to_article_summary)?
             .collect::<Result<Vec<_>>>()?;
         Ok(rows)
     }
@@ -1060,7 +1700,14 @@ impl ArticlePersistence<'_> {
             return Ok(Vec::new());
         }
         let mut statement = self.conn.prepare(
-            "SELECT a.id, a.date, a.title, a.mood, a.tags, a.word_count, a.content
+            "SELECT a.id, a.date, a.title, a.mood, a.tags, a.word_count, a.content,
+                    COALESCE((
+                        SELECT json_group_array(p.name)
+                        FROM article_spaces AS aps
+                        INNER JOIN knowledge_projects AS p ON p.id=aps.space_id
+                        WHERE aps.article_id=a.id
+                        ORDER BY p.name COLLATE NOCASE ASC
+                    ), '[]') AS spaces
              FROM articles a INNER JOIN articles_fts fts ON a.rowid = fts.rowid
              WHERE articles_fts MATCH ?1 ORDER BY a.date DESC LIMIT 50",
         )?;
@@ -1075,9 +1722,12 @@ impl ArticlePersistence<'_> {
             "SELECT id, date, title, content, mood, tags, word_count, created_at, updated_at
              FROM articles WHERE date BETWEEN ?1 AND ?2 ORDER BY date ASC",
         )?;
-        let rows = statement
+        let mut rows = statement
             .query_map(params![from, to], row_to_article)?
             .collect::<Result<Vec<_>>>()?;
+        for article in &mut rows {
+            resolve_article_spaces(self.conn, article)?;
+        }
         Ok(rows)
     }
 
@@ -1114,8 +1764,16 @@ impl ArticlePersistence<'_> {
     ) -> Result<Vec<ArticleSummary>> {
         let pattern = format!("{year:04}-{month:02}%");
         let mut statement = self.conn.prepare(
-            "SELECT id, date, title, mood, tags, word_count, content FROM articles
-             WHERE date LIKE ?1 ORDER BY date DESC",
+            "SELECT a.id, a.date, a.title, a.mood, a.tags, a.word_count, a.content,
+                    COALESCE((
+                        SELECT json_group_array(p.name)
+                        FROM article_spaces AS aps
+                        INNER JOIN knowledge_projects AS p ON p.id=aps.space_id
+                        WHERE aps.article_id=a.id
+                        ORDER BY p.name COLLATE NOCASE ASC
+                    ), '[]') AS spaces
+             FROM articles AS a
+             WHERE a.date LIKE ?1 ORDER BY a.date DESC",
         )?;
         let rows = statement
             .query_map(params![pattern], row_to_article_summary)?
@@ -1195,8 +1853,16 @@ impl PortableArchivePersistence<'_> {
     pub(crate) fn export_json(&mut self) -> std::result::Result<Value, ArchiveImportError> {
         let articles = {
             let mut statement = self.conn.prepare(
-                "SELECT id, date, title, content, mood, tags, word_count, created_at, updated_at
-                 FROM articles ORDER BY date ASC",
+                "SELECT a.id, a.date, a.title, a.content, a.mood, a.tags, a.word_count,
+                        a.created_at, a.updated_at,
+                        COALESCE((
+                            SELECT json_group_array(p.name)
+                            FROM article_spaces AS aps
+                            INNER JOIN knowledge_projects AS p ON p.id=aps.space_id
+                            WHERE aps.article_id=a.id
+                            ORDER BY p.name COLLATE NOCASE ASC
+                        ), '[]') AS spaces
+                 FROM articles AS a ORDER BY a.date ASC",
             )?;
             let rows = statement
                 .query_map([], |row| {
@@ -1211,6 +1877,7 @@ impl PortableArchivePersistence<'_> {
                         "word_count": row.get::<_, i64>(6)?,
                         "created_at": row.get::<_, String>(7)?,
                         "updated_at": row.get::<_, String>(8)?,
+                        "spaces": parse_json_vec(&row.get::<_, String>(9)?)?,
                     }))
                 })?
                 .collect::<Result<Vec<_>>>()?;
@@ -1249,16 +1916,17 @@ impl PortableArchivePersistence<'_> {
             let mut statement = self.conn.prepare(
                 "SELECT id, card_type, status, title, content, tags, source_article_id,
                         source_review_id, source_date, source_excerpt, created_at, updated_at,
+                        content_version,
                         review_state, review_interval_days, review_ease, review_count,
                         last_reviewed_at, next_review_at, usage_count, last_used_at,
-                        related_ids, first_reviewed_at, projects
-                 FROM knowledge_cards WHERE deleted_at='' ORDER BY updated_at ASC",
+                        related_ids, first_reviewed_at, projects, deleted_at
+                 FROM knowledge_cards ORDER BY updated_at ASC",
             )?;
             let rows = statement
                 .query_map([], |row| {
                     let tags: String = row.get(5)?;
-                    let related_ids: String = row.get(20)?;
-                    let projects: String = row.get(22)?;
+                    let related_ids: String = row.get(21)?;
+                    let projects: String = row.get(23)?;
                     Ok(serde_json::json!({
                         "id": row.get::<_, String>(0)?,
                         "card_type": row.get::<_, String>(1)?,
@@ -1272,17 +1940,54 @@ impl PortableArchivePersistence<'_> {
                         "source_excerpt": row.get::<_, String>(9)?,
                         "created_at": row.get::<_, String>(10)?,
                         "updated_at": row.get::<_, String>(11)?,
-                        "review_state": row.get::<_, String>(12)?,
-                        "review_interval_days": row.get::<_, f64>(13)?,
-                        "review_ease": row.get::<_, f64>(14)?,
-                        "review_count": row.get::<_, i64>(15)?,
-                        "last_reviewed_at": row.get::<_, String>(16)?,
-                        "next_review_at": row.get::<_, String>(17)?,
-                        "usage_count": row.get::<_, i64>(18)?,
-                        "last_used_at": row.get::<_, String>(19)?,
+                        "content_version": row.get::<_, i64>(12)?,
+                        "review_state": row.get::<_, String>(13)?,
+                        "review_interval_days": row.get::<_, f64>(14)?,
+                        "review_ease": row.get::<_, f64>(15)?,
+                        "review_count": row.get::<_, i64>(16)?,
+                        "last_reviewed_at": row.get::<_, String>(17)?,
+                        "next_review_at": row.get::<_, String>(18)?,
+                        "usage_count": row.get::<_, i64>(19)?,
+                        "last_used_at": row.get::<_, String>(20)?,
                         "related_ids": parse_json_vec(&related_ids)?,
-                        "first_reviewed_at": row.get::<_, String>(21)?,
+                        "first_reviewed_at": row.get::<_, String>(22)?,
                         "projects": parse_json_vec(&projects)?,
+                        "deleted_at": row.get::<_, String>(24)?,
+                    }))
+                })?
+                .collect::<Result<Vec<_>>>()?;
+            rows
+        };
+        let review_items = {
+            let mut statement = self.conn.prepare(
+                "SELECT ri.id, ri.knowledge_card_id, ri.item_type, ri.status, ri.prompt,
+                        ri.answer, ri.hint, ri.source_version, ri.created_at, ri.updated_at,
+                        ri.review_state, ri.review_interval_days, ri.review_ease, ri.review_count,
+                        ri.last_reviewed_at, ri.next_review_at, ri.first_reviewed_at
+                 FROM review_items AS ri
+                 INNER JOIN knowledge_cards AS c ON c.id=ri.knowledge_card_id
+                 ORDER BY ri.created_at ASC, ri.id ASC",
+            )?;
+            let rows = statement
+                .query_map([], |row| {
+                    Ok(serde_json::json!({
+                        "id": row.get::<_, String>(0)?,
+                        "knowledge_card_id": row.get::<_, String>(1)?,
+                        "item_type": row.get::<_, String>(2)?,
+                        "status": row.get::<_, String>(3)?,
+                        "prompt": row.get::<_, String>(4)?,
+                        "answer": row.get::<_, String>(5)?,
+                        "hint": row.get::<_, String>(6)?,
+                        "source_version": row.get::<_, i64>(7)?,
+                        "created_at": row.get::<_, String>(8)?,
+                        "updated_at": row.get::<_, String>(9)?,
+                        "review_state": row.get::<_, String>(10)?,
+                        "review_interval_days": row.get::<_, f64>(11)?,
+                        "review_ease": row.get::<_, f64>(12)?,
+                        "review_count": row.get::<_, i64>(13)?,
+                        "last_reviewed_at": row.get::<_, String>(14)?,
+                        "next_review_at": row.get::<_, String>(15)?,
+                        "first_reviewed_at": row.get::<_, String>(16)?,
                     }))
                 })?
                 .collect::<Result<Vec<_>>>()?;
@@ -1298,10 +2003,11 @@ impl PortableArchivePersistence<'_> {
             rows
         };
         Ok(serde_json::json!({
-            "version": 2,
+            "version": 3,
             "articles": articles,
             "reviews": reviews,
             "knowledge_cards": knowledge_cards,
+            "review_items": review_items,
             "knowledge_projects": knowledge_projects,
         }))
     }
@@ -1317,28 +2023,59 @@ impl PortableArchivePersistence<'_> {
             imported_reviews: archive.reviews.len(),
             imported_knowledge_cards: archive.knowledge_cards.len(),
         };
+        let legacy_archive_without_review_items = archive.version < 3;
         let tx = self.conn.transaction()?;
 
         let now = Local::now().format("%Y-%m-%dT%H:%M:%S").to_string();
+        // 同一工作区可能已经有同日期记录。保留目标记录的 ID，避免替换文章时
+        // 把本地知识卡片/复盘中的来源引用变成悬空 ID；后续引用会按此表重写。
+        let mut article_id_map = BTreeMap::new();
         for project in archive.knowledge_projects {
-            if let Some(name) = normalize_tags(vec![project]).into_iter().next() {
+            if let Some(name) = normalize_space_name(&project) {
                 ensure_project(&tx, &name, &now)?;
             }
         }
 
         for article in archive.articles {
+            let existing_by_date: Option<String> = tx
+                .query_row(
+                    "SELECT id FROM articles WHERE date=?1 LIMIT 1",
+                    params![article.date],
+                    |row| row.get(0),
+                )
+                .optional()?;
+            let existing_by_id: Option<String> = tx
+                .query_row(
+                    "SELECT date FROM articles WHERE id=?1 LIMIT 1",
+                    params![article.id],
+                    |row| row.get(0),
+                )
+                .optional()?;
+            let target_id = match existing_by_date {
+                Some(id) => id,
+                None if existing_by_id.is_none() => article.id.clone(),
+                None => Uuid::new_v4().to_string(),
+            };
+            article_id_map.insert(article.id.clone(), target_id.clone());
             let tags = serde_json::to_string(&normalize_tags(article.tags))?;
+            let spaces = normalize_space_names(article.spaces.clone());
+            for space in &spaces {
+                ensure_project(&tx, space, &now)?;
+            }
             let word_count = article
                 .content
                 .chars()
                 .filter(|c| !c.is_whitespace())
                 .count() as i64;
             tx.execute(
-                "INSERT OR REPLACE INTO articles
+                "INSERT INTO articles
                  (id, date, title, content, mood, tags, word_count, created_at, updated_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+                 ON CONFLICT(id) DO UPDATE SET date=excluded.date, title=excluded.title,
+                   content=excluded.content, mood=excluded.mood, tags=excluded.tags,
+                   word_count=excluded.word_count, updated_at=excluded.updated_at",
                 params![
-                    article.id,
+                    target_id,
                     article.date,
                     article.title,
                     article.content,
@@ -1349,6 +2086,7 @@ impl PortableArchivePersistence<'_> {
                     article.updated_at
                 ],
             )?;
+            sync_article_space_links(&tx, &target_id, &spaces, &now)?;
             tx.execute(
                 "DELETE FROM day_exemptions WHERE date=?1",
                 params![article.date],
@@ -1356,7 +2094,18 @@ impl PortableArchivePersistence<'_> {
         }
 
         for review in archive.reviews {
-            let article_ids = serde_json::to_string(&review.source_article_ids)?;
+            let article_ids = serde_json::to_string(
+                &review
+                    .source_article_ids
+                    .iter()
+                    .map(|id| {
+                        article_id_map
+                            .get(id)
+                            .cloned()
+                            .unwrap_or_else(|| id.clone())
+                    })
+                    .collect::<Vec<_>>(),
+            )?;
             let review_ids = serde_json::to_string(&review.source_review_ids)?;
             tx.execute(
                 "INSERT OR REPLACE INTO reviews
@@ -1383,7 +2132,12 @@ impl PortableArchivePersistence<'_> {
 
         for card in archive.knowledge_cards {
             let tags = serde_json::to_string(&normalize_tags(card.tags))?;
-            let projects = normalize_tags(card.projects.clone());
+            let projects = normalize_space_names(card.projects.clone());
+            let related_ids = normalize_related_ids(&card.id, card.related_ids);
+            let source_article_id = article_id_map
+                .get(&card.source_article_id)
+                .cloned()
+                .unwrap_or(card.source_article_id);
             for project in &projects {
                 ensure_project(&tx, project, &now)?;
             }
@@ -1393,11 +2147,12 @@ impl PortableArchivePersistence<'_> {
                 "INSERT INTO knowledge_cards
                  (id, card_type, status, title, content, tags, projects, source_article_id,
                   source_review_id, source_date, source_excerpt, created_at, updated_at,
+                  content_version,
                   review_state, review_interval_days, review_ease, review_count,
                   last_reviewed_at, next_review_at, usage_count, last_used_at,
-                  related_ids, first_reviewed_at)
+                  related_ids, first_reviewed_at, deleted_at)
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13,
-                         ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23)
+                         ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25)
                  ON CONFLICT(id) DO UPDATE SET
                    card_type=excluded.card_type, status=excluded.status,
                    title=excluded.title, content=excluded.content, tags=excluded.tags,
@@ -1408,7 +2163,12 @@ impl PortableArchivePersistence<'_> {
                    source_excerpt=excluded.source_excerpt,
                    related_ids=excluded.related_ids,
                    created_at=excluded.created_at, updated_at=excluded.updated_at,
-                   deleted_at=''",
+                   deleted_at=excluded.deleted_at,
+                   content_version=CASE
+                     WHEN knowledge_cards.content <> excluded.content
+                       THEN MAX(knowledge_cards.content_version + 1, excluded.content_version)
+                     ELSE MAX(knowledge_cards.content_version, excluded.content_version)
+                   END",
                 params![
                     card.id,
                     card.card_type,
@@ -1417,12 +2177,13 @@ impl PortableArchivePersistence<'_> {
                     card.content,
                     tags,
                     serde_json::to_string(&projects)?,
-                    card.source_article_id,
+                    source_article_id,
                     card.source_review_id,
                     card.source_date,
                     card.source_excerpt,
                     card.created_at,
                     card.updated_at,
+                    card.content_version.max(1),
                     card.review_state,
                     card.review_interval_days,
                     card.review_ease,
@@ -1431,13 +2192,120 @@ impl PortableArchivePersistence<'_> {
                     card.next_review_at,
                     card.usage_count,
                     card.last_used_at,
-                    serialize_string_vec(&card.related_ids)?,
+                    serialize_string_vec(&related_ids)?,
                     // 首评日/复习进度属于本地记忆状态，导入已有卡时保留本地值
-                    card.first_reviewed_at
+                    card.first_reviewed_at,
+                    card.deleted_at
                 ],
             )?;
             sync_project_links(&tx, &card.id, &projects, &now)?;
+            if legacy_archive_without_review_items {
+                let has_review_items: bool = tx.query_row(
+                    "SELECT EXISTS(SELECT 1 FROM review_items WHERE knowledge_card_id=?1)",
+                    params![card.id],
+                    |row| Ok(row.get::<_, i64>(0)? != 0),
+                )?;
+                if !has_review_items {
+                    let item_status = if card.status == "confirmed"
+                        && card.content.trim().chars().count() <= 480
+                    {
+                        "active"
+                    } else {
+                        "suspended"
+                    };
+                    tx.execute(
+                        "INSERT INTO review_items
+                            (id, knowledge_card_id, item_type, status, prompt, answer, hint,
+                             source_version, created_at, updated_at, review_state,
+                             review_interval_days, review_ease, review_count, last_reviewed_at,
+                             next_review_at, first_reviewed_at)
+                         VALUES (?1, ?2, 'basic', ?3, ?4, ?5, '', ?6, ?7, ?8, ?9,
+                                 ?10, ?11, ?12, ?13, ?14, ?15)",
+                        params![
+                            Uuid::new_v4().to_string(),
+                            card.id,
+                            item_status,
+                            card.title,
+                            card.content,
+                            card.content_version.max(1),
+                            card.created_at,
+                            card.updated_at,
+                            card.review_state,
+                            card.review_interval_days,
+                            card.review_ease,
+                            card.review_count,
+                            card.last_reviewed_at,
+                            card.next_review_at,
+                            card.first_reviewed_at,
+                        ],
+                    )?;
+                }
+            }
         }
+
+        for item in archive.review_items {
+            tx.execute(
+                "INSERT INTO review_items
+                    (id, knowledge_card_id, item_type, status, prompt, answer, hint,
+                     source_version, created_at, updated_at, review_state,
+                     review_interval_days, review_ease, review_count, last_reviewed_at,
+                     next_review_at, first_reviewed_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13,
+                         ?14, ?15, ?16, ?17)
+                 ON CONFLICT(id) DO UPDATE SET
+                   knowledge_card_id=excluded.knowledge_card_id,
+                   item_type=excluded.item_type,
+                   prompt=excluded.prompt,
+                   answer=excluded.answer,
+                   hint=excluded.hint,
+                   source_version=excluded.source_version,
+                   updated_at=excluded.updated_at,
+                   status=CASE
+                     WHEN excluded.status='archived' THEN 'archived'
+                     WHEN review_items.prompt <> excluded.prompt
+                          OR review_items.answer <> excluded.answer THEN 'stale'
+                     ELSE review_items.status
+                   END",
+                params![
+                    item.id,
+                    item.knowledge_card_id,
+                    item.item_type,
+                    item.status,
+                    item.prompt,
+                    item.answer,
+                    item.hint,
+                    item.source_version.max(1),
+                    item.created_at,
+                    item.updated_at,
+                    item.review_state,
+                    item.review_interval_days,
+                    item.review_ease,
+                    item.review_count,
+                    item.last_reviewed_at,
+                    item.next_review_at,
+                    item.first_reviewed_at,
+                ],
+            )?;
+        }
+
+        tx.execute(
+            "UPDATE review_items
+             SET status='suspended'
+             WHERE status='active' AND EXISTS (
+                 SELECT 1 FROM knowledge_cards AS c
+                 WHERE c.id=review_items.knowledge_card_id AND c.status!='confirmed'
+             )",
+            [],
+        )?;
+        tx.execute(
+            "UPDATE review_items
+             SET status='stale'
+             WHERE status='active' AND source_version < (
+                 SELECT c.content_version FROM knowledge_cards AS c
+                 WHERE c.id=review_items.knowledge_card_id
+             )",
+            [],
+        )?;
 
         tx.commit()?;
         Ok(report)
@@ -1558,8 +2426,10 @@ impl ReviewPersistence<'_> {
 }
 
 impl KnowledgePersistence<'_> {
-    const SELECT_COLUMNS: &'static str = "id, card_type, status, title, content, tags, source_article_id, source_review_id, source_date, source_excerpt, created_at, updated_at, review_state, review_interval_days, review_ease, review_count, last_reviewed_at, next_review_at, usage_count, last_used_at, related_ids, first_reviewed_at, projects";
-    const SELECT_COLUMNS_WITH_ALIAS: &'static str = "c.id, c.card_type, c.status, c.title, c.content, c.tags, c.source_article_id, c.source_review_id, c.source_date, c.source_excerpt, c.created_at, c.updated_at, c.review_state, c.review_interval_days, c.review_ease, c.review_count, c.last_reviewed_at, c.next_review_at, c.usage_count, c.last_used_at, c.related_ids, c.first_reviewed_at, c.projects";
+    const SELECT_COLUMNS: &'static str = "id, card_type, status, title, content, tags, source_article_id, source_review_id, source_date, source_excerpt, created_at, updated_at, content_version, review_state, review_interval_days, review_ease, review_count, last_reviewed_at, next_review_at, usage_count, last_used_at, related_ids, first_reviewed_at, projects";
+    const SELECT_COLUMNS_WITH_ALIAS: &'static str = "c.id, c.card_type, c.status, c.title, c.content, c.tags, c.source_article_id, c.source_review_id, c.source_date, c.source_excerpt, c.created_at, c.updated_at, c.content_version, c.review_state, c.review_interval_days, c.review_ease, c.review_count, c.last_reviewed_at, c.next_review_at, c.usage_count, c.last_used_at, c.related_ids, c.first_reviewed_at, c.projects";
+    const REVIEW_ITEM_COLUMNS: &'static str = "id, knowledge_card_id, item_type, status, prompt, answer, hint, source_version, created_at, updated_at, review_state, review_interval_days, review_ease, review_count, last_reviewed_at, next_review_at, first_reviewed_at";
+    const REVIEW_ITEM_COLUMNS_WITH_ALIAS: &'static str = "ri.id, ri.knowledge_card_id, ri.item_type, ri.status, ri.prompt, ri.answer, ri.hint, ri.source_version, ri.created_at, ri.updated_at, ri.review_state, ri.review_interval_days, ri.review_ease, ri.review_count, ri.last_reviewed_at, ri.next_review_at, ri.first_reviewed_at";
     pub(crate) fn list(&mut self) -> Result<Vec<KnowledgeCard>> {
         let mut statement = self.conn.prepare(&format!(
             "SELECT {} FROM knowledge_cards
@@ -1590,6 +2460,242 @@ impl KnowledgePersistence<'_> {
             self.resolve_related_ids(std::slice::from_mut(card))?;
         }
         Ok(card)
+    }
+
+    pub(crate) fn list_review_items(&mut self, card_id: &str) -> Result<Vec<ReviewItem>> {
+        let mut statement = self.conn.prepare(&format!(
+            "SELECT {} FROM review_items
+             WHERE knowledge_card_id=?1 AND status!='archived'
+             ORDER BY created_at ASC, id ASC",
+            Self::REVIEW_ITEM_COLUMNS
+        ))?;
+        let items = statement
+            .query_map(params![card_id], row_to_review_item)?
+            .collect::<Result<Vec<_>>>();
+        items
+    }
+
+    pub(crate) fn find_review_item(&mut self, id: &str) -> Result<Option<ReviewItem>> {
+        self.conn
+            .query_row(
+                &format!(
+                    "SELECT {} FROM review_items
+                     WHERE id=?1 AND status!='archived'",
+                    Self::REVIEW_ITEM_COLUMNS
+                ),
+                params![id],
+                row_to_review_item,
+            )
+            .optional()
+    }
+
+    /// 兼容旧客户端：复习接口传入知识条目 ID 时，解析为该条目的第一道非归档复习题。
+    pub(crate) fn find_review_item_for_review(&mut self, id: &str) -> Result<Option<ReviewItem>> {
+        if let Some(item) = self.find_review_item(id)? {
+            return Ok(Some(item));
+        }
+        self.conn
+            .query_row(
+                &format!(
+                    "SELECT {} FROM review_items
+                     WHERE knowledge_card_id=?1 AND status!='archived'
+                     ORDER BY created_at ASC, id ASC LIMIT 1",
+                    Self::REVIEW_ITEM_COLUMNS
+                ),
+                params![id],
+                row_to_review_item,
+            )
+            .optional()
+    }
+
+    pub(crate) fn create_review_item(
+        &mut self,
+        card_id: &str,
+        draft: ReviewItemDraft,
+    ) -> Result<Option<ReviewItem>> {
+        if !valid_review_item_draft(&draft) {
+            return Err(rusqlite::Error::InvalidQuery);
+        }
+        let Some((card_status, content_version)) = self
+            .conn
+            .query_row(
+                "SELECT status, content_version FROM knowledge_cards
+                 WHERE id=?1 AND deleted_at=''",
+                params![card_id],
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?)),
+            )
+            .optional()?
+        else {
+            return Ok(None);
+        };
+        let status = if card_status == "confirmed" {
+            draft.status
+        } else {
+            "suspended".to_string()
+        };
+        let now = Local::now().format("%Y-%m-%dT%H:%M:%S").to_string();
+        let id = Uuid::new_v4().to_string();
+        self.conn.execute(
+            "INSERT INTO review_items
+                (id, knowledge_card_id, item_type, status, prompt, answer, hint,
+                 source_version, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?9)",
+            params![
+                id,
+                card_id,
+                draft.item_type,
+                status,
+                draft.prompt,
+                draft.answer,
+                draft.hint,
+                content_version,
+                now,
+            ],
+        )?;
+        self.find_review_item(&id)
+    }
+
+    pub(crate) fn update_review_item(
+        &mut self,
+        id: &str,
+        draft: ReviewItemDraft,
+    ) -> Result<Option<ReviewItem>> {
+        if !valid_review_item_draft(&draft) {
+            return Err(rusqlite::Error::InvalidQuery);
+        }
+        let Some((
+            card_id,
+            existing_item_type,
+            existing_status,
+            existing_prompt,
+            existing_answer,
+            existing_hint,
+            existing_source_version,
+        )) = self
+            .conn
+            .query_row(
+                "SELECT knowledge_card_id, item_type, status, prompt, answer, hint, source_version
+                 FROM review_items
+                 WHERE id=?1 AND status!='archived'",
+                params![id],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, String>(3)?,
+                        row.get::<_, String>(4)?,
+                        row.get::<_, String>(5)?,
+                        row.get::<_, i64>(6)?,
+                    ))
+                },
+            )
+            .optional()?
+        else {
+            return Ok(None);
+        };
+        let Some((card_status, content_version)) = self
+            .conn
+            .query_row(
+                "SELECT status, content_version FROM knowledge_cards
+                 WHERE id=?1 AND deleted_at=''",
+                params![card_id],
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?)),
+            )
+            .optional()?
+        else {
+            return Ok(None);
+        };
+        let semantic_changed = existing_item_type != draft.item_type
+            || existing_prompt != draft.prompt
+            || existing_answer != draft.answer
+            || existing_hint != draft.hint;
+        // 编辑正在复习的题目时，不能让旧题的间隔状态流入新题。
+        // 若题目本来已过期，用户把它显式恢复为 active 也视为一次重新开始。
+        let reset_schedule = semantic_changed
+            || (existing_status == "stale" && draft.status == "active")
+            || (existing_source_version < content_version && draft.status == "active");
+        let status = if card_status == "confirmed" {
+            if semantic_changed && existing_status == "active" && draft.status == "active" {
+                "stale".to_string()
+            } else {
+                draft.status.clone()
+            }
+        } else {
+            "suspended".to_string()
+        };
+        let now = Local::now().format("%Y-%m-%dT%H:%M:%S").to_string();
+        let updated = self.conn.execute(
+            "UPDATE review_items SET item_type=?1, status=?2, prompt=?3, answer=?4,
+             hint=?5, source_version=?6,
+             review_state=CASE WHEN ?7=1 THEN 'new' ELSE review_state END,
+             review_interval_days=CASE WHEN ?7=1 THEN 0 ELSE review_interval_days END,
+             review_ease=CASE WHEN ?7=1 THEN 2.5 ELSE review_ease END,
+             review_count=CASE WHEN ?7=1 THEN 0 ELSE review_count END,
+             last_reviewed_at=CASE WHEN ?7=1 THEN '' ELSE last_reviewed_at END,
+             next_review_at=CASE WHEN ?7=1 THEN '' ELSE next_review_at END,
+             first_reviewed_at=CASE WHEN ?7=1 THEN '' ELSE first_reviewed_at END,
+             updated_at=?8
+             WHERE id=?9 AND status!='archived'",
+            params![
+                draft.item_type,
+                status,
+                draft.prompt,
+                draft.answer,
+                draft.hint,
+                content_version,
+                if reset_schedule { 1 } else { 0 },
+                now,
+                id,
+            ],
+        )?;
+        if updated == 0 {
+            return Ok(None);
+        }
+        self.find_review_item(id)
+    }
+
+    pub(crate) fn archive_review_item(&mut self, id: &str) -> Result<bool> {
+        let now = Local::now().format("%Y-%m-%dT%H:%M:%S").to_string();
+        Ok(self.conn.execute(
+            "UPDATE review_items SET status='archived', next_review_at='', updated_at=?1
+             WHERE id=?2 AND status!='archived'",
+            params![now, id],
+        )? > 0)
+    }
+
+    fn review_card_from_item(&mut self, item: ReviewItem) -> Result<Option<ReviewCard>> {
+        let Some(card) = self.find(&item.knowledge_card_id)? else {
+            return Ok(None);
+        };
+        Ok(Some(ReviewCard {
+            id: item.id,
+            knowledge_card_id: card.id,
+            item_type: item.item_type,
+            item_status: item.status,
+            prompt: item.prompt,
+            answer: item.answer,
+            hint: item.hint,
+            title: card.title,
+            card_type: card.card_type,
+            card_status: card.status,
+            tags: card.tags,
+            source_article_id: card.source_article_id,
+            source_review_id: card.source_review_id,
+            source_date: card.source_date,
+            source_excerpt: card.source_excerpt,
+            related_ids: card.related_ids,
+            projects: card.projects,
+            created_at: item.created_at,
+            updated_at: item.updated_at,
+            review_state: item.review_state,
+            review_interval_days: item.review_interval_days,
+            review_ease: item.review_ease,
+            review_count: item.review_count,
+            last_reviewed_at: item.last_reviewed_at,
+            next_review_at: item.next_review_at,
+            first_reviewed_at: item.first_reviewed_at,
+        }))
     }
 
     pub(crate) fn summary(&mut self) -> Result<KnowledgeSummary> {
@@ -1635,19 +2741,44 @@ impl KnowledgePersistence<'_> {
     }
 
     pub(crate) fn list_projects(&mut self) -> Result<Vec<KnowledgeProject>> {
-        let mut statement = self.conn.prepare(
-            "SELECT p.name, COUNT(c.id) AS card_count
+        self.list_spaces(false)
+    }
+
+    pub(crate) fn list_spaces(&mut self, include_archived: bool) -> Result<Vec<KnowledgeProject>> {
+        let status_filter = if include_archived {
+            ""
+        } else {
+            "WHERE p.status='active'"
+        };
+        let mut statement = self.conn.prepare(&format!(
+            "SELECT p.name,
+                    (SELECT COUNT(*)
+                     FROM knowledge_card_projects AS cp
+                     INNER JOIN knowledge_cards AS c ON c.id=cp.card_id
+                     WHERE cp.project_id=p.id AND c.deleted_at='') AS card_count,
+                    (SELECT COUNT(*)
+                     FROM article_spaces AS aps
+                     INNER JOIN articles AS a ON a.id=aps.article_id
+                     WHERE aps.space_id=p.id) AS article_count,
+                    p.kind, p.description, p.status
              FROM knowledge_projects AS p
-             LEFT JOIN knowledge_card_projects AS cp ON cp.project_id = p.id
-             LEFT JOIN knowledge_cards AS c ON c.id = cp.card_id AND c.deleted_at=''
-             GROUP BY p.id, p.name
-             ORDER BY card_count DESC, p.name COLLATE NOCASE ASC",
-        )?;
+             {status_filter}
+             GROUP BY p.id, p.name, p.kind, p.description, p.status
+             ORDER BY CASE WHEN p.status='active' THEN 0 ELSE 1 END,
+                      (card_count + article_count) DESC, p.name COLLATE NOCASE ASC"
+        ))?;
         let rows = statement
             .query_map([], |row| {
+                let count: i64 = row.get(1)?;
+                let article_count: i64 = row.get(2)?;
                 Ok(KnowledgeProject {
                     name: row.get(0)?,
-                    count: row.get(1)?,
+                    count,
+                    article_count,
+                    total_count: count + article_count,
+                    kind: row.get(3)?,
+                    description: row.get(4)?,
+                    status: row.get(5)?,
                 })
             })?
             .collect::<Result<Vec<_>>>()?;
@@ -1866,21 +2997,201 @@ impl KnowledgePersistence<'_> {
         Ok((cards, total))
     }
 
-    pub(crate) fn create_project(&mut self, name: &str) -> Result<Option<KnowledgeProject>> {
-        let Some(name) = normalize_tags(vec![name.to_string()]).into_iter().next() else {
+    pub(crate) fn create_space(
+        &mut self,
+        name: &str,
+        kind: &str,
+        description: &str,
+    ) -> Result<Option<KnowledgeProject>> {
+        let Some(name) = normalize_space_name(name) else {
             return Ok(None);
         };
+        if !matches!(kind, "topic" | "project") {
+            return Err(rusqlite::Error::InvalidQuery);
+        }
         let now = Local::now().format("%Y-%m-%dT%H:%M:%S").to_string();
         self.conn.execute(
-            "INSERT OR IGNORE INTO knowledge_projects (id, name, created_at, updated_at)
-             VALUES (?1, ?2, ?3, ?3)",
-            params![Uuid::new_v4().to_string(), name, now],
+            "INSERT INTO knowledge_projects (id, name, kind, description, status, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, 'active', ?5, ?5)
+             ON CONFLICT(name) DO UPDATE SET
+               kind=excluded.kind,
+               description=CASE WHEN trim(excluded.description)='' THEN knowledge_projects.description ELSE excluded.description END,
+               status='active',
+               updated_at=excluded.updated_at",
+            params![
+                Uuid::new_v4().to_string(),
+                name,
+                kind,
+                description.trim().chars().take(500).collect::<String>(),
+                now
+            ],
         )?;
         self.list_projects()?
             .into_iter()
             .find(|project| project.name.eq_ignore_ascii_case(&name))
             .map(Some)
             .ok_or(rusqlite::Error::QueryReturnedNoRows)
+    }
+
+    pub(crate) fn find_space(&mut self, name: &str) -> Result<Option<KnowledgeProject>> {
+        let name = name.trim();
+        if name.is_empty() {
+            return Ok(None);
+        }
+        Ok(self
+            .list_spaces(true)?
+            .into_iter()
+            .find(|space| space.name.eq_ignore_ascii_case(name)))
+    }
+
+    pub(crate) fn update_space(
+        &mut self,
+        current_name: &str,
+        name: &str,
+        kind: &str,
+        description: &str,
+    ) -> Result<Option<KnowledgeProject>> {
+        let Some(current_name) = normalize_space_name(current_name) else {
+            return Ok(None);
+        };
+        let Some(name) = normalize_space_name(name) else {
+            return Err(rusqlite::Error::InvalidQuery);
+        };
+        if !matches!(kind, "topic" | "project") {
+            return Err(rusqlite::Error::InvalidQuery);
+        }
+        let description = description.trim().chars().take(500).collect::<String>();
+        let now = Local::now().format("%Y-%m-%dT%H:%M:%S").to_string();
+        // `knowledge_card_projects` is the normalized relationship source, but the
+        // JSON column is still read by old exports and clients. Keep both names in
+        // sync when a space is renamed so a legacy reader does not show a ghost
+        // space after the edit.
+        let legacy_projects: Vec<(String, String)> = self
+            .conn
+            .prepare("SELECT id, projects FROM knowledge_cards")?
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
+            .collect::<Result<_>>()?;
+        let transaction = self.conn.transaction()?;
+        let updated = transaction.execute(
+            "UPDATE knowledge_projects
+             SET name=?1, kind=?2, description=?3, updated_at=?4
+             WHERE name=?5 COLLATE NOCASE",
+            params![name, kind, description, now, current_name],
+        )?;
+        if updated == 0 {
+            return Ok(None);
+        }
+        for (card_id, raw_projects) in legacy_projects {
+            let mut projects = parse_json_vec(&raw_projects)?;
+            let mut changed = false;
+            for project in &mut projects {
+                if project.eq_ignore_ascii_case(&current_name) {
+                    *project = name.clone();
+                    changed = true;
+                }
+            }
+            if changed {
+                transaction.execute(
+                    "UPDATE knowledge_cards SET projects=?1 WHERE id=?2",
+                    params![serialize_string_vec(&projects)?, card_id],
+                )?;
+            }
+        }
+        transaction.commit()?;
+        self.find_space(&name)
+    }
+
+    pub(crate) fn archive_space(&mut self, name: &str) -> Result<Option<KnowledgeProject>> {
+        let name = name.trim();
+        if name.is_empty() {
+            return Ok(None);
+        }
+        let now = Local::now().format("%Y-%m-%dT%H:%M:%S").to_string();
+        let updated = self.conn.execute(
+            "UPDATE knowledge_projects
+             SET status='archived', updated_at=?1
+             WHERE name=?2 COLLATE NOCASE AND status='active'",
+            params![now, name],
+        )?;
+        if updated == 0 {
+            return Ok(None);
+        }
+        self.find_space(name)
+    }
+
+    pub(crate) fn restore_space(&mut self, name: &str) -> Result<Option<KnowledgeProject>> {
+        let name = name.trim();
+        if name.is_empty() {
+            return Ok(None);
+        }
+        let now = Local::now().format("%Y-%m-%dT%H:%M:%S").to_string();
+        let updated = self.conn.execute(
+            "UPDATE knowledge_projects
+             SET status='active', updated_at=?1
+             WHERE name=?2 COLLATE NOCASE AND status='archived'",
+            params![now, name],
+        )?;
+        if updated == 0 {
+            return Ok(None);
+        }
+        self.find_space(name)
+    }
+
+    /// 永久删除一个已归档空间，但保留卡片/每日记录本身。
+    ///
+    /// 空间是组织容器，不是内容容器：删除空间只清理归属关系，并同步清理旧版
+    /// `knowledge_cards.projects` 快照，避免旧导出继续显示一个不存在的空间。
+    pub(crate) fn delete_space_permanently(&mut self, name: &str) -> Result<bool> {
+        let Some(name) = normalize_space_name(name) else {
+            return Ok(false);
+        };
+        let Some(space_id) = self
+            .conn
+            .query_row(
+                "SELECT id FROM knowledge_projects
+                 WHERE name=?1 COLLATE NOCASE AND status='archived'",
+                params![name],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?
+        else {
+            return Ok(false);
+        };
+
+        let legacy_projects: Vec<(String, String)> = self
+            .conn
+            .prepare("SELECT id, projects FROM knowledge_cards")?
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
+            .collect::<Result<_>>()?;
+        let transaction = self.conn.transaction()?;
+        for (card_id, raw_projects) in legacy_projects {
+            let projects = parse_json_vec(&raw_projects)?;
+            let project_count = projects.len();
+            let next_projects: Vec<String> = projects
+                .into_iter()
+                .filter(|project| !project.eq_ignore_ascii_case(&name))
+                .collect();
+            if next_projects.len() != project_count {
+                transaction.execute(
+                    "UPDATE knowledge_cards SET projects=?1 WHERE id=?2",
+                    params![serialize_string_vec(&next_projects)?, card_id],
+                )?;
+            }
+        }
+        transaction.execute(
+            "DELETE FROM article_spaces WHERE space_id=?1",
+            params![space_id],
+        )?;
+        transaction.execute(
+            "DELETE FROM knowledge_card_projects WHERE project_id=?1",
+            params![space_id],
+        )?;
+        let deleted = transaction.execute(
+            "DELETE FROM knowledge_projects WHERE id=?1 AND status='archived'",
+            params![space_id],
+        )? > 0;
+        transaction.commit()?;
+        Ok(deleted)
     }
 
     /// 把单向存储的关联展开为双向视图：A 的关联 = A 声明的边 ∪ 声明指向 A 的边。
@@ -1931,47 +3242,57 @@ impl KnowledgePersistence<'_> {
         Ok(())
     }
 
-    pub(crate) fn due(&mut self, limit: i64, today: &str) -> Result<Vec<KnowledgeCard>> {
-        // 到期卡优先、不受每日上限；新卡（next_review_at 为空）受每日配额控制：
-        // 今天已学新卡数扣减后取剩余额度，避免一天内无限刷新卡堆积队列。
+    pub(crate) fn due(&mut self, limit: i64, today: &str) -> Result<Vec<ReviewCard>> {
+        // 到期题优先、不受每日上限；新题（next_review_at 为空）受每日配额控制。
+        // 复习队列只读取 ReviewItem 的 prompt/answer，不把知识条目全文带到客户端。
         let remaining_new = self.remaining_new_quota(today)?;
-        let mut statement = self.conn.prepare(&format!(
-            "SELECT * FROM (
-               SELECT {} FROM knowledge_cards
-               WHERE deleted_at='' AND status='confirmed' AND next_review_at!='' AND next_review_at <= ?1
-               ORDER BY next_review_at ASC LIMIT ?2
-             )
-             UNION ALL
-             SELECT * FROM (
-               SELECT {} FROM knowledge_cards
-               WHERE deleted_at='' AND status='confirmed' AND next_review_at=''
-               ORDER BY created_at ASC LIMIT ?3
-             )
-             LIMIT ?4",
-            Self::SELECT_COLUMNS,
-            Self::SELECT_COLUMNS
-        ))?;
-        let mut rows = statement
-            .query_map(
-                params![today, limit, remaining_new, limit],
-                row_to_knowledge_card,
-            )?
-            .collect::<Result<Vec<_>>>()?;
-        self.resolve_related_ids(&mut rows)?;
-        Ok(rows)
+        let items = {
+            let mut statement = self.conn.prepare(&format!(
+                "SELECT * FROM (
+                   SELECT {columns} FROM review_items AS ri
+                   INNER JOIN knowledge_cards AS c ON c.id=ri.knowledge_card_id
+                   WHERE ri.status='active' AND c.deleted_at='' AND c.status='confirmed'
+                     AND ri.next_review_at!='' AND ri.next_review_at <= ?1
+                   ORDER BY ri.next_review_at ASC LIMIT ?2
+                 )
+                 UNION ALL
+                 SELECT * FROM (
+                   SELECT {columns} FROM review_items AS ri
+                   INNER JOIN knowledge_cards AS c ON c.id=ri.knowledge_card_id
+                   WHERE ri.status='active' AND c.deleted_at='' AND c.status='confirmed'
+                     AND ri.next_review_at=''
+                   ORDER BY ri.created_at ASC LIMIT ?3
+                 )
+                 LIMIT ?4",
+                columns = Self::REVIEW_ITEM_COLUMNS_WITH_ALIAS
+            ))?;
+            let items = statement
+                .query_map(
+                    params![today, limit, remaining_new, limit],
+                    row_to_review_item,
+                )?
+                .collect::<Result<Vec<_>>>()?;
+            items
+        };
+        let mut cards = Vec::with_capacity(items.len());
+        for item in items {
+            if let Some(card) = self.review_card_from_item(item)? {
+                cards.push(card);
+            }
+        }
+        Ok(cards)
     }
 
-    /// 今天已学新卡数（首评日为今天的已确认卡）。
+    /// 今天已学新题数（首评日为今天的非归档复习题）。
     fn learned_new_today(&self, today: &str) -> Result<i64> {
-        Ok(self
-            .conn
-            .query_row(
-                "SELECT COUNT(*) FROM knowledge_cards
-                 WHERE deleted_at='' AND status='confirmed' AND first_reviewed_at=?1",
-                params![today],
-                |row| row.get(0),
-            )
-            .unwrap_or(0))
+        self.conn.query_row(
+            "SELECT COUNT(*) FROM review_items AS ri
+             INNER JOIN knowledge_cards AS c ON c.id=ri.knowledge_card_id
+             WHERE ri.status!='archived' AND c.deleted_at='' AND c.status='confirmed'
+               AND ri.first_reviewed_at=?1",
+            params![today],
+            |row| row.get(0),
+        )
     }
 
     /// 今日新卡剩余额度 = 每日上限 - 今天已学新卡数（不低于 0）。
@@ -1985,42 +3306,39 @@ impl KnowledgePersistence<'_> {
         Ok((daily_limit - self.learned_new_today(today)?).max(0))
     }
 
-    /// 到期卡数（不含新卡）与已确认卡总数；供 due/stats 共用，避免语义分叉。
+    /// 到期题数（不含新题）与已确认知识条目总数；供 due/stats 共用，避免语义分叉。
     fn due_and_confirmed(&self, today: &str) -> Result<(i64, i64)> {
-        Ok(self
-            .conn
-            .query_row(
-                "SELECT
-                    (SELECT COUNT(*) FROM knowledge_cards
-                     WHERE deleted_at='' AND status='confirmed' AND next_review_at!='' AND next_review_at <= ?1),
-                    (SELECT COUNT(*) FROM knowledge_cards WHERE deleted_at='' AND status='confirmed')",
-                params![today],
-                |row| Ok((row.get(0)?, row.get(1)?)),
-            )
-            .unwrap_or((0, 0)))
+        self.conn.query_row(
+            "SELECT
+                (SELECT COUNT(*) FROM review_items AS ri
+                 INNER JOIN knowledge_cards AS c ON c.id=ri.knowledge_card_id
+                 WHERE ri.status='active' AND c.deleted_at='' AND c.status='confirmed'
+                   AND ri.next_review_at!='' AND ri.next_review_at <= ?1),
+                (SELECT COUNT(*) FROM knowledge_cards WHERE deleted_at='' AND status='confirmed')",
+            params![today],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
     }
 
     pub(crate) fn stats(&mut self, today: &str) -> Result<ReviewStats> {
         let (due_only, total_confirmed) = self.due_and_confirmed(today)?;
         let remaining_new = self.remaining_new_quota(today)?;
-        let new_queue: i64 = self
-            .conn
-            .query_row(
-                "SELECT COUNT(*) FROM knowledge_cards
-                 WHERE deleted_at='' AND status='confirmed' AND next_review_at=''",
-                [],
-                |row| row.get(0),
-            )
-            .unwrap_or(0);
+        let new_queue: i64 = self.conn.query_row(
+            "SELECT COUNT(*) FROM review_items AS ri
+             INNER JOIN knowledge_cards AS c ON c.id=ri.knowledge_card_id
+             WHERE ri.status='active' AND c.deleted_at='' AND c.status='confirmed'
+               AND ri.next_review_at=''",
+            [],
+            |row| row.get(0),
+        )?;
         let new_cards = new_queue.min(remaining_new);
-        let reviewed_today: i64 = self
-            .conn
-            .query_row(
-                "SELECT COUNT(*) FROM knowledge_cards WHERE deleted_at='' AND last_reviewed_at=?1",
-                params![today],
-                |row| row.get(0),
-            )
-            .unwrap_or(0);
+        let reviewed_today: i64 = self.conn.query_row(
+            "SELECT COUNT(*) FROM review_items AS ri
+             INNER JOIN knowledge_cards AS c ON c.id=ri.knowledge_card_id
+             WHERE ri.status!='archived' AND c.deleted_at='' AND ri.last_reviewed_at=?1",
+            params![today],
+            |row| row.get(0),
+        )?;
         Ok(ReviewStats {
             due: due_only + new_cards,
             due_reviews: due_only,
@@ -2030,7 +3348,7 @@ impl KnowledgePersistence<'_> {
         })
     }
 
-    pub(crate) fn apply_grade(&mut self, update: GradeUpdate<'_>) -> Result<Option<KnowledgeCard>> {
+    pub(crate) fn apply_grade(&mut self, update: GradeUpdate<'_>) -> Result<Option<ReviewCard>> {
         let GradeUpdate {
             id,
             grade,
@@ -2041,24 +3359,94 @@ impl KnowledgePersistence<'_> {
             today,
         } = update;
         let tx = self.conn.transaction()?;
+        let Some((item_id, card_id, item_source_version, prompt_snapshot, answer_snapshot)) = tx
+            .query_row(
+                "SELECT id, knowledge_card_id, source_version, prompt, answer
+                 FROM review_items
+                 WHERE (id=?1 OR knowledge_card_id=?1) AND status!='archived'
+                 ORDER BY CASE WHEN id=?1 THEN 0 ELSE 1 END, created_at ASC, id ASC
+                 LIMIT 1",
+                params![id],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, i64>(2)?,
+                        row.get::<_, String>(3)?,
+                        row.get::<_, String>(4)?,
+                    ))
+                },
+            )
+            .optional()?
+        else {
+            return Ok(None);
+        };
         let updated = tx.execute(
-            "UPDATE knowledge_cards SET review_interval_days=?1, review_ease=?2,
+            "UPDATE review_items SET review_interval_days=?1, review_ease=?2,
              review_count=review_count+1, last_reviewed_at=?3, next_review_at=?4,
              first_reviewed_at = CASE WHEN review_count = 0 THEN ?3 ELSE first_reviewed_at END,
              review_state = CASE WHEN ?1 >= 21 THEN 'mature' ELSE 'learning' END
-             WHERE id=?5 AND deleted_at='' AND status='confirmed'",
-            params![stability, difficulty, today, next_review_at, id],
+             WHERE id=?5 AND status='active'
+               AND EXISTS (
+                 SELECT 1 FROM knowledge_cards AS c
+                 WHERE c.id=review_items.knowledge_card_id
+                   AND c.deleted_at='' AND c.status='confirmed'
+               )",
+            params![stability, difficulty, today, next_review_at, item_id],
         )?;
         if updated == 0 {
             return Ok(None);
         }
         tx.execute(
-            "INSERT INTO review_log (card_id, grade, interval_days, ease, next_review_at, reviewed_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-            params![id, grade, interval_days, difficulty, next_review_at, today],
+            "INSERT INTO review_log
+                (card_id, review_item_id, grade, interval_days, ease, next_review_at,
+                 reviewed_at, review_item_source_version, prompt_snapshot, answer_snapshot)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+            params![
+                card_id,
+                item_id,
+                grade,
+                interval_days,
+                difficulty,
+                next_review_at,
+                today,
+                item_source_version,
+                prompt_snapshot,
+                answer_snapshot,
+            ],
+        )?;
+        let Some(item) = tx
+            .query_row(
+                &format!(
+                    "SELECT {} FROM review_items WHERE id=?1",
+                    Self::REVIEW_ITEM_COLUMNS
+                ),
+                params![item_id],
+                row_to_review_item,
+            )
+            .optional()?
+        else {
+            return Ok(None);
+        };
+        // 旧客户端仍会读取知识条目上的聚合复习字段；它们只是兼容投影，
+        // 真正的调度状态已经归属于 ReviewItem。
+        tx.execute(
+            "UPDATE knowledge_cards SET review_state=?1, review_interval_days=?2,
+             review_ease=?3, review_count=?4, last_reviewed_at=?5, next_review_at=?6,
+             first_reviewed_at=?7 WHERE id=?8",
+            params![
+                item.review_state,
+                item.review_interval_days,
+                item.review_ease,
+                item.review_count,
+                item.last_reviewed_at,
+                item.next_review_at,
+                item.first_reviewed_at,
+                card_id,
+            ],
         )?;
         tx.commit()?;
-        self.find(id)
+        self.review_card_from_item(item)
     }
 
     pub(crate) fn review_stats(&mut self, today: &str) -> Result<ReviewStatsResponse> {
@@ -2118,10 +3506,12 @@ impl KnowledgePersistence<'_> {
 
         let (total_reviews, learning, mature) = self.conn.query_row(
             "SELECT
-                COALESCE(SUM(review_count), 0),
-                COALESCE(SUM(CASE WHEN review_state='learning' THEN 1 ELSE 0 END), 0),
-                COALESCE(SUM(CASE WHEN review_state='mature' THEN 1 ELSE 0 END), 0)
-             FROM knowledge_cards WHERE deleted_at=''",
+                COALESCE(SUM(ri.review_count), 0),
+                COALESCE(SUM(CASE WHEN ri.review_state='learning' THEN 1 ELSE 0 END), 0),
+                COALESCE(SUM(CASE WHEN ri.review_state='mature' THEN 1 ELSE 0 END), 0)
+             FROM review_items AS ri
+             INNER JOIN knowledge_cards AS c ON c.id=ri.knowledge_card_id
+             WHERE ri.status!='archived' AND c.deleted_at=''",
             [],
             |row| {
                 Ok((
@@ -2131,26 +3521,24 @@ impl KnowledgePersistence<'_> {
                 ))
             },
         )?;
-        let reviewed_today: i64 = self
-            .conn
-            .query_row(
-                "SELECT COUNT(*) FROM knowledge_cards WHERE deleted_at='' AND last_reviewed_at=?1",
-                params![today],
-                |row| row.get(0),
-            )
-            .unwrap_or(0);
+        let reviewed_today: i64 = self.conn.query_row(
+            "SELECT COUNT(*) FROM review_items AS ri
+             INNER JOIN knowledge_cards AS c ON c.id=ri.knowledge_card_id
+             WHERE ri.status!='archived' AND c.deleted_at='' AND ri.last_reviewed_at=?1",
+            params![today],
+            |row| row.get(0),
+        )?;
         let (due_only, total_confirmed) = self.due_and_confirmed(today)?;
 
         // 今天可学新卡：新卡队列受每日配额（上限 - 今日已学）控制
-        let new_queue: i64 = self
-            .conn
-            .query_row(
-                "SELECT COUNT(*) FROM knowledge_cards
-                 WHERE deleted_at='' AND status='confirmed' AND next_review_at=''",
-                [],
-                |row| row.get(0),
-            )
-            .unwrap_or(0);
+        let new_queue: i64 = self.conn.query_row(
+            "SELECT COUNT(*) FROM review_items AS ri
+             INNER JOIN knowledge_cards AS c ON c.id=ri.knowledge_card_id
+             WHERE ri.status='active' AND c.deleted_at='' AND c.status='confirmed'
+               AND ri.next_review_at=''",
+            [],
+            |row| row.get(0),
+        )?;
         let new_cards = new_queue.min(self.remaining_new_quota(today)?);
         let due = due_only + new_cards;
 
@@ -2159,15 +3547,14 @@ impl KnowledgePersistence<'_> {
         for offset in 1..=7 {
             let date = today_date + Duration::days(offset);
             let key = date.format("%Y-%m-%d").to_string();
-            let count: i64 = self
-                .conn
-                .query_row(
-                    "SELECT COUNT(*) FROM knowledge_cards
-                     WHERE deleted_at='' AND status='confirmed' AND next_review_at=?1",
-                    params![&key],
-                    |row| row.get(0),
-                )
-                .unwrap_or(0);
+            let count: i64 = self.conn.query_row(
+                "SELECT COUNT(*) FROM review_items AS ri
+                 INNER JOIN knowledge_cards AS c ON c.id=ri.knowledge_card_id
+                 WHERE ri.status='active' AND c.deleted_at='' AND c.status='confirmed'
+                   AND ri.next_review_at=?1",
+                params![&key],
+                |row| row.get(0),
+            )?;
             upcoming.push(DailyReviewCount { date: key, count });
         }
 
@@ -2185,24 +3572,33 @@ impl KnowledgePersistence<'_> {
         })
     }
 
-    /// 单张卡的复习历史（间隔曲线数据源）。
-    pub(crate) fn review_history(&mut self, card_id: &str) -> Result<Vec<ReviewHistoryEntry>> {
+    /// 单张复习题的复习历史（间隔曲线数据源）。传入旧知识条目 ID 也保持兼容。
+    pub(crate) fn review_history(
+        &mut self,
+        item_or_card_id: &str,
+    ) -> Result<Vec<ReviewHistoryEntry>> {
         let mut statement = self.conn.prepare(
             "SELECT review_log.grade, review_log.interval_days, review_log.ease,
-                    review_log.next_review_at, review_log.reviewed_at
+                    review_log.next_review_at, review_log.reviewed_at,
+                    review_log.prompt_snapshot, review_log.answer_snapshot,
+                    review_log.review_item_source_version
              FROM review_log
              INNER JOIN knowledge_cards ON knowledge_cards.id=review_log.card_id
                AND knowledge_cards.deleted_at=''
-             WHERE review_log.card_id=?1 ORDER BY review_log.reviewed_at ASC, review_log.id ASC",
+             WHERE review_log.review_item_id=?1 OR review_log.card_id=?1
+             ORDER BY review_log.reviewed_at ASC, review_log.id ASC",
         )?;
         let rows = statement
-            .query_map(params![card_id], |row| {
+            .query_map(params![item_or_card_id], |row| {
                 Ok(ReviewHistoryEntry {
                     grade: row.get(0)?,
                     interval_days: row.get(1)?,
                     ease: row.get(2)?,
                     next_review_at: row.get(3)?,
                     reviewed_at: row.get(4)?,
+                    prompt_snapshot: row.get(5)?,
+                    answer_snapshot: row.get(6)?,
+                    review_item_source_version: row.get(7)?,
                 })
             })?
             .collect::<Result<Vec<_>>>()?;
@@ -2278,17 +3674,29 @@ impl KnowledgePersistence<'_> {
         let mut ids = Vec::with_capacity(drafts.len());
         for draft in drafts {
             let id = Uuid::new_v4().to_string();
+            let related_ids = normalize_related_ids(&id, draft.related_ids);
             let tags = serialize_string_vec(&normalize_tags(draft.tags))?;
-            let projects = normalize_tags(draft.projects);
+            let projects = normalize_space_names(draft.projects);
             for project in &projects {
                 ensure_project(&transaction, project, &now)?;
             }
             transaction.execute(
-                "INSERT INTO knowledge_cards (id, card_type, status, title, content, tags, projects, source_article_id, source_review_id, source_date, source_excerpt, created_at, updated_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?12)",
+                "INSERT INTO knowledge_cards (id, card_type, status, title, content, tags, projects, source_article_id, source_review_id, source_date, source_excerpt, related_ids, created_at, updated_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?13)",
                 params![id, draft.card_type, draft.status, draft.title, draft.content, tags, serialize_string_vec(&projects)?,
-                    draft.source_article_id, draft.source_review_id, draft.source_date, draft.source_excerpt, now],
+                    draft.source_article_id, draft.source_review_id, draft.source_date, draft.source_excerpt,
+                    serialize_string_vec(&related_ids)?, now],
             )?;
+            if draft.status == "confirmed" {
+                insert_default_review_item(
+                    &transaction,
+                    &id,
+                    &draft.title,
+                    &draft.content,
+                    1,
+                    &now,
+                )?;
+            }
             sync_project_links(&transaction, &id, &projects, &now)?;
             ids.push(id);
         }
@@ -2303,8 +3711,27 @@ impl KnowledgePersistence<'_> {
         id: &str,
         draft: KnowledgeCardDraft,
     ) -> Result<Option<KnowledgeCard>> {
+        let Some((existing_content, existing_content_version)) = self
+            .conn
+            .query_row(
+                "SELECT content, content_version FROM knowledge_cards
+                 WHERE id=?1 AND deleted_at=''",
+                params![id],
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?)),
+            )
+            .optional()?
+        else {
+            return Ok(None);
+        };
+        let content_changed = existing_content != draft.content;
+        let content_version = if content_changed {
+            existing_content_version.saturating_add(1)
+        } else {
+            existing_content_version
+        };
         let tags = serialize_string_vec(&normalize_tags(draft.tags))?;
-        let projects = normalize_tags(draft.projects);
+        let projects = normalize_space_names(draft.projects);
+        let related_ids = normalize_related_ids(id, draft.related_ids);
         let projects_json = serialize_string_vec(&projects)?;
         let now = Local::now().format("%Y-%m-%dT%H:%M:%S").to_string();
         let transaction = self.conn.transaction()?;
@@ -2314,9 +3741,9 @@ impl KnowledgePersistence<'_> {
         if transaction.execute(
             "UPDATE knowledge_cards SET card_type=?1, status=?2, title=?3, content=?4, tags=?5,
              source_article_id=?6, source_review_id=?7, source_date=?8, source_excerpt=?9,
-             related_ids=?10, projects=?11,
+             related_ids=?10, projects=?11, content_version=?12,
              next_review_at = CASE WHEN ?2 <> 'confirmed' THEN '' ELSE next_review_at END,
-             updated_at=?12 WHERE id=?13 AND deleted_at=''",
+             updated_at=?13 WHERE id=?14 AND deleted_at=''",
             params![
                 draft.card_type,
                 draft.status,
@@ -2327,15 +3754,49 @@ impl KnowledgePersistence<'_> {
                 draft.source_review_id,
                 draft.source_date,
                 draft.source_excerpt,
-                serialize_string_vec(&draft.related_ids)?,
+                serialize_string_vec(&related_ids)?,
                 projects_json,
+                content_version,
                 now,
-                id
+                id,
             ],
         )? == 0
         {
             transaction.rollback()?;
             return Ok(None);
+        }
+        if content_changed {
+            transaction.execute(
+                "UPDATE review_items SET status=CASE WHEN status='active' THEN 'stale' ELSE status END,
+                 updated_at=?1
+                 WHERE knowledge_card_id=?2 AND status!='archived' AND source_version < ?3",
+                params![now, id, content_version],
+            )?;
+        }
+        if draft.status != "confirmed" {
+            // 未确认的知识条目不能拥有仍显示为 active 的复习题。
+            // 保留原有记忆进度，等用户重新确认后可手动恢复；若正文同时变更，
+            // 上面的 source_version 检查会优先把 active 题标记为 stale，要求重新核对。
+            transaction.execute(
+                "UPDATE review_items SET status='suspended', updated_at=?1
+                 WHERE knowledge_card_id=?2 AND status='active'",
+                params![now, id],
+            )?;
+        }
+        let has_review_items: bool = transaction.query_row(
+            "SELECT EXISTS(SELECT 1 FROM review_items WHERE knowledge_card_id=?1)",
+            params![id],
+            |row| Ok(row.get::<_, i64>(0)? != 0),
+        )?;
+        if draft.status == "confirmed" && !has_review_items {
+            insert_default_review_item(
+                &transaction,
+                id,
+                &draft.title,
+                &draft.content,
+                content_version,
+                &now,
+            )?;
         }
         sync_project_links(&transaction, id, &projects, &now)?;
         transaction.commit()?;
@@ -2355,13 +3816,35 @@ impl KnowledgePersistence<'_> {
             .collect::<BTreeSet<_>>()
             .into_iter()
             .collect();
+        let confirms_cards = action == "confirm"
+            || (action == "set_status"
+                && values.first().is_some_and(|status| status == "confirmed"));
+        if confirms_cards {
+            for id in &ids {
+                let has_source: bool = self.conn.query_row(
+                    "SELECT EXISTS(
+                        SELECT 1 FROM knowledge_cards
+                        WHERE id=?1 AND deleted_at=''
+                          AND (trim(source_article_id)!=''
+                               OR trim(source_review_id)!=''
+                               OR trim(source_date)!=''
+                               OR trim(source_excerpt)!='')
+                    )",
+                    params![id],
+                    |row| Ok(row.get::<_, i64>(0)? != 0),
+                )?;
+                if !has_source {
+                    return Err(rusqlite::Error::InvalidQuery);
+                }
+            }
+        }
         let tag_values = normalize_tags(
             values
                 .iter()
                 .map(|value| value.trim().trim_start_matches('#').to_string())
                 .collect(),
         );
-        let project_values = normalize_tags(values.to_vec());
+        let project_values = normalize_space_names(values.to_vec());
         let now = Local::now().format("%Y-%m-%dT%H:%M:%S").to_string();
         let transaction = self.conn.transaction()?;
 
@@ -2393,9 +3876,9 @@ impl KnowledgePersistence<'_> {
 
         let mut updated = 0;
         for id in &ids {
-            let Some((current_status, raw_tags, raw_projects)) = transaction
+            let Some((current_status, title, content, content_version, raw_tags, raw_projects)) = transaction
                 .query_row(
-                    "SELECT status, tags, projects FROM knowledge_cards
+                    "SELECT status, title, content, content_version, tags, projects FROM knowledge_cards
                      WHERE id=?1 AND deleted_at=''",
                     params![id],
                     |row| {
@@ -2403,6 +3886,9 @@ impl KnowledgePersistence<'_> {
                             row.get::<_, String>(0)?,
                             row.get::<_, String>(1)?,
                             row.get::<_, String>(2)?,
+                            row.get::<_, i64>(3)?,
+                            row.get::<_, String>(4)?,
+                            row.get::<_, String>(5)?,
                         ))
                     },
                 )
@@ -2429,7 +3915,7 @@ impl KnowledgePersistence<'_> {
                 }
                 "add_projects" => {
                     projects.extend(project_values.iter().cloned());
-                    projects = normalize_tags(projects);
+                    projects = normalize_space_names(projects);
                 }
                 "set_projects" => projects = project_values.clone(),
                 "remove_projects" => {
@@ -2456,6 +3942,29 @@ impl KnowledgePersistence<'_> {
                     id
                 ],
             )?;
+            if status != "confirmed" {
+                transaction.execute(
+                    "UPDATE review_items SET status='suspended', updated_at=?1
+                     WHERE knowledge_card_id=?2 AND status='active'",
+                    params![now, id],
+                )?;
+            } else {
+                let has_review_items: bool = transaction.query_row(
+                    "SELECT EXISTS(SELECT 1 FROM review_items WHERE knowledge_card_id=?1)",
+                    params![id],
+                    |row| Ok(row.get::<_, i64>(0)? != 0),
+                )?;
+                if !has_review_items {
+                    insert_default_review_item(
+                        &transaction,
+                        id,
+                        &title,
+                        &content,
+                        content_version,
+                        &now,
+                    )?;
+                }
+            }
             sync_project_links(&transaction, id, &projects, &now)?;
             updated += 1;
         }
@@ -2493,6 +4002,46 @@ fn ensure_project(transaction: &Transaction<'_>, name: &str, now: &str) -> Resul
     Ok(())
 }
 
+fn sync_article_space_links(
+    transaction: &Transaction<'_>,
+    article_id: &str,
+    spaces: &[String],
+    now: &str,
+) -> Result<()> {
+    transaction.execute(
+        "DELETE FROM article_spaces WHERE article_id=?1",
+        params![article_id],
+    )?;
+    for space in spaces {
+        ensure_project(transaction, space, now)?;
+        let space_id: String = transaction.query_row(
+            "SELECT id FROM knowledge_projects WHERE name=?1 COLLATE NOCASE",
+            params![space],
+            |row| row.get(0),
+        )?;
+        transaction.execute(
+            "INSERT OR IGNORE INTO article_spaces (article_id, space_id)
+             VALUES (?1, ?2)",
+            params![article_id, space_id],
+        )?;
+    }
+    Ok(())
+}
+
+fn resolve_article_spaces(conn: &Connection, article: &mut Article) -> Result<()> {
+    let mut statement = conn.prepare(
+        "SELECT p.name
+         FROM article_spaces AS aps
+         INNER JOIN knowledge_projects AS p ON p.id=aps.space_id
+         WHERE aps.article_id=?1
+         ORDER BY p.name COLLATE NOCASE ASC",
+    )?;
+    article.spaces = statement
+        .query_map(params![article.id], |row| row.get::<_, String>(0))?
+        .collect::<Result<Vec<_>>>()?;
+    Ok(())
+}
+
 fn sync_project_links(
     transaction: &Transaction<'_>,
     card_id: &str,
@@ -2526,11 +4075,59 @@ fn valid_knowledge_draft(draft: &KnowledgeCardDraft) -> bool {
             "fact" | "method" | "concept" | "decision" | "case" | "quote" | "principle" | "snippet"
         )
         && !draft.title.trim().is_empty()
+        && draft.title.trim().chars().count() <= MAX_KNOWLEDGE_CARD_TITLE_CHARS
         && !draft.content.trim().is_empty()
+        && draft.content.trim().chars().count() <= MAX_KNOWLEDGE_CARD_CONTENT_CHARS
+}
+
+/// 为新确认知识创建一条兼容性的基础复习题。
+///
+/// 它只是候选题：正文超过短答案阈值时默认暂停，用户可以在知识页继续拆分成多道题。
+fn insert_default_review_item(
+    transaction: &Transaction<'_>,
+    card_id: &str,
+    title: &str,
+    content: &str,
+    source_version: i64,
+    now: &str,
+) -> Result<()> {
+    let status = if content.trim().chars().count() <= 480 {
+        "active"
+    } else {
+        "suspended"
+    };
+    transaction.execute(
+        "INSERT INTO review_items
+            (id, knowledge_card_id, item_type, status, prompt, answer, hint,
+             source_version, created_at, updated_at)
+         VALUES (?1, ?2, 'basic', ?3, ?4, ?5, '', ?6, ?7, ?7)",
+        params![
+            Uuid::new_v4().to_string(),
+            card_id,
+            status,
+            title,
+            content,
+            source_version,
+            now,
+        ],
+    )?;
+    Ok(())
+}
+
+pub(crate) fn valid_review_item_draft(draft: &ReviewItemDraft) -> bool {
+    matches!(
+        draft.item_type.as_str(),
+        "basic" | "cloze" | "code" | "compare" | "scenario"
+    ) && matches!(draft.status.as_str(), "active" | "suspended" | "stale")
+        && !draft.prompt.trim().is_empty()
+        && !draft.answer.trim().is_empty()
+        && draft.prompt.trim().chars().count() <= 500
+        && draft.answer.trim().chars().count() <= 12000
+        && draft.hint.trim().chars().count() <= 1000
 }
 
 fn validate_archive(archive: &PortableArchiveInput) -> std::result::Result<(), ArchiveImportError> {
-    if !(1..=2).contains(&archive.version) {
+    if !(1..=3).contains(&archive.version) {
         return Err(ArchiveImportError::Invalid(format!(
             "Unsupported portable archive version: {}",
             archive.version
@@ -2561,6 +4158,11 @@ fn validate_archive(archive: &PortableArchiveInput) -> std::result::Result<(), A
     }
     if archive.knowledge_cards.iter().any(|card| {
         card.id.trim().is_empty()
+            || card.title.trim().is_empty()
+            || card.title.trim().chars().count() > MAX_KNOWLEDGE_CARD_TITLE_CHARS
+            || card.content.trim().is_empty()
+            || card.content.trim().chars().count() > MAX_KNOWLEDGE_CARD_CONTENT_CHARS
+            || card.deleted_at.chars().count() > 64
             || !matches!(card.status.as_str(), "draft" | "confirmed" | "outdated")
             || !matches!(
                 card.card_type.as_str(),
@@ -2609,6 +4211,42 @@ fn validate_archive(archive: &PortableArchiveInput) -> std::result::Result<(), A
             "Duplicate knowledge card id in portable archive".into(),
         ));
     }
+    if archive.review_items.iter().any(|item| {
+        item.id.trim().is_empty()
+            || !card_ids.contains_key(&item.knowledge_card_id)
+            || !matches!(
+                item.item_type.as_str(),
+                "basic" | "cloze" | "code" | "compare" | "scenario"
+            )
+            || !matches!(
+                item.status.as_str(),
+                "active" | "suspended" | "stale" | "archived"
+            )
+            || item.prompt.trim().is_empty()
+            || item.answer.trim().is_empty()
+            || item.prompt.trim().chars().count() > 500
+            || item.answer.trim().chars().count() > 12000
+            || item.hint.trim().chars().count() > 1000
+            || item.source_version < 1
+            || item.review_count < 0
+            || !item.review_interval_days.is_finite()
+            || item.review_interval_days < 0.0
+            || !item.review_ease.is_finite()
+    }) {
+        return Err(ArchiveImportError::Invalid(
+            "Invalid review item in portable archive".into(),
+        ));
+    }
+    let mut review_item_ids = BTreeMap::new();
+    if archive
+        .review_items
+        .iter()
+        .any(|item| review_item_ids.insert(&item.id, ()).is_some())
+    {
+        return Err(ArchiveImportError::Invalid(
+            "Duplicate review item id in portable archive".into(),
+        ));
+    }
     Ok(())
 }
 
@@ -2633,6 +4271,10 @@ fn default_version() -> i64 {
     1
 }
 
+fn default_content_version() -> i64 {
+    1
+}
+
 fn default_draft() -> String {
     "draft".into()
 }
@@ -2641,12 +4283,53 @@ fn default_card_type() -> String {
     "fact".into()
 }
 
+fn default_review_item_type() -> String {
+    "basic".into()
+}
+
+fn default_review_item_status() -> String {
+    "suspended".into()
+}
+
 fn default_review_ease() -> f64 {
     2.5
 }
 
 fn default_review_state() -> String {
     "new".into()
+}
+
+const MAX_SPACE_NAME_CHARS: usize = 80;
+const MAX_SPACE_COUNT: usize = 12;
+
+fn normalize_space_name(value: &str) -> Option<String> {
+    let name = value
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .chars()
+        .take(MAX_SPACE_NAME_CHARS)
+        .collect::<String>();
+    (!name.is_empty()).then_some(name)
+}
+
+fn normalize_space_names(values: Vec<String>) -> Vec<String> {
+    let mut result = Vec::new();
+    for value in values {
+        let Some(name) = normalize_space_name(&value) else {
+            continue;
+        };
+        if !result
+            .iter()
+            .any(|existing: &String| existing.eq_ignore_ascii_case(&name))
+        {
+            result.push(name);
+        }
+        if result.len() == MAX_SPACE_COUNT {
+            break;
+        }
+    }
+    result
 }
 
 fn normalize_tags(values: Vec<String>) -> Vec<String> {
@@ -2663,6 +4346,25 @@ fn normalize_tags(values: Vec<String>) -> Vec<String> {
             result.push(tag);
         }
         if result.len() == 12 {
+            break;
+        }
+    }
+    result
+}
+
+fn normalize_related_ids(card_id: &str, values: Vec<String>) -> Vec<String> {
+    let mut result = Vec::new();
+    for value in values {
+        let related_id = value.trim().to_string();
+        if related_id.is_empty()
+            || related_id == card_id
+            || related_id.chars().count() > MAX_KNOWLEDGE_RELATED_ID_CHARS
+            || result.contains(&related_id)
+        {
+            continue;
+        }
+        result.push(related_id);
+        if result.len() == MAX_KNOWLEDGE_RELATED_IDS {
             break;
         }
     }
@@ -2687,18 +4389,21 @@ fn row_to_article(row: &rusqlite::Row<'_>) -> Result<Article> {
         word_count: row.get(6)?,
         created_at: row.get(7)?,
         updated_at: row.get(8)?,
+        spaces: Vec::new(),
     })
 }
 
 fn row_to_article_summary(row: &rusqlite::Row<'_>) -> Result<ArticleSummary> {
     let tags: String = row.get(4)?;
     let content: String = row.get(6)?;
+    let spaces: String = row.get(7)?;
     Ok(ArticleSummary {
         id: row.get(0)?,
         date: row.get(1)?,
         title: row.get(2)?,
         mood: row.get(3)?,
         tags: parse_json_vec(&tags)?,
+        spaces: parse_json_vec(&spaces)?,
         word_count: row.get(5)?,
         preview: article_preview(&content, 120),
     })
@@ -2732,6 +4437,18 @@ fn row_to_review(row: &rusqlite::Row<'_>) -> Result<Review> {
     })
 }
 
+fn row_to_knowledge_saved_view(row: &rusqlite::Row<'_>) -> Result<KnowledgeSavedView> {
+    let filters_json: String = row.get(2)?;
+    let filters = serde_json::from_str(&filters_json).map_err(json_to_sql_error)?;
+    Ok(KnowledgeSavedView {
+        id: row.get(0)?,
+        name: row.get(1)?,
+        filters,
+        created_at: row.get(3)?,
+        updated_at: row.get(4)?,
+    })
+}
+
 fn row_to_knowledge_card(row: &rusqlite::Row<'_>) -> Result<KnowledgeCard> {
     Ok(KnowledgeCard {
         id: row.get(0)?,
@@ -2746,32 +4463,41 @@ fn row_to_knowledge_card(row: &rusqlite::Row<'_>) -> Result<KnowledgeCard> {
         source_excerpt: row.get(9)?,
         created_at: row.get(10)?,
         updated_at: row.get(11)?,
-        review_state: row.get(12)?,
-        review_interval_days: row.get(13)?,
-        review_ease: row.get(14)?,
-        review_count: row.get(15)?,
-        last_reviewed_at: row.get(16)?,
-        next_review_at: row.get(17)?,
-        usage_count: row.get(18)?,
-        last_used_at: row.get(19)?,
-        related_ids: parse_json_vec(&row.get::<_, String>(20)?)?,
-        declared_related_ids: parse_json_vec(&row.get::<_, String>(20)?)?,
-        first_reviewed_at: row.get(21)?,
-        projects: parse_json_vec(&row.get::<_, String>(22)?)?,
+        content_version: row.get(12)?,
+        review_state: row.get(13)?,
+        review_interval_days: row.get(14)?,
+        review_ease: row.get(15)?,
+        review_count: row.get(16)?,
+        last_reviewed_at: row.get(17)?,
+        next_review_at: row.get(18)?,
+        usage_count: row.get(19)?,
+        last_used_at: row.get(20)?,
+        related_ids: parse_json_vec(&row.get::<_, String>(21)?)?,
+        declared_related_ids: parse_json_vec(&row.get::<_, String>(21)?)?,
+        first_reviewed_at: row.get(22)?,
+        projects: parse_json_vec(&row.get::<_, String>(23)?)?,
     })
 }
 
-fn row_to_knowledge_saved_view(row: &rusqlite::Row<'_>) -> Result<KnowledgeSavedView> {
-    let filters_json: String = row.get(2)?;
-    let filters = serde_json::from_str(&filters_json).map_err(|error| {
-        rusqlite::Error::FromSqlConversionFailure(2, Type::Text, Box::new(error))
-    })?;
-    Ok(KnowledgeSavedView {
+fn row_to_review_item(row: &rusqlite::Row<'_>) -> Result<ReviewItem> {
+    Ok(ReviewItem {
         id: row.get(0)?,
-        name: row.get(1)?,
-        filters,
-        created_at: row.get(3)?,
-        updated_at: row.get(4)?,
+        knowledge_card_id: row.get(1)?,
+        item_type: row.get(2)?,
+        status: row.get(3)?,
+        prompt: row.get(4)?,
+        answer: row.get(5)?,
+        hint: row.get(6)?,
+        source_version: row.get(7)?,
+        created_at: row.get(8)?,
+        updated_at: row.get(9)?,
+        review_state: row.get(10)?,
+        review_interval_days: row.get(11)?,
+        review_ease: row.get(12)?,
+        review_count: row.get(13)?,
+        last_reviewed_at: row.get(14)?,
+        next_review_at: row.get(15)?,
+        first_reviewed_at: row.get(16)?,
     })
 }
 
@@ -2815,6 +4541,7 @@ fn dirs_next() -> Option<PathBuf> {
 #[cfg(test)]
 mod migration_tests {
     use super::*;
+    use crate::models::AiModelProfile;
 
     fn v3_knowledge_cards_table() -> &'static str {
         "CREATE TABLE knowledge_cards (
@@ -2873,7 +4600,7 @@ mod migration_tests {
                 row.get(0)
             })
             .expect("read schema version");
-        assert_eq!(version, 15);
+        assert_eq!(version, 21);
 
         // 已迁移的库再次 initialize 必须幂等，不报重复列错误
         db.initialize().expect("re-initialize is idempotent");
@@ -2907,7 +4634,7 @@ mod migration_tests {
                 row.get(0)
             })
             .expect("read schema version");
-        assert_eq!(version, 15);
+        assert_eq!(version, 21);
 
         let settings = db.review_settings().expect("default review settings");
         assert_eq!(settings.new_cards_per_day, 20);
@@ -2935,6 +4662,97 @@ mod migration_tests {
         assert_eq!(
             db.review_settings().expect("settings after re-init"),
             updated
+        );
+    }
+
+    #[test]
+    fn ai_settings_persist_the_runtime_configuration() {
+        let mut db = Database::new_in_memory().expect("in-memory database");
+        let config = AiConfig {
+            api_key: "test-api-key".into(),
+            base_url: "https://example.test/v1".into(),
+            model: "test-model".into(),
+            temperature: 0.7,
+            max_tokens: 2048,
+            timeout_secs: 30,
+            retries: 3,
+            min_interval_ms: 250,
+        };
+
+        let saved = db
+            .update_ai_config(&config, true)
+            .expect("persist AI settings");
+        assert_eq!(saved.api_key, "test-api-key");
+        assert_eq!(saved.base_url, "https://example.test/v1");
+        assert_eq!(saved.model, "test-model");
+        assert_eq!(saved.temperature, 0.7);
+        assert_eq!(saved.max_tokens, 2048);
+        assert_eq!(saved.timeout_secs, 30);
+        assert_eq!(saved.retries, 3);
+        assert_eq!(saved.min_interval_ms, 250);
+        assert_eq!(
+            db.ai_api_key_source().expect("read AI key source"),
+            "settings"
+        );
+
+        db.initialize().expect("re-initialize keeps AI settings");
+        let reloaded = db.ai_config().expect("reload AI settings");
+        assert_eq!(reloaded.api_key, "test-api-key");
+        assert_eq!(reloaded.model, "test-model");
+    }
+
+    #[test]
+    fn ai_routing_defaults_and_persisted_profiles_resolve_by_task() {
+        let mut db = Database::new_in_memory().expect("in-memory database");
+        let defaults = db.ai_routing().expect("default AI routing");
+        assert_eq!(defaults.profiles.len(), 2);
+        assert_eq!(defaults.routes.get("daily_summary"), Some(&"fast".into()));
+        assert_eq!(defaults.routes.get("weekly_review"), Some(&"pro".into()));
+
+        let routing = AiRoutingConfig {
+            profiles: vec![
+                AiModelProfile {
+                    id: "fast".into(),
+                    name: "快速模型".into(),
+                    model: "deepseek-flash".into(),
+                    temperature: 0.1,
+                    max_tokens: 1200,
+                    timeout_secs: 20,
+                    retries: 1,
+                    min_interval_ms: 200,
+                },
+                AiModelProfile {
+                    id: "pro".into(),
+                    name: "高质量模型".into(),
+                    model: "deepseek-pro".into(),
+                    temperature: 0.4,
+                    max_tokens: 5000,
+                    timeout_secs: 60,
+                    retries: 2,
+                    min_interval_ms: 500,
+                },
+            ],
+            routes: BTreeMap::from([
+                ("daily_summary".into(), "fast".into()),
+                ("knowledge_extract".into(), "fast".into()),
+                ("weekly_review".into(), "pro".into()),
+                ("monthly_review".into(), "pro".into()),
+            ]),
+            fallback_profile: "fast".into(),
+        };
+        db.update_ai_routing(&routing).expect("persist AI routing");
+
+        let (config, profile_id) = db
+            .ai_config_for_task(AiTask::WeeklyReview)
+            .expect("resolve weekly review route");
+        assert_eq!(profile_id, "pro");
+        assert_eq!(config.model, "deepseek-pro");
+        assert_eq!(config.max_tokens, 5000);
+
+        db.initialize().expect("re-initialize keeps AI routing");
+        assert_eq!(
+            db.ai_routing().expect("reload AI routing").fallback_profile,
+            "fast"
         );
     }
 }
@@ -3037,7 +4855,7 @@ mod migration_v5_tests {
                 row.get(0)
             })
             .expect("read schema version");
-        assert_eq!(version, 15);
+        assert_eq!(version, 21);
         db.initialize()
             .expect("re-initialize after v5 is idempotent");
     }

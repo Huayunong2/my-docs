@@ -14,7 +14,13 @@ use crate::models::*;
 use crate::review;
 use crate::stats;
 
-use axum::{extract::State, http::StatusCode, middleware, response::Json, Router};
+use axum::{
+    extract::{DefaultBodyLimit, State},
+    http::StatusCode,
+    middleware,
+    response::Json,
+    Router,
+};
 use std::sync::{Arc, Mutex};
 use tower_http::services::{ServeDir, ServeFile};
 
@@ -46,23 +52,23 @@ async fn health_check() -> Json<serde_json::Value> {
     }))
 }
 
-async fn detailed_health_check() -> Json<serde_json::Value> {
-    let ai = std::env::var("DAILY_SUMMARY_AI_API_KEY")
-        .map(|k| !k.is_empty())
-        .unwrap_or(false);
-    let ai_model =
-        std::env::var("DAILY_SUMMARY_AI_MODEL").unwrap_or_else(|_| "gpt-4o-mini".to_string());
-    let ai_base_url = std::env::var("DAILY_SUMMARY_AI_BASE_URL")
-        .unwrap_or_else(|_| "https://api.openai.com/v1".to_string());
-    let ai_temperature =
-        std::env::var("DAILY_SUMMARY_AI_TEMPERATURE").unwrap_or_else(|_| "0.2".to_string());
-    let ai_max_tokens =
-        std::env::var("DAILY_SUMMARY_AI_MAX_TOKENS").unwrap_or_else(|_| "unlimited".to_string());
-    let ai_timeout_secs =
-        std::env::var("DAILY_SUMMARY_AI_TIMEOUT_SECS").unwrap_or_else(|_| "45".to_string());
-    let ai_retries = std::env::var("DAILY_SUMMARY_AI_RETRIES").unwrap_or_else(|_| "2".to_string());
-    let ai_min_interval_ms =
-        std::env::var("DAILY_SUMMARY_AI_MIN_INTERVAL_MS").unwrap_or_else(|_| "1200".to_string());
+async fn detailed_health_check(
+    State(db): State<AppState>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    let (ai_config, ai_api_key_source) = {
+        let db = db
+            .lock()
+            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        let config = db
+            .ai_config()
+            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        let source = db
+            .ai_api_key_source()
+            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+            .to_string();
+        (config, source)
+    };
+    let ai = !ai_config.api_key.trim().is_empty();
     let db_path = Database::db_path();
     let db_exists = db_path.exists();
     let db_size = db_exists
@@ -90,19 +96,21 @@ async fn detailed_health_check() -> Json<serde_json::Value> {
     let ai_health = ai_health();
     let offsite_last_success_unix = maintenance_timestamp("offsite-last-success");
     let offsite_verify_last_success_unix = maintenance_timestamp("offsite-verify-last-success");
-    Json(serde_json::json!({
+    Ok(Json(serde_json::json!({
         "version": env!("CARGO_PKG_VERSION"),
         "build": BUILD_TIME,
         "features": { "ai": ai, "reviews": true, "knowledge": true, "exports": true, "backups": true },
         "ai_config": {
             "configured": ai,
-            "model": ai_model,
-            "base_url": ai_base_url,
-            "temperature": ai_temperature,
-            "max_tokens": ai_max_tokens,
-            "timeout_secs": ai_timeout_secs,
-            "retries": ai_retries,
-            "min_interval_ms": ai_min_interval_ms
+            "api_key_configured": ai,
+            "api_key_source": ai_api_key_source,
+            "model": ai_config.model,
+            "base_url": ai_config.base_url,
+            "temperature": ai_config.temperature.to_string(),
+            "max_tokens": if ai_config.max_tokens == 0 { "unlimited".to_string() } else { ai_config.max_tokens.to_string() },
+            "timeout_secs": ai_config.timeout_secs.to_string(),
+            "retries": ai_config.retries.to_string(),
+            "min_interval_ms": ai_config.min_interval_ms.to_string()
         },
         "db_path": db_path.to_string_lossy(),
         "db_size": db_size,
@@ -119,7 +127,7 @@ async fn detailed_health_check() -> Json<serde_json::Value> {
             "ai_last_failure_unix": ai_health.last_failure_unix,
             "ai_last_success_unix": ai_health.last_success_unix
         }
-    }))
+    })))
 }
 
 async fn export_full(
@@ -180,6 +188,7 @@ async fn import_articles(
                 content: item.content,
                 mood: item.mood,
                 tags: item.tags.unwrap_or_default(),
+                spaces: item.spaces.unwrap_or_default(),
             })
             .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
         imported += 1;
@@ -204,6 +213,10 @@ fn build_router(db: Database) -> Router {
         .route(
             "/articles/search",
             axum::routing::get(articles::search_articles),
+        )
+        .route(
+            "/spaces/:space/articles",
+            axum::routing::get(articles::list_space_articles),
         )
         .route(
             "/articles/:id",
@@ -294,6 +307,23 @@ fn build_router(db: Database) -> Router {
             axum::routing::put(knowledge::update_saved_view).delete(knowledge::delete_saved_view),
         )
         .route(
+            "/spaces",
+            axum::routing::get(knowledge::list_spaces).post(knowledge::create_project),
+        )
+        .route(
+            "/spaces/:space/archive",
+            axum::routing::post(knowledge::archive_space),
+        )
+        .route(
+            "/spaces/:space/restore",
+            axum::routing::post(knowledge::restore_space),
+        )
+        .route(
+            "/spaces/:space",
+            axum::routing::patch(knowledge::update_space)
+                .delete(knowledge::delete_space_permanently),
+        )
+        .route(
             "/knowledge-cards/batch",
             axum::routing::post(knowledge::batch_cards),
         )
@@ -302,10 +332,38 @@ fn build_router(db: Database) -> Router {
             axum::routing::post(knowledge::extract_cards),
         )
         .route(
+            "/knowledge-cards/analyze",
+            axum::routing::post(knowledge::analyze_cards),
+        )
+        .route(
+            "/knowledge-cards/analyze-jobs",
+            axum::routing::post(knowledge::create_analyze_job),
+        )
+        .route(
+            "/knowledge-cards/analyze-jobs/:id",
+            axum::routing::get(knowledge::get_analyze_job).delete(knowledge::cancel_analyze_job),
+        )
+        .route(
+            "/knowledge-cards/analyze-jobs/:id/retry",
+            axum::routing::post(knowledge::retry_analyze_job),
+        )
+        .route(
+            "/knowledge-cards/import",
+            axum::routing::post(knowledge::import_cards),
+        )
+        .route(
             "/knowledge-cards/:id",
             axum::routing::get(knowledge::get_card)
                 .put(knowledge::update_card)
                 .delete(knowledge::delete_card),
+        )
+        .route(
+            "/knowledge-cards/:id/review-items",
+            axum::routing::get(knowledge::list_review_items).post(knowledge::create_review_item),
+        )
+        .route(
+            "/review-items/:id",
+            axum::routing::put(knowledge::update_review_item).delete(knowledge::delete_review_item),
         )
         .route(
             "/knowledge-cards/:id/touch",
@@ -331,12 +389,23 @@ fn build_router(db: Database) -> Router {
         )
         .route("/review/:id/grade", axum::routing::post(review::grade_card))
         .route("/ai/summary", axum::routing::post(ai::ai_summary))
+        .route(
+            "/ai/config",
+            axum::routing::get(ai::get_ai_config).put(ai::update_ai_config),
+        )
+        .route(
+            "/ai/routing",
+            axum::routing::get(ai::get_ai_routing).put(ai::update_ai_routing),
+        )
         .route("/health", axum::routing::get(detailed_health_check))
         .route("/articles/import", axum::routing::post(import_articles))
         .route("/articles/import-full", axum::routing::post(import_full))
         .route("/export/full", axum::routing::post(export_full))
         .fallback(|| async { StatusCode::NOT_FOUND })
-        .route_layer(middleware::from_fn(require_api_token));
+        .route_layer(middleware::from_fn(require_api_token))
+        // AI 文档导入按 UTF-8 字节传输，1,000,000 个中文字符可能超过 axum
+        // 默认的 2 MiB JSON 限制；同时保留明确的总请求上限，避免无限制读入。
+        .layer(DefaultBodyLimit::max(12 * 1024 * 1024));
 
     Router::new()
         .route("/health", axum::routing::get(health_check))

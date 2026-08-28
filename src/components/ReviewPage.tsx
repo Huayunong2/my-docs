@@ -19,7 +19,7 @@ import {
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import * as api from "../lib/api";
-import type { KnowledgeCard, ReviewGrade } from "../lib/api";
+import type { KnowledgeCard, ReviewCard, ReviewGrade } from "../lib/api";
 import { cardTypeLabels, reviewStateLabels } from "../lib/cardLabels";
 import type { Page } from "../App";
 import MarkdownContent from "./MarkdownContent";
@@ -59,6 +59,14 @@ const gradeOptions: Array<{
   },
 ];
 
+const reviewItemTypeLabels: Record<string, string> = {
+  basic: "基础问答",
+  cloze: "填空",
+  code: "代码题",
+  compare: "对比题",
+  scenario: "场景题",
+};
+
 function formatReviewPreview(preview?: api.ReviewGradePreview): string {
   if (!preview) return "";
   if (preview.interval_days <= 0) return "今天再来";
@@ -76,7 +84,7 @@ export default function ReviewPage({
   onNavigate: (page: Page) => void;
   onOpenKnowledgeCard: (cardId: string) => void;
 }) {
-  const [cards, setCards] = useState<KnowledgeCard[]>([]);
+  const [cards, setCards] = useState<ReviewCard[]>([]);
   const [allCards, setAllCards] = useState<KnowledgeCard[]>([]);
   const [stats, setStats] = useState<api.DueReviewStats | null>(null);
   const [reviewStats, setReviewStats] = useState<api.ReviewStatsResponse | null>(null);
@@ -229,14 +237,23 @@ export default function ReviewPage({
   const openEdit = (event?: React.MouseEvent<HTMLButtonElement>) => {
     if (!current) return;
     if (event) editingTriggerRef.current = event.currentTarget;
-    setEditing(current);
-    setEditTitle(current.title);
-    setEditContent(current.content);
-    setEditTagsText(current.tags.join(", "));
-    setEditRelatedText(((current.declared_related_ids?.length ? current.declared_related_ids : current.related_ids) || [])
-      .map((id) => allCards.find((card) => card.id === id)?.title || "")
-      .filter(Boolean)
-      .join(", "));
+    const loadCard = async () => {
+      try {
+        const card = allCards.find((item) => item.id === current.knowledge_card_id)
+          || await api.getKnowledgeCard(current.knowledge_card_id);
+        setEditing(card);
+        setEditTitle(card.title);
+        setEditContent(card.content);
+        setEditTagsText(card.tags.join(", "));
+        setEditRelatedText(((card.declared_related_ids?.length ? card.declared_related_ids : card.related_ids) || [])
+          .map((id) => allCards.find((item) => item.id === id)?.title || "")
+          .filter(Boolean)
+          .join(", "));
+      } catch (e) {
+        setError(api.getErrorMessage(e));
+      }
+    };
+    void loadCard();
   };
 
   const resolveRelatedIds = (text: string): string[] => {
@@ -260,9 +277,10 @@ export default function ReviewPage({
         tags: editTagsText.split(",").map((tag) => tag.trim()).filter(Boolean),
         related_ids: resolveRelatedIds(editRelatedText),
       });
-      setCards((prev) => prev.map((card) => (card.id === saved.id ? saved : card)));
       setAllCards((prev) => prev.map((card) => (card.id === saved.id ? saved : card)));
       setEditing(null);
+      // 编辑知识正文可能让当前复习题变为 stale；重新取队列，避免继续操作已失效的投影。
+      await load();
       toast.success("卡片已更新");
     } catch (e) {
       setError(api.getErrorMessage(e));
@@ -282,7 +300,7 @@ export default function ReviewPage({
       <PageHeader
         icon={Brain}
         title="间隔复习"
-        description="按遗忘曲线回顾已沉淀的知识卡片"
+        description="按遗忘曲线回顾独立复习题，知识正文保留在条目中"
         actions={
           stats ? (
             <>
@@ -349,6 +367,9 @@ export default function ReviewPage({
                   <span className="ui-status-accent rounded-md px-2 py-0.5 text-[11px] font-semibold">
                     {cardTypeLabels[current.card_type]}
                   </span>
+                  <span className="ui-chip h-auto px-2 py-0.5 text-[11px]">
+                    {reviewItemTypeLabels[current.item_type] || current.item_type}
+                  </span>
                   {current.review_state && current.review_state !== "new" && (
                     <span
                       className={[
@@ -375,6 +396,16 @@ export default function ReviewPage({
                   {current.title}
                 </h3>
 
+                <div className="ui-panel-muted mt-4 p-4">
+                  <div className="ui-section-kicker mb-1.5">问题</div>
+                  <div className="text-sm leading-6 text-[var(--ui-text)]">
+                    <MarkdownContent content={current.prompt} />
+                  </div>
+                  {current.hint && !revealed && (
+                    <p className="mt-2 text-xs text-[var(--ui-text-subtle)]">提示：{current.hint}</p>
+                  )}
+                </div>
+
                 {current.tags.length > 0 && (
                   <div className="mt-2 flex flex-wrap gap-1.5">
                     {current.tags.map((tag) => (
@@ -399,7 +430,7 @@ export default function ReviewPage({
                 ) : (
                   <motion.div initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} className="mt-5">
                     <div className="ui-panel-muted p-4">
-                      <MarkdownContent content={current.content} />
+                      <MarkdownContent content={current.answer} />
                     </div>
 
                     {current.source_excerpt && (
@@ -447,7 +478,7 @@ export default function ReviewPage({
                         onClick={openEdit}
                         className="ui-button-secondary h-8 px-2.5"
                       >
-                        <PencilLine size={12} /> 编辑卡片
+                        <PencilLine size={12} /> 编辑知识条目
                       </button>
                     </div>
 
@@ -489,7 +520,7 @@ export default function ReviewPage({
 
               <p className="mt-3 flex items-center justify-center gap-1.5 text-xs text-[var(--ui-text-subtle)]">
                 <CheckCircle2 size={12} className="text-[var(--ui-success-text)]" />
-                剩余 {cards.length} 张 · 空格翻面，1-4 评分
+                剩余 {cards.length} 道题 · 空格翻面，1-4 评分
               </p>
             </motion.div>
           </AnimatePresence>

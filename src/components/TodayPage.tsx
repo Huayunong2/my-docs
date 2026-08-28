@@ -19,6 +19,7 @@ import {
   MoreVertical,
   PenLine,
   Save,
+  Share2,
   Smile,
   Sparkles,
   Tag,
@@ -33,10 +34,8 @@ import MarkdownContent from "./MarkdownContent";
 import { useConfirmDialog } from "./ui/Feedback";
 import { toast } from "sonner";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "./ui/dropdown-menu";
-import { Popover, PopoverContent, PopoverTrigger } from "./ui/popover";
+import DatePickerPopover from "./ui/date-picker";
 import { Tabs, TabsList, TabsTrigger } from "./ui/tabs";
-import { DayPicker } from "react-day-picker";
-import "react-day-picker/style.css";
 import CodeMirror from "@uiw/react-codemirror";
 import { EditorView } from "@codemirror/view";
 import { markdown } from "@codemirror/lang-markdown";
@@ -121,6 +120,7 @@ type LocalDraft = {
   content: string;
   mood: string;
   tags: string[];
+  spaces?: string[];
   savedAt: number;
 };
 
@@ -140,6 +140,9 @@ function readLocalDraft(date: string): LocalDraft | null {
       content: parsed.content,
       mood: parsed.mood,
       tags: parsed.tags.filter((tag): tag is string => typeof tag === "string"),
+      spaces: Array.isArray(parsed.spaces)
+        ? parsed.spaces.filter((space): space is string => typeof space === "string")
+        : [],
       savedAt: parsed.savedAt,
     };
   } catch {
@@ -165,8 +168,72 @@ function clearLocalDraft(date: string) {
   }
 }
 
+function hasLocalStorageItem(key: string) {
+  if (typeof window === "undefined") return false;
+  try {
+    return !!localStorage.getItem(key);
+  } catch {
+    return false;
+  }
+}
+
+function setLocalStorageFlag(key: string) {
+  if (typeof window === "undefined") return;
+  try {
+    localStorage.setItem(key, "1");
+  } catch {
+    // 该标记只用于减少提示频次，存储不可用时不影响主流程。
+  }
+}
+
 type SaveStatus = "idle" | "saving" | "saved" | "error";
 type MobilePane = "edit" | "preview";
+const MAX_PENDING_SHARE_CHARS = 200_000;
+const MAX_PENDING_SHARE_AGE_MS = 7 * 24 * 60 * 60 * 1000;
+
+function takePendingShare(): { text: string; title: string } | null {
+  if (typeof window === "undefined") return null;
+  let raw = "";
+  const storages: Storage[] = [];
+  try { storages.push(window.localStorage); } catch { /* 尝试 sessionStorage */ }
+  try { storages.push(window.sessionStorage); } catch { /* 存储不可用 */ }
+  for (const storage of storages) {
+    try {
+      raw = storage.getItem("pendingShare") || "";
+      if (raw) {
+        storage.removeItem("pendingShare");
+        break;
+      }
+    } catch {
+      // 尝试下一种存储。
+    }
+  }
+  if (!raw) {
+    const url = new URL(window.location.href);
+    if (url.searchParams.has("share-target")) {
+      raw = JSON.stringify({
+        text: url.searchParams.get("text") || "",
+        title: url.searchParams.get("title") || "",
+        ts: Date.now(),
+      });
+      url.searchParams.delete("share-target");
+      url.searchParams.delete("text");
+      url.searchParams.delete("title");
+      window.history.replaceState({}, "", `${url.pathname}${url.search}${url.hash}`);
+    }
+  }
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(raw) as { text?: unknown; title?: unknown; ts?: unknown };
+    const timestamp = typeof parsed.ts === "number" ? parsed.ts : Date.now();
+    if (Number.isFinite(timestamp) && Date.now() - timestamp > MAX_PENDING_SHARE_AGE_MS) return null;
+    const text = typeof parsed.text === "string" ? parsed.text.slice(0, MAX_PENDING_SHARE_CHARS) : "";
+    const title = typeof parsed.title === "string" ? parsed.title.trim().slice(0, 200) : "";
+    return text || title ? { text, title } : null;
+  } catch {
+    return null;
+  }
+}
 
 export default function TodayPage({
   targetDate,
@@ -194,6 +261,8 @@ export default function TodayPage({
   const [mood, setMood] = useState("");
   const [tags, setTags] = useState<string[]>([]);
   const [tagInput, setTagInput] = useState("");
+  // 空间归属在知识确认阶段维护；这里只静默保留旧记录的关系，避免编辑日报时误清除。
+  const [spaces, setSpaces] = useState<string[]>([]);
   const [dirty, setDirty] = useState(false);
   const [saveStatus, setSaveStatus] = useState<SaveStatus>("idle");
   const [saveError, setSaveError] = useState("");
@@ -203,6 +272,7 @@ export default function TodayPage({
   const [tagSuggestions, setTagSuggestions] = useState<string[]>(DEFAULT_TAG_SUGGESTIONS);
   const [aiLoading, setAiLoading] = useState(false);
   const [aiResult, setAiResult] = useState("");
+  const [aiSourceContent, setAiSourceContent] = useState("");
   const [aiError, setAiError] = useState("");
   const [extractingCards, setExtractingCards] = useState(false);
   const [cardExtractNotice, setCardExtractNotice] = useState("");
@@ -224,7 +294,6 @@ export default function TodayPage({
     () => tagSuggestions.filter((tag) => !tags.includes(tag)).slice(0, 10),
     [tagSuggestions, tags]
   );
-
   // Load article for selected date
   useEffect(() => {
     let cancelled = false;
@@ -236,10 +305,18 @@ export default function TodayPage({
     setMood("");
     setTags([]);
     setTagInput("");
+    setSpaces([]);
     setDirty(false);
     setSaveStatus("idle");
     setSaveError("");
     setKnowledgePrompt(false);
+    setAiLoading(false);
+    setAiResult("");
+    setAiSourceContent("");
+    setAiError("");
+    setExtractingCards(false);
+    setCardExtractNotice("");
+    setCardExtractCount(0);
 
     const generation = recordSession.current.begin(date, null);
     articleRef.current = null;
@@ -255,6 +332,7 @@ export default function TodayPage({
       setContent(localDraft.content);
       setMood(localDraft.mood);
       setTags(localDraft.tags);
+      setSpaces(localDraft.spaces || []);
       setDirty(true);
       setSaveStatus("idle");
       setSaveError("");
@@ -272,10 +350,23 @@ export default function TodayPage({
             setContent(a.content);
             setMood(a.mood);
             setTags(a.tags);
+            setSpaces(a.spaces || []);
             setDirty(false);
           }
         } else {
           restoreLocalDraft(null);
+        }
+        const shared = takePendingShare();
+        if (shared) {
+          if (shared.text) {
+            setContent((previous) => previous ? `${previous}\n\n${shared.text}` : shared.text);
+          }
+          if (shared.title) {
+            setTitle((previous) => previous.trim() ? previous : shared.title);
+          }
+          setDirty(true);
+          setSaveStatus("idle");
+          toast.info("已将分享内容追加到当前记录，保存后写入服务器");
         }
       })
       .catch((e) => {
@@ -317,7 +408,7 @@ export default function TodayPage({
 
   // Persist save — uses ref to avoid stale closure
   const doSave = useCallback(
-    async (newTitle: string, newContent: string, newMood: string, newTags = tags) => {
+    async (newTitle: string, newContent: string, newMood: string, newTags = tags, newSpaces = spaces) => {
       if (saveTimer.current) {
         clearTimeout(saveTimer.current);
         saveTimer.current = undefined;
@@ -326,7 +417,7 @@ export default function TodayPage({
         clearTimeout(localDraftTimer.current);
         localDraftTimer.current = undefined;
       }
-      writeLocalDraft(date, { title: newTitle, content: newContent, mood: newMood, tags: newTags });
+      writeLocalDraft(date, { title: newTitle, content: newContent, mood: newMood, tags: newTags, spaces: newSpaces });
       setSaveStatus("saving");
       setSaveError("");
       try {
@@ -336,6 +427,7 @@ export default function TodayPage({
           content: newContent,
           mood: newMood,
           tags: newTags,
+          spaces: newSpaces,
         });
         if (!result.applied) return false;
         setArticle(result.article);
@@ -348,7 +440,7 @@ export default function TodayPage({
         const plainLength = newContent.trim().replace(/\s+/g, "").length;
         if (plainLength >= 500
           && knowledgePromptDate.current !== date
-          && !localStorage.getItem(`knowledge-prompt:${date}`)) {
+          && !hasLocalStorageItem(`knowledge-prompt:${date}`)) {
           knowledgePromptDate.current = date;
           setKnowledgePrompt(true);
         }
@@ -359,31 +451,53 @@ export default function TodayPage({
         return false;
       }
     },
-    [date, tags]
+    [date, spaces, tags]
   );
 
   // Auto-save with debounce
   const autoSave = useCallback(
-    (newTitle: string, newContent: string, newMood: string, newTags = tags) => {
+    (newTitle: string, newContent: string, newMood: string, newTags = tags, newSpaces = spaces) => {
       recordSession.current.markEdited();
       if (localDraftTimer.current) clearTimeout(localDraftTimer.current);
       localDraftTimer.current = setTimeout(() => {
         localDraftTimer.current = undefined;
-        writeLocalDraft(date, { title: newTitle, content: newContent, mood: newMood, tags: newTags });
+        writeLocalDraft(date, { title: newTitle, content: newContent, mood: newMood, tags: newTags, spaces: newSpaces });
       }, 180);
       setDirty(true);
       if (saveTimer.current) clearTimeout(saveTimer.current);
       saveTimer.current = setTimeout(() => {
         saveTimer.current = undefined;
-        doSave(newTitle, newContent, newMood, newTags);
+        doSave(newTitle, newContent, newMood, newTags, newSpaces);
       }, 1200);
     },
-    [doSave, tags]
+    [doSave, spaces, tags]
   );
 
   // Manual save
   const handleManualSave = () => {
-    doSave(title, content, mood, tags);
+    doSave(title, content, mood, tags, spaces);
+  };
+
+  const handleShare = async () => {
+    const text = `${title || date}${content ? `\n\n${content}` : ""}`.trim();
+    if (!text) {
+      toast.info("当前记录没有可分享的内容");
+      return;
+    }
+    try {
+      if (navigator.share) {
+        await navigator.share({ title: title || date, text });
+      } else if (navigator.clipboard) {
+        await navigator.clipboard.writeText(text);
+        toast.success("已复制到剪贴板");
+      } else {
+        toast.error("当前环境不支持分享或复制");
+      }
+    } catch (err) {
+      if ((err as Error)?.name !== "AbortError") {
+        toast.error("分享失败");
+      }
+    }
   };
 
   const requestDateChange = useCallback(async (nextDate: string) => {
@@ -395,7 +509,7 @@ export default function TodayPage({
         confirmText: "先保存",
       });
       if (shouldSave) {
-        const saved = await doSave(title, content, mood, tags);
+        const saved = await doSave(title, content, mood, tags, spaces);
         if (!saved) return;
       } else if (!(await confirm({
         title: "放弃未保存内容",
@@ -408,7 +522,7 @@ export default function TodayPage({
     }
     setSelectedDate(nextDate);
     onDateChange?.(nextDate);
-  }, [confirm, content, date, dirty, doSave, mood, onDateChange, tags, title]);
+  }, [confirm, content, date, dirty, doSave, mood, onDateChange, spaces, tags, title]);
 
   useEffect(() => {
     if (targetDate && targetNonce !== externalNonceRef.current) {
@@ -424,6 +538,14 @@ export default function TodayPage({
 
   const handleContentChange = (value: string) => {
     setContent(value);
+    // AI 总结是正文的派生版本；正文改变后必须重新生成，避免把旧摘要提取入库。
+    if (aiResult || aiSourceContent) {
+      setAiResult("");
+      setAiSourceContent("");
+      setAiError("");
+      setCardExtractNotice("");
+      setCardExtractCount(0);
+    }
     autoSave(title, value, mood);
   };
 
@@ -484,6 +606,7 @@ export default function TodayPage({
       setContent("");
       setMood("");
       setTags([]);
+      setSpaces([]);
       setDirty(false);
       setSaveStatus("idle");
       setSaveError("");
@@ -519,11 +642,18 @@ export default function TodayPage({
     setAiLoading(true);
     setAiError("");
     setAiResult("");
+    setAiSourceContent("");
     setCardExtractNotice("");
     setCardExtractCount(0);
     try {
       const data = await api.summarizeWithAI({ content });
-      setAiResult(data.summary || "无返回内容");
+      const summary = data.summary?.trim() || "";
+      if (!summary) {
+        setAiError("AI 未返回可用总结，请稍后重试");
+      } else {
+        setAiResult(summary);
+        setAiSourceContent(content);
+      }
     } catch (e: any) {
       setAiError(api.getErrorMessage(e));
     }
@@ -531,14 +661,16 @@ export default function TodayPage({
   };
 
   const handleExtractKnowledgeCards = async () => {
-    if (!content.trim()) {
-      setCardExtractNotice("先写点内容再提取知识卡片");
+    const extractionSummary = aiSourceContent === content ? aiResult.trim() : "";
+    if (!extractionSummary) {
+      setCardExtractNotice(aiResult.trim() ? "正文已变更，请重新生成 AI 总结" : "先生成 AI 总结，再从总结提取知识卡片");
       return;
     }
     setExtractingCards(true);
     setCardExtractNotice("");
     setCardExtractCount(0);
     try {
+      // AI 总结只负责确认用户已经生成过结果；证据必须从原文提取，才能和日报来源定位对应。
       const { cards, skipped } = await api.extractKnowledgeCards({
         content,
         source_article_id: article?.id,
@@ -564,6 +696,7 @@ export default function TodayPage({
 
   const closeAiPanel = () => {
     setAiResult("");
+    setAiSourceContent("");
     setAiError("");
     setCardExtractNotice("");
     setCardExtractCount(0);
@@ -585,8 +718,8 @@ export default function TodayPage({
   useEffect(() => {
     const flushPendingSave = () => {
       if (dirty || saveTimer.current) {
-        writeLocalDraft(date, { title, content, mood, tags });
-        doSave(title, content, mood, tags);
+        writeLocalDraft(date, { title, content, mood, tags, spaces });
+        doSave(title, content, mood, tags, spaces);
       }
     };
     const handleVisibilityChange = () => {
@@ -604,7 +737,7 @@ export default function TodayPage({
       document.removeEventListener("visibilitychange", handleVisibilityChange);
       window.removeEventListener("beforeunload", handleBeforeUnload);
     };
-  }, [content, dirty, doSave, mood, tags, title]);
+  }, [content, dirty, doSave, mood, spaces, tags, title]);
 
   // Close mobile more menu on outside click
   useEffect(() => {
@@ -687,20 +820,22 @@ export default function TodayPage({
             </div>
 
             <div className="flex flex-col gap-2 lg:flex-row lg:items-center lg:justify-end">
-              <div className="ui-toolbar relative flex w-full items-center gap-1 sm:w-auto">
+              <div className="ui-toolbar relative flex w-full items-center gap-1.5 sm:w-auto">
               <button
                 type="button"
                 onClick={() => requestDateChange(shiftDate(date, -1))}
-                className="ui-icon-button h-8 w-8"
+                className="ui-icon-button h-9 w-9"
+                aria-label="前一天"
                 title="前一天"
               >
                 <ChevronLeft size={16} />
               </button>
-              <DatePickerPopover selectedDate={date} onSelect={requestDateChange} />
+              <DatePickerPopover value={date} onChange={requestDateChange} className="flex-1 sm:w-[168px] sm:flex-none" />
               <button
                 type="button"
                 onClick={() => requestDateChange(shiftDate(date, 1))}
-                className="ui-icon-button h-8 w-8"
+                className="ui-icon-button h-9 w-9"
+                aria-label="后一天"
                 title="后一天"
               >
                 <ChevronRight size={16} />
@@ -808,12 +943,21 @@ export default function TodayPage({
                 }}
                 disabled={extractingCards}
                 className="ui-button-secondary flex-1 text-[var(--ui-success-text)] md:w-auto md:flex-none"
-                title="从当前正文抽取知识卡片草稿"
+                title="先生成 AI 总结，再从总结提取知识卡片草稿"
               >
                 {extractingCards ? <LoaderCircle size={14} className="animate-spin" /> : <BookMarked size={14} />}
                 {extractingCards ? "提取中" : "提取卡片"}
               </motion.button>
             </div>
+
+            <button
+              type="button"
+              onClick={() => void handleShare()}
+              className="ui-button-ghost hidden md:inline-flex"
+              title="分享当前记录"
+            >
+              <Share2 size={14} /> 分享
+            </button>
 
             <button
               type="button"
@@ -830,7 +974,7 @@ export default function TodayPage({
               className="ui-button-secondary col-span-2 w-full md:hidden"
             >
               <Smile size={14} />
-              心情/标签
+              心情与标签
               {metaExpanded ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
             </button>
 
@@ -853,6 +997,16 @@ export default function TodayPage({
                     transition={{ duration: 0.12 }}
                     className="ui-floating-surface absolute right-0 top-full z-30 mt-2 w-36 rounded-xl p-1.5"
                   >
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setShowMobileMore(false);
+                          void handleShare();
+                        }}
+                        className="ui-button-ghost h-9 min-h-9 w-full justify-start gap-2 border-0 bg-transparent px-2.5 text-xs"
+                      >
+                        <Share2 size={14} /> 分享记录
+                      </button>
                       <button
                         type="button"
                         onClick={() => {
@@ -897,25 +1051,23 @@ export default function TodayPage({
               transition={{ duration: 0.15 }}
               className="ui-status-accent mt-2 flex flex-wrap items-center justify-between gap-2 rounded-xl px-4 py-2.5 text-xs"
             >
-              <span className="text-[var(--ui-text-muted)]">今天的记录比较长，想把其中的规律沉淀成知识卡片？</span>
+              <span className="text-[var(--ui-text-muted)]">今天的记录比较长，可以先生成 AI 总结，再从总结提取知识卡片。</span>
               <span className="flex items-center gap-2">
-                {onNavigate && (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      localStorage.setItem(`knowledge-prompt:${date}`, "1");
-                      setKnowledgePrompt(false);
-                      onNavigate("knowledge");
-                    }}
-                    className="ui-button-primary h-7 px-2.5 text-xs"
-                  >
-                    <BookMarked size={12} /> 去沉淀
-                  </button>
-                )}
                 <button
                   type="button"
                   onClick={() => {
-                    localStorage.setItem(`knowledge-prompt:${date}`, "1");
+                    setLocalStorageFlag(`knowledge-prompt:${date}`);
+                    setKnowledgePrompt(false);
+                    void handleAISummary();
+                  }}
+                  className="ui-button-primary h-7 px-2.5 text-xs"
+                >
+                  <Sparkles size={12} /> 生成总结
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setLocalStorageFlag(`knowledge-prompt:${date}`);
                     setKnowledgePrompt(false);
                   }}
                   className="ui-button-ghost h-7 min-h-7 px-2 text-xs"
@@ -951,7 +1103,7 @@ export default function TodayPage({
                     className="ui-modal-surface fixed bottom-0 right-0 top-auto z-40 flex h-[82dvh] w-full max-w-[100vw] flex-col overflow-hidden rounded-t-2xl outline-hidden md:bottom-auto md:top-[10dvh] md:h-[82dvh] md:w-[480px] md:max-w-[42vw] md:rounded-l-2xl md:rounded-tr-none md:border-r-0"
                   >
                     <Dialog.Title className="sr-only">{aiResult || aiError ? "AI 总结" : "提取知识卡片"}</Dialog.Title>
-                    <Dialog.Description className="sr-only">查看 AI 生成的总结或知识卡片提取结果。</Dialog.Description>
+                    <Dialog.Description className="sr-only">查看 AI 生成的总结，或从总结提取知识卡片。</Dialog.Description>
                     <div className="ui-soft-divider flex items-center justify-between gap-3 border-b px-5 py-3.5">
                       <h3 className="flex items-center gap-2 text-sm font-bold text-[var(--ui-text)]" aria-hidden="true">
                         {aiResult || aiError ? <Bot size={16} /> : <BookMarked size={16} />}
@@ -966,7 +1118,7 @@ export default function TodayPage({
                           }}
                           disabled={extractingCards}
                           className="ui-button-secondary h-8 px-2.5 text-xs"
-                          title="从当前真实正文抽取知识卡片草稿"
+                          title="从 AI 总结提取知识卡片草稿"
                         >
                           {extractingCards ? <LoaderCircle size={13} className="animate-spin" /> : <BookMarked size={13} />}
                           提取卡片
@@ -1161,60 +1313,4 @@ export default function TodayPage({
 
 function MarkdownPreview({ content, onWikiLink }: { content: string; onWikiLink?: (title: string) => void }) {
   return <MarkdownContent content={content} onWikiLink={onWikiLink} />;
-}
-
-function DatePickerPopover({
-  selectedDate,
-  onSelect,
-}: {
-  selectedDate: string;
-  onSelect: (date: string) => void;
-}) {
-  const [open, setOpen] = useState(false);
-  const selected = useMemo(() => new Date(`${selectedDate}T12:00:00`), [selectedDate]);
-  const format = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-
-  return (
-    <Popover open={open} onOpenChange={setOpen}>
-      <PopoverTrigger asChild>
-        <button
-          type="button"
-          className="ui-field flex h-8 min-w-0 flex-1 items-center justify-between gap-2 rounded-lg px-3 py-0 text-xs font-medium sm:w-[148px] sm:flex-none"
-          aria-label="选择记录日期"
-        >
-          <span className="font-mono">{selectedDate.replace(/-/g, "/")}</span>
-          <Calendar size={14} />
-        </button>
-      </PopoverTrigger>
-      <PopoverContent align="end" className="w-auto p-3">
-        <DayPicker
-          mode="single"
-          required
-          selected={selected}
-          defaultMonth={selected}
-          onSelect={(date) => {
-            if (date) {
-              onSelect(format(date));
-              setOpen(false);
-            }
-          }}
-        />
-        <div className="ui-soft-divider mt-2 flex items-center justify-between border-t pt-2">
-          <button
-            type="button"
-            onClick={() => {
-              onSelect(todayDate());
-              setOpen(false);
-            }}
-            className="ui-button-ghost h-8 min-h-8 px-3 text-xs font-semibold text-[var(--ui-accent-text)]"
-          >
-            回到今天
-          </button>
-          <button type="button" onClick={() => setOpen(false)} className="ui-button-ghost h-8 min-h-8 px-3 text-xs">
-            关闭
-          </button>
-        </div>
-      </PopoverContent>
-    </Popover>
-  );
 }

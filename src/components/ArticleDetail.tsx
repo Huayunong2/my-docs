@@ -1,6 +1,6 @@
 import { useRef, useState } from "react";
 import * as Dialog from "@radix-ui/react-dialog";
-import { CalendarDays, Check, Copy, Edit3, Trash2, X } from "lucide-react";
+import { CalendarDays, Check, Copy, Edit3, Folder, Trash2, X } from "lucide-react";
 import type { Article } from "../lib/api";
 import MarkdownContent from "./MarkdownContent";
 
@@ -19,6 +19,7 @@ export default function ArticleDetail({
 }) {
   const [copied, setCopied] = useState(false);
   const tags = article.tags;
+  const spaces = article.spaces || [];
 
   const copyContent = async () => {
     try {
@@ -73,6 +74,15 @@ export default function ArticleDetail({
               {tags.map((tag) => (
                 <span key={tag} className="ui-chip h-6 px-2 text-[11px]">
                   #{tag}
+                </span>
+              ))}
+            </div>
+          )}
+          {spaces.length > 0 && (
+            <div className="mt-2 flex flex-wrap gap-1.5">
+              {spaces.map((space) => (
+                <span key={space} className="ui-chip h-6 gap-1 border-[var(--ui-selected-border)] bg-[var(--ui-surface-selected)] px-2 text-[11px] text-[var(--ui-accent-text)]">
+                  <Folder size={11} /> {space}
                 </span>
               ))}
             </div>

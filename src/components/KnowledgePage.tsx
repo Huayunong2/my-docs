@@ -12,6 +12,7 @@ import {
   ArrowLeft,
   Bookmark,
   BookMarked,
+  CalendarDays,
   CheckCircle2,
   ChevronDown,
   ChevronLeft,
@@ -19,6 +20,7 @@ import {
   ExternalLink,
   FileText,
   Folder,
+  FolderCog,
   Lightbulb,
   LayoutList,
   LoaderCircle,
@@ -32,15 +34,20 @@ import {
   Sparkles,
   Tags,
   Trash2,
+  Upload,
   X,
 } from "lucide-react";
 import * as api from "../lib/api";
 import type { Page } from "../App";
 import type { Article, KnowledgeCard, KnowledgeCardStatus, KnowledgeCardType } from "../lib/api";
 import { cardStatusLabels as statusLabels, cardTypeLabels as typeLabels } from "../lib/cardLabels";
-import { normalizeTags } from "../lib/tags";
+import { normalizeSpaceNames, normalizeTags } from "../lib/tags";
 import MarkdownContent from "./MarkdownContent";
+import ReviewItemsPanel from "./ReviewItemsPanel";
+import KnowledgeImportDialog from "./KnowledgeImportDialog";
+import SpaceManagerDialog from "./SpaceManagerDialog";
 import { useConfirmDialog } from "./ui/Feedback";
+import { refreshKnowledgeMetadata as refreshKnowledgeMetadataQuery } from "../lib/knowledgeMetadata";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -51,9 +58,11 @@ import {
 } from "./ui/dropdown-menu";
 import { Tabs, TabsList, TabsTrigger } from "./ui/tabs";
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "./ui/sheet";
-import PageHeader from "./ui/PageHeader";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "./ui/select";
+import PageHeader, { PageHeaderActions } from "./ui/PageHeader";
 import { toast } from "sonner";
 import { useQueryClient } from "@tanstack/react-query";
+import { readLocalStorage, writeLocalStorage, writeSessionStorage } from "../lib/storage";
 
 const typeOptions = Object.entries(typeLabels) as Array<[KnowledgeCardType, string]>;
 const statusOptions = Object.entries(statusLabels) as Array<[KnowledgeCardStatus, string]>;
@@ -68,7 +77,7 @@ const sortOptions: Array<[KnowledgeSort, string]> = [
 ];
 const qualityOptions: Array<[api.KnowledgeCardQuality, string, string]> = [
   ["missing_source", "缺少来源", "需要补回原文日期或证据片段"],
-  ["missing_project", "未归入项目", "还没有项目归属"],
+  ["missing_project", "未归入空间", "还没有主题或项目归属"],
   ["missing_tags", "缺少标签", "还没有可检索标签"],
   ["short_content", "内容过短", "正文少于 24 个字符"],
 ];
@@ -112,23 +121,48 @@ function toDraft(card: KnowledgeCard): DraftState {
   };
 }
 
-function payloadFromDraft(draft: DraftState) {
+function declaredRelatedIds(card: KnowledgeCard): string[] {
+  return Array.isArray(card.declared_related_ids)
+    ? card.declared_related_ids
+    : card.related_ids || [];
+}
+
+function payloadFromDraft(draft: DraftState, relatedIds: string[] = []) {
   return {
     card_type: draft.card_type,
     status: draft.status,
     title: draft.title.trim(),
     content: draft.content.trim(),
     tags: normalizeTags(draft.tagsText.split(",").map((tag) => tag.trim()).filter(Boolean)),
-    projects: normalizeTags(draft.projectsText.split(",").map((tag) => tag.trim()).filter(Boolean)),
+    projects: normalizeSpaceNames(draft.projectsText.split(",").map((project) => project.trim()).filter(Boolean)),
     source_date: draft.source_date.trim(),
     source_article_id: draft.source_article_id.trim(),
     source_review_id: draft.source_review_id.trim(),
     source_excerpt: draft.source_excerpt.trim(),
+    related_ids: relatedIds,
   };
 }
 
 function compact(value: string) {
   return value.trim().replace(/\s+/g, "").toLowerCase();
+}
+
+function hasKnowledgeSource(value: { source_article_id?: string; source_review_id?: string; source_date?: string; source_excerpt?: string }) {
+  return [value.source_article_id, value.source_review_id, value.source_date, value.source_excerpt]
+    .some((item) => !!item?.trim());
+}
+
+function hasDraftInput(draft: DraftState) {
+  return [
+    draft.title,
+    draft.content,
+    draft.tagsText,
+    draft.projectsText,
+    draft.source_date,
+    draft.source_article_id,
+    draft.source_review_id,
+    draft.source_excerpt,
+  ].some((value) => value.trim());
 }
 
 function sortKnowledgeCards(items: KnowledgeCard[], sort: KnowledgeSort) {
@@ -147,7 +181,14 @@ function mergeProjectCounts(current: api.KnowledgeProject[], incoming: api.Knowl
     if (existing >= 0) merged[existing] = project;
     else merged.push(project);
   }
-  return merged.sort((a, b) => b.count - a.count || a.name.localeCompare(b.name));
+  return merged.sort((a, b) => (b.total_count ?? b.count) - (a.total_count ?? a.count) || a.name.localeCompare(b.name));
+}
+
+function listSignature(values: string[] | undefined, normalize = normalizeTags) {
+  return normalize(values || [])
+    .map((value) => value.toLocaleLowerCase())
+    .sort()
+    .join("\u001f");
 }
 
 export default function KnowledgePage({
@@ -206,7 +247,7 @@ export default function KnowledgePage({
   const [totalCards, setTotalCards] = useState(0);
   const [hasMore, setHasMore] = useState(false);
   const [draft, setDraft] = useState<DraftState>(emptyDraft);
-  const [activeStatus, setActiveStatus] = useState<KnowledgeStatusFilter>(initialStatus || "draft");
+  const [activeStatus, setActiveStatus] = useState<KnowledgeStatusFilter>(initialStatus || "all");
   const [typeFilter, setTypeFilter] = useState(initialType || "");
   const [usageFilter, setUsageFilter] = useState<KnowledgeUsage>(initialUsage || "");
   const [qualityFilter, setQualityFilter] = useState<KnowledgeQuality>(initialQuality || "");
@@ -216,13 +257,17 @@ export default function KnowledgePage({
   const [tagInput, setTagInput] = useState("");
   const [projectFilter, setProjectFilter] = useState(initialProject || "");
   const [projectCounts, setProjectCounts] = useState<api.KnowledgeProject[]>([]);
+  const [spaceArticles, setSpaceArticles] = useState<api.ArticleSummary[]>([]);
+  const [spaceArticlesLoading, setSpaceArticlesLoading] = useState(false);
+  const [spaceArticlesError, setSpaceArticlesError] = useState("");
   const [projectInput, setProjectInput] = useState("");
-  const [newProjectName, setNewProjectName] = useState("");
   const [savedViews, setSavedViews] = useState<api.KnowledgeSavedView[]>([]);
   const [activeViewId, setActiveViewId] = useState("");
   const [saveViewOpen, setSaveViewOpen] = useState(false);
   const [viewName, setViewName] = useState("");
   const [savingView, setSavingView] = useState(false);
+  const [spaceManagerOpen, setSpaceManagerOpen] = useState(false);
+  const [importOpen, setImportOpen] = useState(false);
   const [batchMode, setBatchMode] = useState<KnowledgeBatchMode>("");
   const [batchValue, setBatchValue] = useState("");
   const [showFilters, setShowFilters] = useState(false);
@@ -230,7 +275,7 @@ export default function KnowledgePage({
   const [mobileBatchOpen, setMobileBatchOpen] = useState(false);
   const [density, setDensity] = useState<KnowledgeDensity>(() => {
     if (typeof window === "undefined") return "comfortable";
-    return localStorage.getItem("knowledge-density") === "compact" ? "compact" : "comfortable";
+    return readLocalStorage("knowledge-density") === "compact" ? "compact" : "comfortable";
   });
   const [query, setQuery] = useState(initialQuery || "");
   const [mobileView, setMobileView] = useState<KnowledgeView>(initialView || (initialCardId ? "detail" : "list"));
@@ -248,6 +293,7 @@ export default function KnowledgePage({
   const [relatedQuery, setRelatedQuery] = useState("");
   const [reviewHistory, setReviewHistory] = useState<api.ReviewHistoryEntry[]>([]);
   const autoSaveTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
+  const editorGenerationRef = useRef(0);
   const lastSavedSignature = useRef("");
   const touchedCardIds = useRef<Set<string>>(new Set());
   const routeQueryRef = useRef(initialQuery || "");
@@ -262,6 +308,12 @@ export default function KnowledgePage({
     queryClient.invalidateQueries({ queryKey: api.knowledgeQueryKeys.tags }),
     queryClient.invalidateQueries({ queryKey: api.knowledgeQueryKeys.projects }),
   ]);
+  const refreshMetadata = async () => {
+    const metadata = await refreshKnowledgeMetadataQuery(queryClient);
+    setTagCounts(metadata.tags);
+    setProjectCounts(mergeProjectCounts([], metadata.projects));
+    return metadata;
+  };
   const showNotice = (message: string, tone: NoticeTone = "neutral") => {
     setNotice(message);
     setNoticeTone(tone);
@@ -269,7 +321,11 @@ export default function KnowledgePage({
 
   const changeDensity = (next: KnowledgeDensity) => {
     setDensity(next);
-    if (typeof window !== "undefined") localStorage.setItem("knowledge-density", next);
+    try {
+      if (typeof window !== "undefined") writeLocalStorage("knowledge-density", next);
+    } catch {
+      // 仅影响显示偏好，不应阻断编辑或保存。
+    }
   };
 
   useEffect(() => {
@@ -291,7 +347,7 @@ export default function KnowledgePage({
   }, [initialTag, tagFilter]);
 
   useEffect(() => {
-    const nextStatus = initialStatus || "draft";
+    const nextStatus = initialStatus || "all";
     if (nextStatus !== activeStatus) setActiveStatus(nextStatus);
   }, [activeStatus, initialStatus]);
 
@@ -316,7 +372,7 @@ export default function KnowledgePage({
   }, [initialQuality, qualityFilter]);
 
   useEffect(() => {
-    if (initialType || initialUsage || initialQuality || initialTag || initialProject || (initialStatus && initialStatus !== "draft")) {
+    if (initialType || initialUsage || initialQuality || initialTag || initialProject || (initialStatus && initialStatus !== "all")) {
       setShowFilters(true);
     }
   }, [initialProject, initialQuality, initialStatus, initialTag, initialType, initialUsage]);
@@ -332,6 +388,10 @@ export default function KnowledgePage({
 
   const sortedCards = useMemo(() => sortKnowledgeCards(cards, sort), [cards, sort]);
   const selectedCard = useMemo(() => cards.find((card) => card.id === selectedId) || (detailCard?.id === selectedId ? detailCard : null), [cards, detailCard, selectedId]);
+  const selectedSpace = useMemo(
+    () => projectCounts.find((space) => space.name.toLocaleLowerCase() === projectFilter.toLocaleLowerCase()),
+    [projectCounts, projectFilter]
+  );
   const counts = summary;
 
   const duplicateHint = useMemo(() => {
@@ -408,7 +468,7 @@ export default function KnowledgePage({
     q: query.trim() || undefined,
     project: projectFilter || undefined,
     tag: tagFilter || undefined,
-    status: activeStatus === "all" ? "all" : activeStatus,
+    status: activeStatus,
     type: typeFilter ? typeFilter as KnowledgeCardType : undefined,
     usage: usageFilter || undefined,
     sort: sort === "updated" ? undefined : sort,
@@ -428,52 +488,78 @@ export default function KnowledgePage({
   }, [queryClient]);
 
   const applySavedView = (view: api.KnowledgeSavedView) => {
-    const filters = view.filters || {};
-    setActiveViewId(view.id);
-    routeQueryRef.current = filters.q || "";
-    setQuery(filters.q || "");
-    setProjectFilter(filters.project || "");
-    setTagFilter(filters.tag || "");
-    setActiveStatus(filters.status || "draft");
-    setTypeFilter(filters.type || "");
-    setUsageFilter(filters.usage || "");
-    setQualityFilter(filters.quality || "");
-    setSort(filters.sort || "updated");
-    setPage(1);
-    setSelectedIds([]);
-    if (isMobile) setMobileView("list");
-    if (initialCardId) onBackToList?.();
-    void loadCards(false, true, filters.q || "", {
-      cardType: filters.type || "",
-      status: filters.status || "draft",
-      usage: filters.usage || "",
-      tag: filters.tag || "",
-      project: filters.project || "",
-      sort: filters.sort || "updated",
-      quality: filters.quality || "",
-    }, 1);
-    onSearchParamsChange?.({
-      q: filters.q || undefined,
-      project: filters.project || undefined,
-      tag: filters.tag || undefined,
-      status: filters.status || "draft",
-      type: filters.type || undefined,
-      usage: filters.usage || undefined,
-      sort: filters.sort || undefined,
-      quality: filters.quality || undefined,
-      view: "list",
-      page: undefined,
-    });
+    const apply = async () => {
+      // 保存视图也可能把详情页切回列表；先处理当前编辑，避免路由变化卸载草稿。
+      if (dirty) {
+        if (selectedId) {
+          try {
+            if (!(await saveDirtyDraft())) return;
+          } catch (e) {
+            setSaveState("error");
+            showNotice(api.getErrorMessage(e), "bad");
+            return;
+          }
+        } else if (hasDraftInput(draft)) {
+          const leave = await confirm({
+            title: "切换保存视图",
+            message: "当前新卡片还没有创建，确定放弃这份草稿吗？",
+            confirmText: "放弃草稿",
+            danger: true,
+          });
+          if (!leave) return;
+        }
+      }
+      const filters = view.filters || {};
+      const nextStatus = filters.status || "all";
+      const nextQuery = filters.q || "";
+      setActiveViewId(view.id);
+      routeQueryRef.current = nextQuery;
+      setQuery(nextQuery);
+      setProjectFilter(filters.project || "");
+      setTagFilter(filters.tag || "");
+      setActiveStatus(nextStatus);
+      setTypeFilter(filters.type || "");
+      setUsageFilter(filters.usage || "");
+      setQualityFilter(filters.quality || "");
+      setSort(filters.sort || "updated");
+      setPage(1);
+      setSelectedIds([]);
+      if (isMobile) setMobileView("list");
+      if (initialCardId) onBackToList?.();
+      // 前面已经处理过当前编辑，避免同一次操作因闭包中的旧 dirty 状态重复保存。
+      void loadCards(false, false, nextQuery, {
+        cardType: filters.type || "",
+        status: nextStatus,
+        usage: filters.usage || "",
+        tag: filters.tag || "",
+        project: filters.project || "",
+        sort: filters.sort || "updated",
+        quality: filters.quality || "",
+      }, 1);
+      onSearchParamsChange?.({
+        q: nextQuery || undefined,
+        project: filters.project || undefined,
+        tag: filters.tag || undefined,
+        status: nextStatus === "all" ? undefined : nextStatus,
+        type: filters.type || undefined,
+        usage: filters.usage || undefined,
+        sort: filters.sort || undefined,
+        quality: filters.quality || undefined,
+        view: "list",
+        page: undefined,
+      });
+    };
+    void apply();
   };
 
   const saveCurrentView = async () => {
     const name = viewName.trim();
-    if (!name) return;
+    if (!name || savingView) return;
     setSavingView(true);
     try {
       const view = await api.createKnowledgeSavedView(name, currentViewFilters);
       await queryClient.invalidateQueries({ queryKey: api.knowledgeQueryKeys.savedViews });
-      setSavedViews((current) => [view, ...current]);
+      setSavedViews((current) => [view, ...current.filter((item) => item.id !== view.id)]);
       setActiveViewId(view.id);
       setViewName("");
       setSaveViewOpen(false);
@@ -488,13 +574,13 @@ export default function KnowledgePage({
   const deleteActiveView = async () => {
     const view = savedViews.find((item) => item.id === activeViewId);
     if (!view) return;
-    const ok = await confirm({
+    const accepted = await confirm({
       title: "删除保存视图",
       message: `删除视图「${view.name}」？这不会删除任何知识卡片。`,
       confirmText: "删除视图",
       danger: true,
     });
-    if (!ok) return;
+    if (!accepted) return;
     try {
       await api.deleteKnowledgeSavedView(view.id);
       await queryClient.invalidateQueries({ queryKey: api.knowledgeQueryKeys.savedViews });
@@ -506,18 +592,64 @@ export default function KnowledgePage({
     }
   };
 
-  const saveDirtyDraft = async () => {
-    if (!dirty || !selectedId) return;
-    const pending = payloadFromDraft(draft);
+  useEffect(() => {
+    if (!projectFilter.trim()) {
+      setSpaceArticles([]);
+      setSpaceArticlesError("");
+      setSpaceArticlesLoading(false);
+      return;
+    }
+    let cancelled = false;
+    setSpaceArticlesLoading(true);
+    setSpaceArticlesError("");
+    api.listSpaceArticles(projectFilter, 1, 6)
+      .then((articles) => { if (!cancelled) setSpaceArticles(articles); })
+      .catch((e) => { if (!cancelled) { setSpaceArticles([]); setSpaceArticlesError(api.getErrorMessage(e)); } })
+      .finally(() => { if (!cancelled) setSpaceArticlesLoading(false); });
+    return () => { cancelled = true; };
+  }, [projectFilter]);
+
+  const saveDirtyDraft = async (): Promise<boolean> => {
+    if (!dirty || !selectedId) return true;
+    if (autoSaveTimer.current) {
+      clearTimeout(autoSaveTimer.current);
+      autoSaveTimer.current = undefined;
+    }
+    const saveGeneration = editorGenerationRef.current;
+    const pending = payloadFromDraft(draft, draftRelatedIds);
     if (!pending.title || !pending.content) {
       throw new Error("请先补全当前卡片的标题和内容。");
     }
+    const currentCard = selectedCard?.id === selectedId
+      ? selectedCard
+      : detailCard?.id === selectedId ? detailCard : null;
+    const relationshipsChanged = listSignature(currentCard?.tags) !== listSignature(pending.tags)
+      || listSignature(currentCard?.projects, normalizeSpaceNames) !== listSignature(pending.projects, normalizeSpaceNames);
     const saved = await api.updateKnowledgeCard(selectedId, pending);
+    if (editorGenerationRef.current !== saveGeneration) return false;
     await invalidateKnowledgeQueries();
-    lastSavedSignature.current = JSON.stringify(payloadFromDraft(toDraft(saved)));
+    if (editorGenerationRef.current !== saveGeneration) return false;
+    if (relationshipsChanged) await refreshMetadata().catch(() => undefined);
+    lastSavedSignature.current = JSON.stringify(payloadFromDraft(toDraft(saved), declaredRelatedIds(saved)));
     setCards((items) => items.map((item) => item.id === saved.id ? saved : item));
     setDetailCard(saved);
     setDirty(false);
+    return true;
+  };
+
+  const retrySaveDraft = async () => {
+    if (!dirty || !selectedId) return;
+    setSaveState("saving");
+    try {
+      if (await saveDirtyDraft()) {
+        setSaveState("saved");
+        showNotice("已保存当前知识卡片。", "good");
+      }
+    } catch (e) {
+      const message = api.getErrorMessage(e);
+      setSaveState("error");
+      showNotice(message, "bad");
+    }
   };
 
   const loadCards = async (
@@ -536,12 +668,18 @@ export default function KnowledgePage({
     pageOverride?: number,
   ) => {
     // 切换筛选/状态前先落盘未保存的编辑，避免列表刷新时覆盖草稿。
-    // related_ids 不在 payloadFromDraft 内，后端 update 会保留原值，不会误清。
+    // related_ids 随编辑草稿一起保存，避免只调整关联卡片时刷新后丢失。
     if (savePending && dirty && selectedId) {
       try {
-        await saveDirtyDraft();
-      } catch {
-        // 保存失败不阻断列表刷新；内容会留待下次 auto-save 重试
+        if (!(await saveDirtyDraft())) {
+          setSaveState("error");
+          showNotice("保存期间内容发生变化，请先重试保存。", "bad");
+          return;
+        }
+      } catch (e) {
+        setSaveState("error");
+        showNotice(api.getErrorMessage(e), "bad");
+        return;
       }
     }
     setLoading(true);
@@ -601,17 +739,20 @@ export default function KnowledgePage({
       setPage(pageResult.page);
       setSelectedIds((ids) => ids.filter((id) => pageResult.cards.some((card) => card.id === id)));
       if (isNewRoute && !selectedId) {
-        setDraft((current) => current.title || current.content ? current : { ...emptyDraft, status: status === "all" ? "draft" : status });
+        // 筛选/列表刷新不应清掉尚未创建的新卡片草稿（包括空间、来源和关联卡片）。
+        setDraft((current) => hasDraftInput(current) ? current : { ...emptyDraft, status: "draft" });
         lastSavedSignature.current = "";
         return;
       }
       if ((keepSelection || initialCardId) && selectedId && pageResult.cards.some((card) => card.id === selectedId)) return;
       const next = pageResult.cards[0] || null;
+      editorGenerationRef.current += 1;
       setSelectedId(next?.id || null);
       setDraft(next ? toDraft(next) : emptyDraft);
+      setDraftRelatedIds(next ? declaredRelatedIds(next) : []);
       setDetailCard(next);
       setDirty(false);
-      lastSavedSignature.current = next ? JSON.stringify(payloadFromDraft(toDraft(next))) : "";
+      lastSavedSignature.current = next ? JSON.stringify(payloadFromDraft(toDraft(next), declaredRelatedIds(next))) : "";
     } catch (e) {
       if (requestId === cardListRequestRef.current) setError(api.getErrorMessage(e));
     } finally {
@@ -689,7 +830,7 @@ export default function KnowledgePage({
     let cancelled = false;
     queryClient.fetchQuery({
       queryKey: api.knowledgeQueryKeys.projects,
-      queryFn: ({ signal }) => api.listKnowledgeProjects({ signal }),
+      queryFn: ({ signal }) => api.listSpaces({ signal }),
       staleTime: 60_000,
     })
       .then((projects) => { if (!cancelled) setProjectCounts((current) => mergeProjectCounts(current, projects)); })
@@ -713,22 +854,33 @@ export default function KnowledgePage({
 
   useEffect(() => {
     if (!selectedId || !dirty) return;
-    const payload = payloadFromDraft(draft);
+    const payload = payloadFromDraft(draft, draftRelatedIds);
     if (!payload.title || !payload.content) return;
     const signature = JSON.stringify(payload);
     if (signature === lastSavedSignature.current) return;
+    const saveGeneration = editorGenerationRef.current;
+    const saveId = selectedId;
     if (autoSaveTimer.current) clearTimeout(autoSaveTimer.current);
     autoSaveTimer.current = setTimeout(async () => {
       setSaveState("saving");
       try {
         const saved = await api.updateKnowledgeCard(selectedId, payload);
+        if (editorGenerationRef.current !== saveGeneration || selectedId !== saveId) return;
         await invalidateKnowledgeQueries();
-        lastSavedSignature.current = JSON.stringify(payloadFromDraft(toDraft(saved)));
+        if (editorGenerationRef.current !== saveGeneration || selectedId !== saveId) return;
+        const currentCard = selectedCard?.id === selectedId
+          ? selectedCard
+          : detailCard?.id === selectedId ? detailCard : null;
+        const relationshipsChanged = listSignature(currentCard?.tags) !== listSignature(payload.tags)
+          || listSignature(currentCard?.projects, normalizeSpaceNames) !== listSignature(payload.projects, normalizeSpaceNames);
+        if (relationshipsChanged) await refreshMetadata().catch(() => undefined);
+        lastSavedSignature.current = JSON.stringify(payloadFromDraft(toDraft(saved), declaredRelatedIds(saved)));
         setCards((items) => items.map((item) => item.id === saved.id ? saved : item));
         setDetailCard(saved);
         setDirty(false);
         setSaveState("saved");
       } catch (e) {
+        if (editorGenerationRef.current !== saveGeneration || selectedId !== saveId) return;
         setSaveState("error");
         showNotice(api.getErrorMessage(e), "bad");
       }
@@ -736,9 +888,10 @@ export default function KnowledgePage({
     return () => {
       if (autoSaveTimer.current) clearTimeout(autoSaveTimer.current);
     };
-  }, [dirty, draft, selectedId]);
+  }, [dirty, draft, draftRelatedIds, selectedId]);
 
   const updateDraft = (patch: Partial<DraftState>) => {
+    editorGenerationRef.current += 1;
     setDraft((value) => ({ ...value, ...patch }));
     setDirty(true);
     setNotice("");
@@ -768,7 +921,7 @@ export default function KnowledgePage({
   };
 
   const parsedProjects = useMemo(
-    () => normalizeTags(draft.projectsText.split(",").map((project) => project.trim()).filter(Boolean)),
+    () => normalizeSpaceNames(draft.projectsText.split(",").map((project) => project.trim()).filter(Boolean)),
     [draft.projectsText]
   );
 
@@ -778,7 +931,7 @@ export default function KnowledgePage({
     if (!parts.length) return;
     const next = [...parsedProjects];
     for (const part of parts) {
-      const project = normalizeTags([part])[0];
+      const project = normalizeSpaceNames([part])[0];
       if (project && !next.includes(project)) next.push(project);
     }
     updateDraft({ projectsText: next.join(", ") });
@@ -789,23 +942,30 @@ export default function KnowledgePage({
     updateDraft({ projectsText: parsedProjects.filter((item) => item !== project).join(", ") });
   };
 
-  const createProject = async () => {
-    const name = newProjectName.trim();
-    if (!name) return;
-    try {
-      const project = await api.createKnowledgeProject(name);
-      await invalidateKnowledgeMetadata();
-      setProjectCounts((prev) => mergeProjectCounts(prev, [project]));
-      changeProject(project.name);
-      setNewProjectName("");
-      const message = `项目「${project.name}」已创建。`;
-      showNotice(message, "good");
-      toast.success(message);
-    } catch (e) {
-      const message = api.getErrorMessage(e);
-      showNotice(message, "bad");
-      toast.error(message);
+  const openSpaceManager = () => {
+    setSpaceManagerOpen(true);
+  };
+
+  const handleSpacesChanged = (
+    spaces: api.KnowledgeProject[],
+    change?: { previousName?: string; nextName?: string },
+  ) => {
+    const activeSpaces = spaces.filter((space) => space.status !== "archived");
+    setProjectCounts(mergeProjectCounts([], activeSpaces));
+    const currentName = projectFilter.trim().toLocaleLowerCase();
+    if (change?.previousName && currentName === change.previousName.trim().toLocaleLowerCase()) {
+      const nextName = change.nextName && activeSpaces.some((space) => space.name.toLocaleLowerCase() === change.nextName?.toLocaleLowerCase())
+        ? change.nextName
+        : "";
+      changeProject(nextName);
     }
+    void invalidateKnowledgeMetadata();
+  };
+
+  const handleImported = async () => {
+    await invalidateKnowledgeQueries();
+    await refreshMetadata().catch(() => undefined);
+    await loadCards(false, false);
   };
 
   const projectSuggestions = useMemo(
@@ -819,14 +979,15 @@ export default function KnowledgePage({
   );
 
   const selectCard = (card: KnowledgeCard) => {
+    editorGenerationRef.current += 1;
     setSelectedId(card.id);
     setDetailCard(card);
     setDraft(toDraft(card));
-    setDraftRelatedIds(card.declared_related_ids?.length ? card.declared_related_ids : card.related_ids || []);
+    setDraftRelatedIds(declaredRelatedIds(card));
     setDirty(false);
     setNotice("");
     setSaveState("idle");
-    lastSavedSignature.current = JSON.stringify(payloadFromDraft(toDraft(card)));
+    lastSavedSignature.current = JSON.stringify(payloadFromDraft(toDraft(card), declaredRelatedIds(card)));
     // 复用追踪：每张卡在页面会话内只记一次打开
     if (!touchedCardIds.current.has(card.id)) {
       touchedCardIds.current.add(card.id);
@@ -844,11 +1005,32 @@ export default function KnowledgePage({
   };
 
   const openCard = (card: KnowledgeCard) => {
-    selectCard(card);
-    if (isMobile) {
-      setMobileView("detail");
-    }
-    onOpenCard?.(card.id);
+    const open = async () => {
+      if (dirty) {
+        if (selectedId) {
+          try {
+            if (!(await saveDirtyDraft())) return;
+          } catch (e) {
+            const message = api.getErrorMessage(e);
+            setSaveState("error");
+            showNotice(message, "bad");
+            return;
+          }
+        } else if (hasDraftInput(draft)) {
+          const leave = await confirm({
+            title: "离开新卡片",
+            message: "当前新卡片还没有创建，确定放弃这份草稿吗？",
+            confirmText: "放弃草稿",
+            danger: true,
+          });
+          if (!leave) return;
+        }
+      }
+      if (selectedId !== card.id) selectCard(card);
+      if (isMobile) setMobileView("detail");
+      onOpenCard?.(card.id);
+    };
+    void open();
   };
 
   // 从搜索跳转打开指定卡片；详情深链接不依赖先拉完整卡片集合。
@@ -891,21 +1073,32 @@ export default function KnowledgePage({
     return () => { cancelled = true; };
   }, [selectedId]);
 
+  const incomingRelatedIds = useMemo(() => {
+    if (!selectedCard) return [];
+    const declaredIds = declaredRelatedIds(selectedCard);
+    return (selectedCard.related_ids || []).filter((id) => !declaredIds.includes(id));
+  }, [selectedCard]);
+
+  const relatedDisplayIds = useMemo(
+    () => [...new Set([...draftRelatedIds, ...incomingRelatedIds])],
+    [draftRelatedIds, incomingRelatedIds],
+  );
+
   const relatedChips = useMemo(
-    () => draftRelatedIds
+    () => relatedDisplayIds
       .map((id) => cards.find((card) => card.id === id) || relatedCards.find((card) => card.id === id))
       .filter((card): card is KnowledgeCard => !!card),
-    [cards, draftRelatedIds, relatedCards]
+    [cards, relatedDisplayIds, relatedCards]
   );
 
   const relatedCandidates = useMemo(() => {
     return relatedSearchCards
-      .filter((card) => card.id !== selectedId && !draftRelatedIds.includes(card.id))
+      .filter((card) => card.id !== selectedId && !relatedDisplayIds.includes(card.id))
       .slice(0, 8);
-  }, [draftRelatedIds, relatedSearchCards, selectedId]);
+  }, [relatedDisplayIds, relatedSearchCards, selectedId]);
 
   useEffect(() => {
-    const ids = draftRelatedIds.filter((id) => !cards.some((card) => card.id === id));
+    const ids = relatedDisplayIds.filter((id) => !cards.some((card) => card.id === id));
     if (!ids.length) {
       setRelatedCards([]);
       return;
@@ -920,7 +1113,7 @@ export default function KnowledgePage({
         if (!cancelled) setRelatedCards(items.filter((card): card is KnowledgeCard => !!card));
       });
     return () => { cancelled = true; };
-  }, [cards, draftRelatedIds, queryClient]);
+  }, [cards, queryClient, relatedDisplayIds]);
 
   useEffect(() => {
     const search = relatedQuery.trim();
@@ -968,26 +1161,53 @@ export default function KnowledgePage({
   }, [draft.title, queryClient]);
 
   const startNew = () => {
-    setSelectedId(null);
-    setDraft({ ...emptyDraft, status: activeStatus === "all" ? "draft" : activeStatus });
-    setDraftRelatedIds([]);
-    setRelatedQuery("");
-    setDirty(false);
-    setNotice("");
-    setSaveState("idle");
-    if (isMobile) setMobileView("detail");
-    onNewCard?.();
+    const open = async () => {
+      if (dirty) {
+        if (selectedId) {
+          try {
+            if (!(await saveDirtyDraft())) return;
+          } catch (e) {
+            const message = api.getErrorMessage(e);
+            setSaveState("error");
+            showNotice(message, "bad");
+            return;
+          }
+        } else if (hasDraftInput(draft)) {
+          const leave = await confirm({
+            title: "离开新卡片",
+            message: "当前新卡片还没有创建，确定放弃这份草稿吗？",
+            confirmText: "放弃草稿",
+            danger: true,
+          });
+          if (!leave) return;
+        }
+      }
+      editorGenerationRef.current += 1;
+      setSelectedId(null);
+      setDraft({ ...emptyDraft, status: "draft" });
+      setDraftRelatedIds([]);
+      setRelatedQuery("");
+      setDirty(false);
+      setNotice("");
+      setSaveState("idle");
+      if (isMobile) setMobileView("detail");
+      onNewCard?.();
+    };
+    void open();
   };
 
   const closeMobileDetail = async () => {
     if (dirty && selectedId) {
       try {
-        await saveDirtyDraft();
+        if (!(await saveDirtyDraft())) {
+          showNotice("保存期间内容发生变化，请先重试保存。", "bad");
+          return;
+        }
       } catch (e) {
         showNotice(api.getErrorMessage(e), "bad");
         return;
       }
-    } else if (dirty && (draft.title.trim() || draft.content.trim())) {
+    } else if (dirty && hasDraftInput(draft)) {
       const leave = await confirm({
         title: "离开编辑",
         message: "当前新卡片还没有创建，确定放弃这份草稿吗？",
@@ -1014,15 +1234,16 @@ export default function KnowledgePage({
         ? await api.updateKnowledgeCard(selectedId, { ...payload, related_ids: draftRelatedIds })
         : await api.createKnowledgeCard({ ...payload, related_ids: draftRelatedIds });
       await invalidateKnowledgeQueries();
-      await invalidateKnowledgeMetadata();
+      await refreshMetadata().catch(() => undefined);
       setDirty(false);
       await loadCards(true, false);
       setSelectedId(saved.id);
       setDraft(toDraft(saved));
+      setDraftRelatedIds(declaredRelatedIds(saved));
       setDetailCard(saved);
       setDirty(false);
       setSaveState("saved");
-      lastSavedSignature.current = JSON.stringify(payloadFromDraft(toDraft(saved)));
+      lastSavedSignature.current = JSON.stringify(payloadFromDraft(toDraft(saved), declaredRelatedIds(saved)));
       const message = selectedId ? "已保存知识卡片。" : "已创建知识卡片。";
       showNotice(message, "good");
       toast.success(message);
@@ -1039,9 +1260,26 @@ export default function KnowledgePage({
 
   const updateStatus = async (status: KnowledgeCardStatus, ids = selectedId ? [selectedId] : []) => {
     if (!ids.length) return;
+    if (status === "confirmed") {
+      const missingSource = ids.filter((id) => {
+        if (id === selectedId) return !hasKnowledgeSource(draft);
+        const card = cards.find((item) => item.id === id);
+        return !card || !hasKnowledgeSource(card);
+      });
+      if (missingSource.length > 0) {
+        const message = missingSource.length === 1
+          ? "确认入库前请补充来源日期、来源 ID 或原文片段。"
+          : `有 ${missingSource.length} 张卡片缺少来源，请补齐后再批量确认。`;
+        showNotice(message, "bad");
+        toast.error(message);
+        return;
+      }
+    }
     setSaving(true);
     try {
-      await saveDirtyDraft();
+      if (!(await saveDirtyDraft())) {
+        throw new Error("保存期间内容发生变化，请重试后再执行状态变更。");
+      }
       await api.batchKnowledgeCards({
         ids,
         action: status === "confirmed" ? "confirm" : "set_status",
@@ -1068,7 +1306,7 @@ export default function KnowledgePage({
     try {
       const result = await api.restoreKnowledgeCards(ids);
       await invalidateKnowledgeQueries();
-      await invalidateKnowledgeMetadata();
+      await refreshMetadata().catch(() => undefined);
       setSelectedIds((current) => current.filter((id) => !ids.includes(id)));
       await loadCards(false, false);
       const message = `已恢复 ${result.updated} 张卡片。`;
@@ -1087,18 +1325,21 @@ export default function KnowledgePage({
     if (!ids.length) return;
     const ok = await confirm({
       title: "删除知识卡片",
-      message: ids.length === 1 ? "将当前知识卡片移入回收站？正文、项目关系和复习记录都可以恢复。" : `将选中的 ${ids.length} 张卡片移入回收站？正文、项目关系和复习记录都可以恢复。`,
+      message: ids.length === 1 ? "将当前知识卡片移入回收站？正文、空间关系和复习记录都可以恢复。" : `将选中的 ${ids.length} 张卡片移入回收站？正文、空间关系和复习记录都可以恢复。`,
       confirmText: "移入回收站",
       danger: true,
     });
     if (!ok) return;
     setSaving(true);
     try {
-      if (!(selectedId && ids.includes(selectedId))) await saveDirtyDraft();
+      if (!(await saveDirtyDraft())) {
+        throw new Error("保存期间内容发生变化，请重试后再移入回收站。");
+      }
       await api.batchKnowledgeCards({ ids, action: "delete" });
       await invalidateKnowledgeQueries();
-      await invalidateKnowledgeMetadata();
+      await refreshMetadata().catch(() => undefined);
       setSelectedIds([]);
+      editorGenerationRef.current += 1;
       setSelectedId(null);
       setDraft(emptyDraft);
       await loadCards(false, false);
@@ -1157,7 +1398,9 @@ export default function KnowledgePage({
     if (!values.length || !selectedIds.length || !batchMode) return;
     setSaving(true);
     try {
-      await saveDirtyDraft();
+      if (!(await saveDirtyDraft())) {
+        throw new Error("保存期间内容发生变化，请重试后再执行批量操作。");
+      }
       const action = batchMode === "tag" || batchMode === "remove_tag"
         ? batchMode === "tag" ? "add_tags" : "remove_tags"
         : batchMode === "move_project"
@@ -1167,7 +1410,7 @@ export default function KnowledgePage({
             : "add_projects";
       await api.batchKnowledgeCards({ ids: selectedIds, action, values });
       await invalidateKnowledgeQueries();
-      await invalidateKnowledgeMetadata();
+      await refreshMetadata().catch(() => undefined);
       const ids = selectedIds.length;
       setSelectedIds([]);
       setBatchMode("");
@@ -1181,8 +1424,8 @@ export default function KnowledgePage({
         : batchMode === "move_project"
           ? `已将 ${ids} 张卡片移动到「${values[0]}」。`
           : batchMode === "remove_project"
-            ? `已将 ${ids} 张卡片移出项目「${values[0]}」。`
-            : `已为 ${ids} 张卡片加入项目。`;
+            ? `已将 ${ids} 张卡片移出空间「${values[0]}」。`
+            : `已为 ${ids} 张卡片加入空间。`;
       showNotice(message, "good");
       toast.success(message);
     } catch (e) {
@@ -1220,7 +1463,7 @@ export default function KnowledgePage({
   };
 
   const activeQuery = routeQueryRef.current.trim();
-  const activeFilterCount = [activeQuery, typeFilter, usageFilter, qualityFilter, tagFilter, projectFilter, activeStatus !== "draft" ? activeStatus : "", sort !== "updated" ? sort : ""].filter(Boolean).length;
+  const activeFilterCount = [activeQuery, typeFilter, usageFilter, qualityFilter, tagFilter, projectFilter, activeStatus !== "all" ? activeStatus : "", sort !== "updated" ? sort : ""].filter(Boolean).length;
   const activeStatusLabel = activeStatus === "all" ? "全部状态" : statusLabels[activeStatus];
   const emptyStatusLabel = activeStatus === "all" ? "卡片" : `${statusLabels[activeStatus]}卡片`;
 
@@ -1233,7 +1476,7 @@ export default function KnowledgePage({
       <PageHeader
         icon={BookMarked}
         title="知识工作台"
-        description="把真实记录沉淀成可追溯、可确认的知识卡片"
+        description="把真实记录、Markdown 或 AI 整理的内容，沉淀成可追溯、可确认的知识卡片"
         navigation={
           <Tabs value={activeStatus} onValueChange={(v) => changeStatus(v as KnowledgeStatusFilter)} className="hidden md:block md:w-[500px]">
             <TabsList className="grid w-full grid-cols-4">
@@ -1243,7 +1486,21 @@ export default function KnowledgePage({
                 </TabsTrigger>
               ))}
             </TabsList>
-          </Tabs>
+            </Tabs>
+        }
+        actions={
+          <PageHeaderActions
+            primary={
+              <button type="button" onClick={startNew} className="ui-button-primary hidden h-9 px-3 text-xs xl:inline-flex">
+                <Plus size={14} /> 新建卡片
+              </button>
+            }
+            secondary={
+              <button type="button" onClick={() => setImportOpen(true)} className="ui-button-secondary h-9 px-3 text-xs">
+                <Upload size={14} /> 导入卡片
+              </button>
+            }
+          />
         }
       />
 
@@ -1258,8 +1515,8 @@ export default function KnowledgePage({
         {savedViews.length > 0 ? (
           <select
             value={activeViewId}
-            onChange={(e) => {
-              const view = savedViews.find((item) => item.id === e.target.value);
+            onChange={(event) => {
+              const view = savedViews.find((item) => item.id === event.target.value);
               if (view) applySavedView(view);
               else setActiveViewId("");
             }}
@@ -1275,7 +1532,7 @@ export default function KnowledgePage({
         <button
           type="button"
           onClick={() => { setViewName(""); setSaveViewOpen(true); }}
-          className="ui-button-secondary h-9 shrink-0 px-2.5 text-xs"
+          className="ui-button-secondary h-9 shrink-0 gap-1.5 px-2.5 text-xs"
         >
           <Save size={14} /> 保存当前
         </button>
@@ -1291,40 +1548,6 @@ export default function KnowledgePage({
           </button>
         )}
       </div>
-
-      <Dialog.Root open={saveViewOpen} onOpenChange={setSaveViewOpen}>
-        <Dialog.Portal>
-          <Dialog.Overlay className="ui-overlay fixed inset-0 z-[70] backdrop-blur-[2px] data-[state=open]:animate-fade-in" />
-          <Dialog.Content className="ui-modal-surface fixed left-1/2 top-1/2 z-[71] w-[min(92vw,420px)] -translate-x-1/2 -translate-y-1/2 rounded-2xl border p-5 outline-hidden">
-            <Dialog.Title className="text-base font-semibold text-[var(--ui-text)]">保存当前视图</Dialog.Title>
-            <Dialog.Description className="mt-1 text-xs leading-5 text-[var(--ui-text-muted)]">
-              保存搜索、项目、标签、状态、类型、质量问题和排序，下次可以直接恢复这组工作条件。
-            </Dialog.Description>
-            <input
-              value={viewName}
-              onChange={(e) => setViewName(e.target.value)}
-              onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); void saveCurrentView(); } }}
-              className="ui-field mt-4 h-10"
-              placeholder="例如：待确认 · FPGA"
-              maxLength={80}
-              autoFocus
-            />
-            <div className="mt-4 flex justify-end gap-2">
-              <Dialog.Close asChild>
-                <button type="button" className="ui-button-secondary h-9 px-3 text-xs">取消</button>
-              </Dialog.Close>
-              <button
-                type="button"
-                onClick={() => void saveCurrentView()}
-                disabled={savingView || !viewName.trim()}
-                className="ui-button-primary h-9 px-3 text-xs"
-              >
-                {savingView ? "保存中..." : "保存视图"}
-              </button>
-            </div>
-          </Dialog.Content>
-        </Dialog.Portal>
-      </Dialog.Root>
 
       {error && (
         <div className="ui-alert-bad mb-4 flex flex-wrap items-center justify-between gap-2">
@@ -1381,7 +1604,7 @@ export default function KnowledgePage({
                       type="button"
                       onClick={() => changeStatus(status)}
                       className={[
-                        "ui-filter-button w-full min-h-12 flex-col items-start justify-center",
+                        "ui-filter-button w-full min-h-12 flex-col items-center justify-center",
                         activeStatus === status ? "ui-filter-button-active" : "",
                       ].join(" ")}
                     >
@@ -1392,10 +1615,22 @@ export default function KnowledgePage({
                 </div>
               </div>
               <div>
-                <div className="ui-section-kicker mb-2">项目</div>
+                <div className="mb-2 flex items-center justify-between gap-2">
+                  <div className="ui-section-kicker">空间</div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setMobileFiltersOpen(false);
+                      openSpaceManager();
+                    }}
+                    className="ui-button-ghost h-7 min-h-7 gap-1 px-1.5 text-[11px]"
+                  >
+                    <FolderCog size={13} /> 空间管理
+                  </button>
+                </div>
                 <div className="flex flex-wrap gap-2">
-                  <FilterButton active={!projectFilter} onClick={() => changeProject("")}>全部项目</FilterButton>
-                  {projectCounts.map(({ name, count }) => (
+                  <FilterButton active={!projectFilter} onClick={() => changeProject("")}>全部空间</FilterButton>
+                  {projectCounts.map(({ name, count, article_count = 0 }) => (
                     <button
                       key={name}
                       type="button"
@@ -1405,7 +1640,7 @@ export default function KnowledgePage({
                         projectFilter === name ? "ui-filter-button-active" : "",
                       ].join(" ")}
                     >
-                      <Folder size={12} /> {name} <span className="opacity-60">{count}</span>
+                      <Folder size={12} /> {name} <span className="opacity-60">{count} 卡{article_count > 0 ? ` · ${article_count} 记` : ""}</span>
                     </button>
                   ))}
                 </div>
@@ -1440,7 +1675,7 @@ export default function KnowledgePage({
                     </FilterButton>
                   ))}
                 </div>
-                <p className="mt-2 text-[11px] leading-4 text-[var(--ui-text-subtle)]">数量为全库活跃卡片，可继续叠加状态、项目或标签。</p>
+                <p className="mt-2 text-[11px] leading-4 text-[var(--ui-text-subtle)]">数量为全库活跃卡片，可继续叠加状态、空间或标签。</p>
                 {qualityFilter && <p className="mt-2 text-[11px] leading-4 text-[var(--ui-text-subtle)]">{qualityOptions.find(([value]) => value === qualityFilter)?.[2]}</p>}
               </div>
               <div>
@@ -1476,6 +1711,20 @@ export default function KnowledgePage({
             </div>
           </div>
           <div className="ui-soft-divider border-t px-4 pt-3">
+            <div className="mb-3 flex items-center justify-between gap-3">
+              <div className="min-w-0">
+                <div className="text-xs font-semibold text-[var(--ui-text)]">卡片回收站</div>
+                <p className="mt-0.5 text-[11px] text-[var(--ui-text-subtle)]">已删除卡片可恢复，关系和复习进度会保留。</p>
+              </div>
+              <Link
+                to="/knowledge/trash"
+                search={{} as never}
+                onClick={() => setMobileFiltersOpen(false)}
+                className="ui-button-secondary h-9 shrink-0 px-2.5 text-xs"
+              >
+                <Trash2 size={14} /> 查看回收站
+              </Link>
+            </div>
             <button type="button" onClick={() => { searchCards(); setMobileFiltersOpen(false); }} className="ui-button-primary h-11 w-full text-sm">
               应用筛选{activeFilterCount > 0 ? ` · ${activeFilterCount} 项条件` : ""}
             </button>
@@ -1531,7 +1780,7 @@ export default function KnowledgePage({
                 ].join(" ")}
               >
                 <Folder size={17} className="shrink-0 text-[var(--ui-accent-text)]" />
-                <span><span className="block text-sm font-semibold">加入项目</span><span className="mt-0.5 block text-xs text-[var(--ui-text-subtle)]">保留已有项目，再添加一个项目</span></span>
+                <span><span className="block text-sm font-semibold">加入空间</span><span className="mt-0.5 block text-xs text-[var(--ui-text-subtle)]">保留已有空间，再添加一个空间</span></span>
               </button>
               <button
                 type="button"
@@ -1542,7 +1791,7 @@ export default function KnowledgePage({
                 ].join(" ")}
               >
                 <Folder size={17} className="shrink-0 text-[var(--ui-accent-text)]" />
-                <span><span className="block text-sm font-semibold">移动到项目</span><span className="mt-0.5 block text-xs text-[var(--ui-text-subtle)]">用目标项目替换卡片已有项目</span></span>
+                <span><span className="block text-sm font-semibold">移动到空间</span><span className="mt-0.5 block text-xs text-[var(--ui-text-subtle)]">用目标空间替换卡片已有空间</span></span>
               </button>
               <button
                 type="button"
@@ -1553,7 +1802,7 @@ export default function KnowledgePage({
                 ].join(" ")}
               >
                 <Folder size={17} className="shrink-0 text-[var(--ui-text-muted)]" />
-                <span><span className="block text-sm font-semibold">移出项目</span><span className="mt-0.5 block text-xs text-[var(--ui-text-subtle)]">从指定项目中移除这些卡片</span></span>
+                <span><span className="block text-sm font-semibold">移出空间</span><span className="mt-0.5 block text-xs text-[var(--ui-text-subtle)]">从指定空间中移除这些卡片</span></span>
               </button>
               <button
                 type="button"
@@ -1572,7 +1821,7 @@ export default function KnowledgePage({
               <div className="ui-status-accent mb-2 rounded-xl p-3">
                 <div className="mb-2 flex items-center justify-between gap-2">
                   <span className="text-xs font-semibold text-[var(--ui-accent-text)]">
-                    {batchMode === "tag" ? "添加标签" : batchMode === "remove_tag" ? "移除标签" : batchMode === "add_project" ? "加入项目" : batchMode === "move_project" ? "移动到项目" : "移出项目"}
+                    {batchMode === "tag" ? "添加标签" : batchMode === "remove_tag" ? "移除标签" : batchMode === "add_project" ? "加入空间" : batchMode === "move_project" ? "移动到空间" : "移出空间"}
                   </span>
                   <button type="button" onClick={() => { setBatchMode(""); setBatchValue(""); }} className="ui-icon-button h-8 w-8" aria-label="关闭批量编辑">
                     <X size={14} />
@@ -1583,7 +1832,7 @@ export default function KnowledgePage({
                     value={batchValue}
                     onChange={(e) => setBatchValue(e.target.value)}
                     onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); void applyBatch(); } }}
-                    placeholder={batchMode === "tag" || batchMode === "remove_tag" ? "标签，逗号分隔多个" : batchMode === "move_project" ? "目标项目名" : "项目名"}
+                    placeholder={batchMode === "tag" || batchMode === "remove_tag" ? "标签，逗号分隔多个" : batchMode === "move_project" ? "目标空间名" : "空间名"}
                     className="ui-field h-11 min-w-0 flex-1"
                     autoFocus
                   />
@@ -1603,7 +1852,7 @@ export default function KnowledgePage({
                     </button>
                   ))}
                 </div>
-                {batchMode === "move_project" && <p className="mt-2 text-[11px] leading-4 text-[var(--ui-text-subtle)]">目标项目不存在时会自动创建。</p>}
+                {batchMode === "move_project" && <p className="mt-2 text-[11px] leading-4 text-[var(--ui-text-subtle)]">目标空间不存在时会自动创建。</p>}
               </div>
             )}
           </div>
@@ -1629,13 +1878,18 @@ export default function KnowledgePage({
           </div>
 
           <div className="mt-4 min-h-0 xl:flex-1 xl:overflow-y-auto xl:overscroll-contain xl:pr-1">
-          {/* 项目导航（一级，突出） */}
+          {/* 空间导航（一级，突出） */}
           <div>
-            <div className="mb-1.5 flex items-center justify-between px-1">
-              <div className="ui-section-kicker">项目</div>
+            <div className="mb-2 flex items-center justify-between gap-2 px-1">
+              <div className="ui-section-kicker">空间</div>
               {projectFilter && (
                 <button type="button" onClick={() => changeProject("")} className="text-[11px] font-medium text-[var(--ui-accent-text)] hover:underline">显示全部</button>
               )}
+            </div>
+            <div className="mb-2">
+              <button type="button" onClick={openSpaceManager} className="ui-button-secondary h-8 min-h-8 w-full gap-1 px-2 text-[11px]">
+                <FolderCog size={13} /> 空间管理
+              </button>
             </div>
             <div className="flex flex-col gap-0.5">
               <button
@@ -1648,7 +1902,7 @@ export default function KnowledgePage({
               >
                 <span className="flex items-center gap-2"><Folder size={15} /> 全部卡片</span>
               </button>
-              {projectCounts.map(({ name, count }) => (
+              {projectCounts.map(({ name, count, article_count = 0, kind }) => (
                 <button
                   key={name}
                   type="button"
@@ -1660,38 +1914,19 @@ export default function KnowledgePage({
                 >
                   <span className="flex min-w-0 items-center gap-2">
                     <Folder size={15} className={projectFilter === name ? "opacity-90" : "opacity-70"} />
-                    <span className="truncate">{name}</span>
+                    <span className="min-w-0 truncate">{name}</span>
+                    {kind && <span className="shrink-0 text-[10px] text-[var(--ui-text-subtle)]">{kind === "topic" ? "主题" : "项目"}</span>}
                   </span>
-                  <span className={`ml-2 shrink-0 rounded-full px-1.5 py-0.5 text-[11px] font-semibold leading-none ${projectFilter === name ? "ui-status-accent" : "ui-status-muted"}`}>{count}</span>
+                  <span className={`ml-2 flex shrink-0 items-center gap-1 rounded-full px-1.5 py-0.5 text-[11px] font-semibold leading-none ${projectFilter === name ? "ui-status-accent" : "ui-status-muted"}`} title={`${count} 张知识卡片 · ${article_count} 篇每日记录`}>
+                    {count} 卡
+                    {article_count > 0 && <span className="opacity-60">· {article_count} 记</span>}
+                  </span>
                 </button>
               ))}
               {projectCounts.length === 0 && (
-                <p className="px-2 py-1 text-xs text-[var(--ui-text-subtle)]">暂无项目，创建一个</p>
+                <p className="px-2 py-1 text-xs text-[var(--ui-text-subtle)]">暂无空间，创建一个</p>
               )}
             </div>
-            <form
-              onSubmit={(event) => {
-                event.preventDefault();
-                void createProject();
-              }}
-              className="mt-2 flex items-center gap-1.5 rounded-xl border border-dashed border-[var(--ui-border-strong)] bg-[var(--ui-surface-soft)] p-1"
-            >
-              <input
-                value={newProjectName}
-                onChange={(e) => setNewProjectName(e.target.value)}
-                placeholder="新建项目..."
-                className="ui-field h-8 min-w-0 flex-1 rounded-lg border-0 bg-transparent px-2 text-xs shadow-none focus:ring-0"
-              />
-              <button
-                type="submit"
-                disabled={!newProjectName.trim()}
-                className="ui-icon-button ui-status-accent h-8 w-8 rounded-lg"
-                aria-label="创建项目"
-                title="创建项目"
-              >
-                <Plus size={14} strokeWidth={2.25} />
-              </button>
-            </form>
           </div>
 
           {/* 筛选与状态（折叠） */}
@@ -1716,7 +1951,7 @@ export default function KnowledgePage({
                       type="button"
                       onClick={() => changeStatus(status)}
                       className={[
-                        "ui-filter-button w-full min-h-12 flex-col items-start justify-center",
+                        "ui-filter-button w-full min-h-12 flex-col items-center justify-center",
                         activeStatus === status ? "ui-filter-button-active" : "",
                       ].join(" ")}
                     >
@@ -1792,15 +2027,18 @@ export default function KnowledgePage({
           </div>
 
           <div className="ui-panel-muted mt-4 p-3">
-            <div className="text-xs font-semibold text-[var(--ui-text)]">工作流</div>
-            <div className="mt-2 space-y-2 text-xs leading-5 text-[var(--ui-text-muted)]">
-              <p>1. 从记录或复盘提取草稿</p>
-              <p>2. 对照来源片段确认</p>
-              <p>3. 沉淀后用于复习检索</p>
+            <div className="flex items-center gap-2 text-xs font-semibold text-[var(--ui-text)]">
+              <CheckCircle2 size={14} className="text-[var(--ui-accent-text)]" /> 工作流
             </div>
-          </div>
-          <div className="ui-status-accent mt-4 p-3 text-xs leading-5 xl:mt-auto">
-            知识卡片必须能回到来源。没有来源片段的内容，不建议确认入库。
+            <div className="mt-2.5 space-y-2 text-xs leading-5 text-[var(--ui-text-muted)]">
+              <div className="flex items-start gap-2"><span className="ui-status-muted flex h-5 w-5 shrink-0 items-center justify-center rounded-md font-mono text-[10px]">1</span><span>从记录、复盘或文档生成草稿</span></div>
+              <div className="flex items-start gap-2"><span className="ui-status-muted flex h-5 w-5 shrink-0 items-center justify-center rounded-md font-mono text-[10px]">2</span><span>对照来源片段确认</span></div>
+              <div className="flex items-start gap-2"><span className="ui-status-muted flex h-5 w-5 shrink-0 items-center justify-center rounded-md font-mono text-[10px]">3</span><span>沉淀后用于复习检索</span></div>
+            </div>
+            <div className="ui-soft-divider mt-3 border-t pt-3 text-[11px] leading-5 text-[var(--ui-text-muted)]">
+              <div className="flex items-center gap-1.5 font-semibold text-[var(--ui-accent-text)]"><ShieldCheck size={13} /> 来源约束</div>
+              <p className="mt-1">没有来源片段的内容，不建议确认入库。</p>
+            </div>
           </div>
           </div>
           <div className="ui-soft-divider mt-3 shrink-0 border-t pt-3">
@@ -1814,11 +2052,11 @@ export default function KnowledgePage({
                 className="ui-button-secondary inline-flex h-9 items-center gap-1.5 px-2.5 text-xs"
               >
                 <Trash2 size={14} />
-                <span className="hidden 2xl:inline">回收站</span>
+                <span>回收站</span>
               </Link>
             </div>
             <p className="mt-2 px-1 text-[11px] leading-4 text-[var(--ui-text-subtle)]">
-              新卡默认保存为草稿，可在右侧补充来源、标签和项目。
+              新卡默认保存为草稿，可在右侧补充来源、标签和空间。
             </p>
           </div>
         </aside>
@@ -1831,7 +2069,7 @@ export default function KnowledgePage({
               </div>
               {cards.length > 0 && (
                 <div className="flex flex-wrap items-center justify-end gap-1">
-                  <div className="ui-segment h-8 gap-0.5 p-0.5" role="group" aria-label="列表密度">
+                  <div className="ui-segment min-h-8 gap-0.5 p-0.5" role="group" aria-label="列表密度">
                     <button
                       type="button"
                       onClick={() => changeDensity("comfortable")}
@@ -1853,14 +2091,14 @@ export default function KnowledgePage({
                       <span className="sr-only">紧凑视图</span>
                     </button>
                   </div>
-                  <select
-                    value={sort}
-                    onChange={(e) => changeSort(e.target.value)}
-                    className="ui-field h-8 w-auto min-w-24 rounded-lg px-2 py-0 text-xs font-medium"
-                    aria-label="卡片排序"
-                  >
-                    {sortOptions.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
-                  </select>
+                  <Select value={sort} onValueChange={changeSort}>
+                    <SelectTrigger className="h-8 w-auto min-w-[100px] justify-between gap-1 rounded-lg px-2 py-0 text-left text-xs font-medium" aria-label="卡片排序">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent align="end" className="min-w-[124px]">
+                      {sortOptions.map(([value, label]) => <SelectItem key={value} value={value} className="justify-start px-2 pr-8 text-xs">{label}</SelectItem>)}
+                    </SelectContent>
+                  </Select>
                   <label className="ui-button-ghost h-8 min-h-8 gap-1.5 px-2 text-xs">
                     <TriStateCheckbox
                       checked={allVisibleSelected}
@@ -1904,9 +2142,9 @@ export default function KnowledgePage({
                           <DropdownMenuLabel>修改选中卡片</DropdownMenuLabel>
                           <DropdownMenuItem onSelect={() => toggleBatchMode("tag")}>添加标签</DropdownMenuItem>
                           <DropdownMenuItem onSelect={() => toggleBatchMode("remove_tag")}>移除标签</DropdownMenuItem>
-                          <DropdownMenuItem onSelect={() => toggleBatchMode("add_project")}>加入项目</DropdownMenuItem>
-                          <DropdownMenuItem onSelect={() => toggleBatchMode("move_project")}>移动到项目</DropdownMenuItem>
-                          <DropdownMenuItem onSelect={() => toggleBatchMode("remove_project")}>移出项目</DropdownMenuItem>
+                          <DropdownMenuItem onSelect={() => toggleBatchMode("add_project")}>加入空间</DropdownMenuItem>
+                          <DropdownMenuItem onSelect={() => toggleBatchMode("move_project")}>移动到空间</DropdownMenuItem>
+                          <DropdownMenuItem onSelect={() => toggleBatchMode("remove_project")}>移出空间</DropdownMenuItem>
                           <DropdownMenuSeparator />
                         <DropdownMenuItem onSelect={() => void deleteCards(selectedIds)} className="text-[var(--ui-danger-text)] focus:bg-[var(--ui-danger-surface)] focus:text-[var(--ui-danger-text)]">
                             批量删除
@@ -1928,7 +2166,7 @@ export default function KnowledgePage({
                   <div className="ui-panel-muted hidden rounded-lg p-2 xl:block">
                     <div className="mb-1.5 flex items-center justify-between gap-2">
                       <span className="text-[11px] font-semibold text-[var(--ui-accent-text)]">
-                        {batchMode === "tag" ? "添加标签" : batchMode === "remove_tag" ? "移除标签" : batchMode === "add_project" ? "加入项目" : batchMode === "move_project" ? "移动到项目" : "移出项目"}
+                        {batchMode === "tag" ? "添加标签" : batchMode === "remove_tag" ? "移除标签" : batchMode === "add_project" ? "加入空间" : batchMode === "move_project" ? "移动到空间" : "移出空间"}
                       </span>
                       <button type="button" onClick={() => { setBatchMode(""); setBatchValue(""); }} className="ui-icon-button h-7 w-7" aria-label="关闭批量编辑">
                         <X size={13} />
@@ -1939,8 +2177,7 @@ export default function KnowledgePage({
                         value={batchValue}
                         onChange={(e) => setBatchValue(e.target.value)}
                         onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); void applyBatch(); } }}
-                        placeholder={batchMode === "tag" || batchMode === "remove_tag" ? "标签，逗号分隔多个" : batchMode === "move_project" ? "目标项目名" : "项目名"}
-                        list={batchMode === "tag" || batchMode === "remove_tag" ? undefined : "knowledge-project-options"}
+                        placeholder={batchMode === "tag" || batchMode === "remove_tag" ? "标签，逗号分隔多个" : batchMode === "move_project" ? "目标空间名" : "空间名"}
                         className="ui-field h-9 min-w-0 flex-1 rounded-lg px-2.5 text-xs"
                         autoFocus
                       />
@@ -1948,10 +2185,7 @@ export default function KnowledgePage({
                         应用
                       </button>
                     </div>
-                    {batchMode === "move_project" && <p className="mt-1.5 text-[11px] leading-4 text-[var(--ui-text-subtle)]">移动会替换卡片已有项目；目标项目不存在时会自动创建。</p>}
-                    <datalist id="knowledge-project-options">
-                      {projectCounts.map(({ name }) => <option key={name} value={name} />)}
-                    </datalist>
+                    {batchMode === "move_project" && <p className="mt-1.5 text-[11px] leading-4 text-[var(--ui-text-subtle)]">移动会替换卡片已有空间；目标空间不存在时会自动创建。</p>}
                   </div>
                 )}
               </div>
@@ -2028,9 +2262,10 @@ export default function KnowledgePage({
                       page: page > 1 ? page : undefined,
                       view: "detail",
                     }}
-                    onClick={() => {
-                      selectCard(card);
-                      if (isMobile) setMobileView("detail");
+                    onClick={(event) => {
+                      if (!onOpenCard || event.defaultPrevented || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+                      event.preventDefault();
+                      openCard(card);
                     }}
                     className={[
                       "min-w-0 flex-1 rounded-lg text-left outline-hidden transition-colors focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--ui-focus)]/30",
@@ -2122,13 +2357,32 @@ export default function KnowledgePage({
             </button>
             <span className="text-xs text-[var(--ui-text-subtle)]">详情与编辑</span>
           </div>
+          {projectFilter && (
+            <SpaceOverview
+              name={projectFilter}
+              space={selectedSpace}
+              articles={spaceArticles}
+              loading={spaceArticlesLoading}
+              error={spaceArticlesError}
+              onEditDate={onEditDate}
+            />
+          )}
           <div className="mb-4 flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
             <div className="min-w-0">
               <div className="flex items-center gap-2">
                 <h3 className="truncate text-sm font-bold text-[var(--ui-text)]">{selectedId ? "卡片详情" : "新建知识卡片"}</h3>
                 {saveState === "saving" && <span className="inline-flex items-center gap-1 text-xs text-[var(--ui-accent-text)]"><LoaderCircle size={12} className="animate-spin" /> 自动保存</span>}
                 {saveState === "saved" && <span className="text-xs text-[var(--ui-success-text)]">已保存</span>}
-                {saveState === "error" && <span className="text-xs text-[var(--ui-danger-text)]">保存失败</span>}
+                {saveState === "error" && (
+                  <button
+                    type="button"
+                    onClick={() => void retrySaveDraft()}
+                    disabled={saving || !dirty || !selectedId}
+                    className="text-xs font-semibold text-[var(--ui-danger-text)] underline-offset-2 hover:underline disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    保存失败 · 重试
+                  </button>
+                )}
               </div>
               <p className="mt-1 text-xs text-[var(--ui-text-subtle)]">
                 {selectedCard?.source_date || draft.source_date ? `${selectedCard?.source_date || draft.source_date} · ${currentSourceType}` : "来源用于回溯依据"}
@@ -2225,7 +2479,7 @@ export default function KnowledgePage({
               )}
             </div>
             <div>
-              <div className="ui-section-kicker mb-1.5">项目</div>
+              <div className="ui-section-kicker mb-1.5">空间（主题或项目）</div>
               <div className="ui-token-input">
                 {parsedProjects.map((project) => (
                   <button
@@ -2233,7 +2487,7 @@ export default function KnowledgePage({
                     type="button"
                     onClick={() => removeProject(project)}
                     className="ui-chip border-[var(--ui-selected-border)] bg-[var(--ui-surface-selected)] text-[var(--ui-accent-text)] hover:bg-[var(--ui-surface-hover)]"
-                    title="点击移除项目"
+                    title="点击移除空间"
                   >
                     <Folder size={12} /> {project} <X size={12} />
                   </button>
@@ -2251,7 +2505,7 @@ export default function KnowledgePage({
                     }
                   }}
                   onBlur={() => addProject()}
-                  placeholder="归入项目（可多个）"
+                  placeholder="归入空间（可多个）"
                   className="h-8 min-w-[120px] flex-1 border-0 bg-transparent px-1 text-sm text-[var(--ui-text)] outline-hidden placeholder:text-[var(--ui-text-subtle)]"
                 />
               </div>
@@ -2286,6 +2540,7 @@ export default function KnowledgePage({
                       key={card.id}
                       value={card.title}
                       onSelect={() => {
+                        editorGenerationRef.current += 1;
                         setDraftRelatedIds((ids) => (ids.includes(card.id) ? ids : [...ids, card.id]));
                         setRelatedQuery("");
                         setDirty(true);
@@ -2301,6 +2556,14 @@ export default function KnowledgePage({
             </Command>
           </div>
 
+          {selectedCard && (
+            <ReviewItemsPanel
+              cardId={selectedCard.id}
+              cardStatus={draft.status}
+              contentVersion={selectedCard.content_version}
+            />
+          )}
+
           {selectedCard && (relatedChips.length > 0 || reviewHistory.length > 1) && (
             <div className="mt-4 grid gap-3">
               {relatedChips.length > 0 && (
@@ -2314,18 +2577,30 @@ export default function KnowledgePage({
                       <button type="button" onClick={() => openCard(chip)} className="truncate transition-colors hover:underline">
                         {chip.title}
                       </button>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setDraftRelatedIds((ids) => ids.filter((id) => id !== chip.id));
-                          setDirty(true);
-                          setSaveState("idle");
-                        }}
-                        className="text-[var(--ui-accent-text)] opacity-50 transition-opacity hover:opacity-100"
-                        title="移除关联"
-                      >
-                        <X size={11} />
-                      </button>
+                      {draftRelatedIds.includes(chip.id) ? (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            editorGenerationRef.current += 1;
+                            setDraftRelatedIds((ids) => ids.filter((id) => id !== chip.id));
+                            setDirty(true);
+                            setSaveState("idle");
+                          }}
+                          className="text-[var(--ui-accent-text)] opacity-50 transition-opacity hover:opacity-100"
+                          title="移除关联"
+                          aria-label={`移除关联：${chip.title}`}
+                        >
+                          <X size={11} />
+                        </button>
+                      ) : (
+                        <span
+                          className="shrink-0 text-[var(--ui-accent-text)] opacity-60"
+                          title="这是来自另一张卡片的关联，请打开对方卡片后移除"
+                          aria-label="来自另一张卡片的关联"
+                        >
+                          ↔
+                        </span>
+                      )}
                     </span>
                   ))}
                 </div>
@@ -2403,8 +2678,130 @@ export default function KnowledgePage({
           )}
         </section>
       </div>
+      <Dialog.Root open={saveViewOpen} onOpenChange={setSaveViewOpen}>
+        <Dialog.Portal>
+          <Dialog.Overlay className="ui-overlay fixed inset-0 z-[70] backdrop-blur-[2px] data-[state=open]:animate-fade-in" />
+          <Dialog.Content className="ui-modal-surface fixed left-1/2 top-1/2 z-[71] w-[min(92vw,420px)] -translate-x-1/2 -translate-y-1/2 rounded-2xl border p-5 outline-hidden">
+            <Dialog.Title className="text-base font-semibold text-[var(--ui-text)]">保存当前视图</Dialog.Title>
+            <Dialog.Description className="mt-1 text-xs leading-5 text-[var(--ui-text-muted)]">
+              保存搜索、空间、标签、状态、类型、质量问题和排序，下次可以直接恢复这组工作条件。
+            </Dialog.Description>
+            <input
+              value={viewName}
+              onChange={(event) => setViewName(event.target.value)}
+              onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); void saveCurrentView(); } }}
+              className="ui-field mt-4 h-10"
+              placeholder="例如：待确认 · FPGA"
+              maxLength={80}
+              autoFocus
+            />
+            <div className="mt-4 flex justify-end gap-2">
+              <Dialog.Close asChild>
+                <button type="button" className="ui-button-secondary h-9 px-3 text-xs">取消</button>
+              </Dialog.Close>
+              <button
+                type="button"
+                onClick={() => void saveCurrentView()}
+                disabled={savingView || !viewName.trim()}
+                className="ui-button-primary h-9 px-3 text-xs"
+              >
+                {savingView ? "保存中..." : "保存视图"}
+              </button>
+            </div>
+          </Dialog.Content>
+        </Dialog.Portal>
+      </Dialog.Root>
+
+      <SpaceManagerDialog
+        open={spaceManagerOpen}
+        onOpenChange={setSpaceManagerOpen}
+        onSpacesChanged={handleSpacesChanged}
+      />
+      <KnowledgeImportDialog
+        open={importOpen}
+        onOpenChange={setImportOpen}
+        spaces={projectCounts}
+        onImported={handleImported}
+        onOpenSettings={() => {
+          if (typeof window !== "undefined") writeSessionStorage("daily-summary-settings-tab", "ai");
+          onNavigate("settings");
+        }}
+      />
       {dialog}
     </motion.div>
+  );
+}
+
+function SpaceOverview({
+  name,
+  space,
+  articles,
+  loading,
+  error,
+  onEditDate,
+}: {
+  name: string;
+  space?: api.KnowledgeProject;
+  articles: api.ArticleSummary[];
+  loading: boolean;
+  error: string;
+  onEditDate: (date: string) => void;
+}) {
+  const kindLabel = space?.kind === "project" ? "项目" : "主题";
+  const articleCount = space?.article_count ?? articles.length;
+  const cardCount = space?.count ?? 0;
+  const totalCount = space?.total_count ?? cardCount + articleCount;
+
+  return (
+    <section className="ui-panel-muted mb-4 rounded-xl p-3" aria-label={`${name} 空间概览`}>
+      <div className="flex items-start gap-2">
+        <span className="ui-status-accent mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg">
+          <Folder size={15} />
+        </span>
+        <div className="min-w-0 flex-1">
+          <div className="flex flex-wrap items-center gap-2">
+            <h3 className="truncate text-sm font-semibold text-[var(--ui-text)]">{name}</h3>
+            <span className="ui-chip h-auto px-1.5 py-0.5 text-[10px]">{kindLabel}</span>
+            <span className="text-[11px] text-[var(--ui-text-subtle)]">共 {totalCount} 项</span>
+          </div>
+          <p className="mt-1 text-[11px] leading-4 text-[var(--ui-text-subtle)]">
+            {space?.description || "每日记录负责捕捉过程，知识卡片负责沉淀可复用结论。"}
+          </p>
+        </div>
+      </div>
+      <div className="mt-3 flex flex-wrap gap-1.5 text-[11px] text-[var(--ui-text-subtle)]">
+        <span className="ui-chip h-auto px-2 py-0.5">{cardCount} 张知识卡片</span>
+        <span className="ui-chip h-auto px-2 py-0.5"><CalendarDays size={11} /> {articleCount} 篇每日记录</span>
+      </div>
+      <div className="ui-soft-divider mt-3 border-t pt-2.5">
+        <div className="mb-1.5 flex items-center justify-between gap-2">
+          <span className="ui-section-kicker">最近每日记录</span>
+          {articles.length > 0 && <span className="text-[10px] text-[var(--ui-text-subtle)]">点击日期编辑</span>}
+        </div>
+        {loading ? (
+          <div className="text-xs text-[var(--ui-text-subtle)]">加载空间记录...</div>
+        ) : error ? (
+          <div className="text-xs text-[var(--ui-danger-text)]">{error}</div>
+        ) : articles.length === 0 ? (
+          <div className="text-xs leading-5 text-[var(--ui-text-subtle)]">还没有归入这个空间的每日记录。</div>
+        ) : (
+          <div className="grid gap-1">
+            {articles.map((article) => (
+              <button
+                key={article.id}
+                type="button"
+                onClick={() => onEditDate(article.date)}
+                className="flex min-w-0 items-center gap-2 rounded-lg px-2 py-1.5 text-left transition-colors hover:bg-[var(--ui-surface-hover)]"
+              >
+                <span className="shrink-0 font-mono text-[10px] text-[var(--ui-accent-text)]">{article.date}</span>
+                <span className="min-w-0 flex-1 truncate text-xs font-medium text-[var(--ui-text)]">{article.title || "（无标题）"}</span>
+                <span className="hidden max-w-[38%] truncate text-[10px] text-[var(--ui-text-subtle)] sm:block">{article.preview}</span>
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
+    </section>
   );
 }
 

@@ -129,15 +129,17 @@ export default function KnowledgeTrashPage() {
             </span>
           </div>
           {selectedCount > 0 && (
-            <button
-              type="button"
-              onClick={() => void restore(selectedIds)}
-              disabled={saving}
-              className="ui-button-primary h-9 px-3 text-xs"
-            >
-              <RotateCcw size={14} />
-              恢复选中
-            </button>
+            <div className="flex flex-wrap gap-2">
+              <button
+                type="button"
+                onClick={() => void restore(selectedIds)}
+                disabled={saving}
+                className="ui-button-primary h-9 px-3 text-xs"
+              >
+                <RotateCcw size={14} />
+                恢复选中
+              </button>
+            </div>
           )}
         </div>
 
@@ -197,7 +199,7 @@ export default function KnowledgeTrashPage() {
       </section>
 
       <div className="ui-panel-muted px-4 py-3 text-xs leading-5 text-[var(--ui-text-muted)] sm:px-5">
-        当前版本只提供可恢复删除，不提供物理清理。这样误删后可以从 Toast 或回收站恢复，项目计数和复习队列也会自动同步。
+        回收站只提供可恢复的软删除。卡片正文、空间关系和复习进度会一直保留，恢复后可继续使用；空间本身的永久删除在“空间管理”中完成。
       </div>
     </motion.div>
   );

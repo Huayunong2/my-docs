@@ -24,6 +24,7 @@ import {
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import type { Page } from "../App";
+import { readLocalStorage, writeLocalStorage } from "../lib/storage";
 
 type NavItem = { id: Page; label: string; icon: LucideIcon; description?: string };
 
@@ -87,12 +88,12 @@ interface SidebarProps {
 
 export default function Sidebar({ page, onPrefetch, onOpenPalette, dark, onToggleDark, dueCount }: SidebarProps) {
   const [moreOpen, setMoreOpen] = useState(false);
-  const [collapsed, setCollapsed] = useState(() => typeof window !== "undefined" && localStorage.getItem("sidebar-collapsed") === "1");
+  const [collapsed, setCollapsed] = useState(() => typeof window !== "undefined" && readLocalStorage("sidebar-collapsed") === "1");
   const secondaryActive = mobileMoreNav.some((item) => item.id === page);
   const toggleCollapsed = useCallback(() => {
     setCollapsed((value) => {
       const next = !value;
-      localStorage.setItem("sidebar-collapsed", next ? "1" : "0");
+      writeLocalStorage("sidebar-collapsed", next ? "1" : "0");
       return next;
     });
   }, []);
@@ -155,7 +156,7 @@ export default function Sidebar({ page, onPrefetch, onOpenPalette, dark, onToggl
             >
               <MoreHorizontal size={19} strokeWidth={secondaryActive ? 2.35 : 2} />
               <span>更多</span>
-              {secondaryActive && <span className="absolute -top-0.5 h-0.5 w-4 rounded-full bg-[var(--ui-accent-solid)]/80" />}
+              {secondaryActive && <span className="absolute left-1/2 top-1 h-0.5 w-4 -translate-x-1/2 rounded-full bg-[var(--ui-accent-solid)]/80" />}
             </button>
           </Dialog.Trigger>
         </nav>
@@ -212,7 +213,7 @@ function DesktopSidebar({ page, onPrefetch, onOpenPalette, dark, onToggleDark, d
   const [collapsedGroups, setCollapsedGroups] = useState<Record<string, boolean>>(() => {
     if (typeof window === "undefined") return {};
     try {
-      const stored = JSON.parse(localStorage.getItem("sidebar-groups") || "{}");
+      const stored = JSON.parse(readLocalStorage("sidebar-groups") || "{}");
       return stored && typeof stored === "object" ? stored as Record<string, boolean> : {};
     } catch {
       return {};
@@ -222,7 +223,7 @@ function DesktopSidebar({ page, onPrefetch, onOpenPalette, dark, onToggleDark, d
   const toggleGroup = (label: string) => {
     setCollapsedGroups((current) => {
       const next = { ...current, [label]: !current[label] };
-      localStorage.setItem("sidebar-groups", JSON.stringify(next));
+      writeLocalStorage("sidebar-groups", JSON.stringify(next));
       return next;
     });
   };
@@ -464,7 +465,7 @@ function MobileNavButton({
           {badge > 99 ? "99+" : badge}
         </span>
       )}
-      {active && <span className="absolute -top-0.5 h-0.5 w-4 rounded-full bg-[var(--ui-accent-solid)]/80" />}
+      {active && <span className="absolute left-1/2 top-1 h-0.5 w-4 -translate-x-1/2 rounded-full bg-[var(--ui-accent-solid)]/80" />}
     </Link>
   );
 }

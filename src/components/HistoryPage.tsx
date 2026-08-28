@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState, useCallback } from "react";
 import { useRef } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import * as Dialog from "@radix-ui/react-dialog";
-import { CalendarDays, Edit3, FileText, PenLine, SearchX, Trash2 } from "lucide-react";
+import { CalendarDays, Edit3, FileText, Folder, PenLine, SearchX, Trash2 } from "lucide-react";
 import * as api from "../lib/api";
 import type { Article, ArticleSummary } from "../lib/api";
 import ArticleDetail from "./ArticleDetail";
@@ -324,6 +324,11 @@ function HistoryCard({
       </button>
       <div className="ui-soft-divider mt-3 flex flex-wrap items-center justify-between gap-2 border-t pt-3">
         <div className="flex min-w-0 flex-wrap gap-1.5">
+          {(article.spaces || []).slice(0, 4).map((space) => (
+            <span key={space} className="ui-chip h-auto gap-1 border-[var(--ui-selected-border)] bg-[var(--ui-surface-selected)] px-2 py-0.5 text-[11px] text-[var(--ui-accent-text)]">
+              <Folder size={11} /> {space}
+            </span>
+          ))}
           {article.tags.slice(0, 4).map((tag) => (
             <span key={tag} className="ui-chip h-auto px-2 py-0.5 text-[11px]">
               #{tag}

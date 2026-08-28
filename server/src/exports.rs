@@ -11,11 +11,14 @@ use std::sync::{Arc, Mutex};
 
 type AppState = Arc<Mutex<Database>>;
 type HttpError = (StatusCode, String);
+const MAX_EXPORT_ARTICLE_IDS: usize = 500;
+const MAX_EXPORT_ID_CHARS: usize = 128;
 
 pub(crate) async fn export_markdown(
     State(db): State<AppState>,
     Json(payload): Json<ExportPayload>,
 ) -> Result<Json<String>, HttpError> {
+    validate_export_ids(&payload.ids)?;
     let articles = load_articles(&db, &payload.ids)?;
     let directory = exports_dir();
     fs::create_dir_all(&directory).map_err(internal_error)?;
@@ -37,6 +40,7 @@ pub(crate) async fn export_json(
     State(db): State<AppState>,
     Json(payload): Json<ExportPayload>,
 ) -> Result<Json<String>, HttpError> {
+    validate_export_ids(&payload.ids)?;
     let articles = load_articles(&db, &payload.ids)?;
     let directory = exports_dir();
     fs::create_dir_all(&directory).map_err(internal_error)?;
@@ -53,9 +57,7 @@ pub(crate) async fn export_zip(
     State(db): State<AppState>,
     Json(payload): Json<ExportPayload>,
 ) -> Result<Response, HttpError> {
-    if payload.ids.is_empty() {
-        return Err((StatusCode::BAD_REQUEST, "No article ids provided".into()));
-    }
+    validate_export_ids(&payload.ids)?;
     let articles = load_articles(&db, &payload.ids)?;
     let mut buffer = Cursor::new(Vec::new());
     let mut zip = zip::ZipWriter::new(&mut buffer);
@@ -95,6 +97,23 @@ fn load_articles(db: &AppState, ids: &[String]) -> Result<Vec<Article>, HttpErro
         .lock()
         .map_err(|error| (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()))?;
     db.articles().by_ids(ids).map_err(internal_error)
+}
+
+fn validate_export_ids(ids: &[String]) -> Result<(), HttpError> {
+    if ids.is_empty() {
+        return Err((StatusCode::BAD_REQUEST, "No article ids provided".into()));
+    }
+    if ids.len() > MAX_EXPORT_ARTICLE_IDS
+        || ids
+            .iter()
+            .any(|id| id.trim().is_empty() || id.chars().count() > MAX_EXPORT_ID_CHARS)
+    {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            format!("一次最多导出 {MAX_EXPORT_ARTICLE_IDS} 个有效记录 ID"),
+        ));
+    }
+    Ok(())
 }
 
 fn internal_error(error: impl ToString) -> HttpError {
