@@ -1375,12 +1375,12 @@ impl Database {
             }
             transaction.execute(
                 "UPDATE review_log
-                 SET review_item_id=(
+                 SET review_item_id=COALESCE((
                      SELECT id FROM review_items
                      WHERE review_items.knowledge_card_id=review_log.card_id
                      ORDER BY review_items.created_at ASC LIMIT 1
-                 )
-                 WHERE review_item_id=''",
+                 ), '')
+                 WHERE COALESCE(review_item_id, '')=''",
                 [],
             )?;
             transaction.execute("INSERT INTO schema_version (version) VALUES (16)", [])?;
@@ -4558,6 +4558,113 @@ mod migration_tests {
             created_at        TEXT NOT NULL,
             updated_at        TEXT NOT NULL
         );"
+    }
+
+    fn v15_schema_with_orphaned_review_log() -> &'static str {
+        "CREATE TABLE schema_version (version INTEGER NOT NULL);
+         INSERT INTO schema_version (version) VALUES (15);
+         CREATE TABLE articles (
+             id TEXT PRIMARY KEY,
+             date TEXT NOT NULL,
+             title TEXT NOT NULL DEFAULT '',
+             content TEXT NOT NULL DEFAULT '',
+             mood TEXT NOT NULL DEFAULT '',
+             tags TEXT NOT NULL DEFAULT '[]',
+             word_count INTEGER NOT NULL DEFAULT 0,
+             created_at TEXT NOT NULL,
+             updated_at TEXT NOT NULL
+         );
+         CREATE TABLE knowledge_cards (
+             id TEXT PRIMARY KEY,
+             card_type TEXT NOT NULL,
+             status TEXT NOT NULL,
+             title TEXT NOT NULL,
+             content TEXT NOT NULL,
+             tags TEXT NOT NULL DEFAULT '[]',
+             source_article_id TEXT NOT NULL DEFAULT '',
+             source_review_id TEXT NOT NULL DEFAULT '',
+             source_date TEXT NOT NULL DEFAULT '',
+             source_excerpt TEXT NOT NULL DEFAULT '',
+             created_at TEXT NOT NULL,
+             updated_at TEXT NOT NULL,
+             review_state TEXT NOT NULL DEFAULT 'new',
+             review_interval_days REAL NOT NULL DEFAULT 0,
+             review_ease REAL NOT NULL DEFAULT 2.5,
+             review_count INTEGER NOT NULL DEFAULT 0,
+             last_reviewed_at TEXT NOT NULL DEFAULT '',
+             next_review_at TEXT NOT NULL DEFAULT '',
+             usage_count INTEGER NOT NULL DEFAULT 0,
+             last_used_at TEXT NOT NULL DEFAULT '',
+             related_ids TEXT NOT NULL DEFAULT '[]',
+             first_reviewed_at TEXT NOT NULL DEFAULT '',
+             projects TEXT NOT NULL DEFAULT '[]'
+         );
+         CREATE TABLE knowledge_projects (
+             id TEXT PRIMARY KEY,
+             name TEXT NOT NULL COLLATE NOCASE UNIQUE,
+             created_at TEXT NOT NULL,
+             updated_at TEXT NOT NULL
+         );
+         CREATE TABLE review_log (
+             id INTEGER PRIMARY KEY AUTOINCREMENT,
+             card_id TEXT NOT NULL,
+             grade TEXT NOT NULL,
+             interval_days REAL NOT NULL,
+             ease REAL NOT NULL,
+             next_review_at TEXT NOT NULL,
+             reviewed_at TEXT NOT NULL
+         );
+         INSERT INTO knowledge_cards
+             (id, card_type, status, title, content, created_at, updated_at)
+         VALUES
+             ('existing-card', 'fact', 'confirmed', '现存卡片', '可复习内容',
+              '2026-08-01T09:00:00', '2026-08-01T09:00:00');
+         INSERT INTO review_log
+             (card_id, grade, interval_days, ease, next_review_at, reviewed_at)
+         VALUES
+             ('existing-card', 'good', 3, 2.5, '2026-08-04', '2026-08-01'),
+             ('deleted-card', 'good', 3, 2.5, '2026-08-04', '2026-08-01');"
+    }
+
+    #[test]
+    fn v15_database_migration_keeps_review_logs_for_deleted_cards() {
+        let conn = Connection::open_in_memory().expect("in-memory connection");
+        conn.execute_batch(v15_schema_with_orphaned_review_log())
+            .expect("create v15 schema with orphaned review log");
+
+        let db = Database { conn };
+        db.initialize()
+            .expect("orphaned review history must not block migration");
+
+        let existing_review_item_id: String = db
+            .conn
+            .query_row(
+                "SELECT review_item_id FROM review_log WHERE card_id='existing-card'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("read migrated review log");
+        assert!(!existing_review_item_id.is_empty());
+
+        let review_item_id: String = db
+            .conn
+            .query_row(
+                "SELECT review_item_id FROM review_log WHERE card_id='deleted-card'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("read migrated orphaned review log");
+        assert!(
+            review_item_id.is_empty(),
+            "an orphaned log has no review item, but remains preserved"
+        );
+        assert_eq!(
+            db.conn
+                .query_row("SELECT COUNT(*) FROM review_log", [], |row| row
+                    .get::<_, i64>(0))
+                .expect("count migrated review logs"),
+            2
+        );
     }
 
     #[test]
