@@ -802,45 +802,6 @@ fn soft_deleted_cards_keep_review_data_and_related_links_until_restore() {
 }
 
 #[test]
-fn saved_knowledge_views_round_trip_and_update_filters() {
-    let mut db = Database::new_in_memory().expect("in-memory database");
-    let filters = json!({
-        "q": "中文检索",
-        "status": "draft",
-        "sort": "created"
-    });
-    let created = db
-        .knowledge()
-        .create_saved_view("待确认知识", &filters)
-        .expect("create saved view");
-    assert_eq!(created.name, "待确认知识");
-    assert_eq!(created.filters, filters);
-
-    let listed = db.knowledge().list_saved_views().expect("list saved views");
-    assert_eq!(listed.len(), 1);
-    assert_eq!(listed[0].id, created.id);
-
-    let updated_filters = json!({ "project": "Rust", "usage": "never_used" });
-    let updated = db
-        .knowledge()
-        .update_saved_view(&created.id, "未使用的 Rust 卡片", &updated_filters)
-        .expect("update saved view")
-        .expect("saved view exists");
-    assert_eq!(updated.name, "未使用的 Rust 卡片");
-    assert_eq!(updated.filters, updated_filters);
-
-    assert!(db
-        .knowledge()
-        .delete_saved_view(&created.id)
-        .expect("delete saved view"));
-    assert!(db
-        .knowledge()
-        .list_saved_views()
-        .expect("list saved views")
-        .is_empty());
-}
-
-#[test]
 fn knowledge_query_page_supports_fts_fallback_filters_and_pagination() {
     let mut db = Database::new_in_memory().expect("in-memory database");
     let mut first_draft = card_draft("confirmed");

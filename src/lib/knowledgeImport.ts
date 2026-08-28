@@ -1,29 +1,5 @@
 import type { KnowledgeCardImportInput, KnowledgeCardType } from "./api";
 
-export const knowledgeCardImportPrompt = `请把下面的内容整理成可复习的知识卡片，并且只输出 JSON，不要输出 Markdown 代码围栏或解释。
-
-要求：
-- 每张卡片一个对象，title 是脱离原上下文也成立的知识标题，content 是 2-5 句可复习正文。
-- card_type 只能使用 fact、method、concept、decision、case、quote、principle、snippet 之一；不确定时使用 fact。
-- tags 和 projects 都是字符串数组；source_excerpt 是支撑卡片的原文片段，没有可靠来源时可以省略。
-- 不要把问题编号、寒暄或没有依据的推测写进卡片。
-
-请严格使用这个格式：
-{
-  "cards": [
-    {
-      "card_type": "concept",
-      "title": "一个独立成立的知识标题",
-      "content": "这条知识是什么，以及为什么或如何使用。",
-      "tags": ["标签"],
-      "projects": ["可选空间"],
-      "source_excerpt": "可选的原文依据"
-    }
-  ]
-}
-
-待整理内容：`;
-
 const cardTypes = new Set<KnowledgeCardType>([
   "fact",
   "method",
@@ -249,13 +225,13 @@ function normalizeRow(value: unknown, index: number): KnowledgeCardImportRow {
 }
 
 export function parseKnowledgeCardImport(raw: string): KnowledgeCardImportParseResult {
-  if (!raw.trim()) return { rows: [], error: "请先粘贴 AI 输出的 JSON。" };
+  if (!raw.trim()) return { rows: [], error: "请先输入 JSON。" };
 
   let parsed: unknown;
   try {
     parsed = JSON.parse(stripJsonFence(raw));
   } catch {
-    return { rows: [], error: "JSON 格式无法解析。请让 AI 只输出 JSON，或点击下方提示词重新生成。" };
+    return { rows: [], error: "JSON 格式无法解析，请检查括号、引号和字段格式。" };
   }
 
   const items = Array.isArray(parsed)

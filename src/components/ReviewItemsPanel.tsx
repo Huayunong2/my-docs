@@ -1,10 +1,10 @@
 import { useCallback, useEffect, useState } from "react";
 import {
   Check,
-  ChevronDown,
-  ChevronUp,
   Edit3,
   LoaderCircle,
+  PauseCircle,
+  PlayCircle,
   Plus,
   RotateCcw,
   Trash2,
@@ -255,7 +255,7 @@ export default function ReviewItemsPanel({
                     title={item.status === "active" ? "暂停复习题" : "恢复复习题"}
                     aria-label={item.status === "active" ? "暂停复习题" : "恢复复习题"}
                   >
-                    {item.status === "active" ? <ChevronDown size={14} /> : <ChevronUp size={14} />}
+                    {item.status === "active" ? <PauseCircle size={14} /> : <PlayCircle size={14} />}
                   </button>
                   <button type="button" onClick={() => void archive(item)} className="ui-icon-button h-8 w-8 text-[var(--ui-danger-text)]" title="归档复习题" aria-label="归档复习题">
                     <Trash2 size={13} />

@@ -34,7 +34,7 @@ interface SettingsPageProps {
 }
 
 const THEMES = [
-  { id: "", name: "档案绿", color: "#0d7468" },
+  { id: "", name: "靛蓝", color: "#6366f1" },
   { id: "violet", name: "浆果紫", color: "#8a5f78" },
   { id: "blue", name: "铁蓝", color: "#2e7180" },
   { id: "emerald", name: "苔绿", color: "#2f896b" },
@@ -60,9 +60,9 @@ export default function SettingsPage({ accentTheme, onChangeAccentTheme, themeMo
       animate={{ opacity: 1, y: 0 }}
       className="page-surface page-surface-settings flex h-full min-h-0 flex-col overflow-hidden"
     >
-      <div className="settings-header ui-soft-divider shrink-0 border-b px-3 pb-3 pt-[calc(env(safe-area-inset-top,0px)+1rem)] sm:px-4 md:px-8 md:pb-5 md:pt-6">
+      <div className="settings-header ui-soft-divider shrink-0 border-b px-3 pb-3 pt-4 sm:px-4 md:px-8 md:pb-5 md:pt-6">
         <PageHeader icon={Settings} title="设置" description="连接服务、复习计划、AI、备份与外观偏好" className="mb-4" />
-        <div className="ui-segment flex w-full gap-1 overflow-x-auto sm:w-fit">
+        <div className="settings-tabs ui-segment grid w-full grid-cols-3 gap-1 sm:flex sm:w-fit sm:overflow-visible">
           {(Object.keys(labels) as Tab[]).map((id) => (
             (() => {
               const Icon = icons[id];
@@ -71,7 +71,7 @@ export default function SettingsPage({ accentTheme, onChangeAccentTheme, themeMo
                   key={id}
                   type="button"
                   onClick={() => switchTab(id)}
-                  className={`ui-segment-item h-10 min-w-[74px] shrink-0 whitespace-nowrap ${tab === id ? "ui-segment-item-active" : ""}`}
+                  className={`ui-segment-item h-11 min-w-0 w-full shrink-0 whitespace-nowrap px-2 sm:h-10 sm:min-w-[74px] sm:w-auto ${tab === id ? "ui-segment-item-active" : ""}`}
                 >
                   <Icon size={15} />
                   {labels[id]}

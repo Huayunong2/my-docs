@@ -135,6 +135,7 @@ export function AppShell() {
     const root = document.documentElement;
     root.classList.toggle("dark", dark);
     root.style.colorScheme = dark ? "dark" : "light";
+    document.querySelector('meta[name="theme-color"]')?.setAttribute("content", dark ? "#11151b" : "#6366f1");
   }, [dark]);
 
   const toggleZen = useCallback(() => setZen((value) => !value), []);
@@ -282,7 +283,7 @@ export function AppShell() {
     <MotionConfig reducedMotion="user">
       <AppShellContext.Provider value={contextValue}>
         <div className={dark ? "dark" : ""} style={{ display: "contents" }}>
-          <div className="app-shell flex h-dvh w-screen transition-colors duration-300">
+          <div className="app-shell flex h-dvh w-full min-w-0 transition-colors duration-300">
             <a
               href="#main-content"
               className="sr-only fixed left-3 top-3 z-[100] rounded-lg bg-[var(--ui-accent-solid)] px-3 py-2 text-sm font-semibold text-white shadow-lg focus:not-sr-only"
@@ -299,7 +300,7 @@ export function AppShell() {
                 dueCount={dueCount}
               />
             )}
-            <main id="main-content" className="app-content min-h-0 min-w-0 flex-1 overflow-y-auto" tabIndex={-1}>
+            <main id="main-content" className="app-content min-h-0 min-w-0 flex-1 overflow-x-hidden overflow-y-auto" tabIndex={-1}>
               <Suspense fallback={<PageFallback />}>
                 <Outlet />
               </Suspense>

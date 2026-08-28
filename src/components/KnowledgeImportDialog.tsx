@@ -26,19 +26,29 @@ import { toast } from "sonner";
 import * as api from "../lib/api";
 import { cardTypeLabels } from "../lib/cardLabels";
 import {
-  knowledgeCardImportPrompt,
   parseKnowledgeCardImport,
   parseKnowledgeCardMarkdownImport,
   parseKnowledgeCardTextImport,
 } from "../lib/knowledgeImport";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "./ui/select";
 import { Tabs, TabsList, TabsTrigger } from "./ui/tabs";
+import SpaceAutocomplete from "./ui/space-autocomplete";
 
 const MAX_SOURCE_CHARS = 1_000_000;
 const MAX_FILE_BYTES = 8_000_000;
 const JOB_POLL_INTERVAL_MS = 900;
 const AI_JOB_STORAGE_KEY = "daily-summary-knowledge-import-job";
 const cardTypeOptions = Object.entries(cardTypeLabels) as Array<[api.KnowledgeCardType, string]>;
+const knowledgeCardJsonExample = JSON.stringify({
+  cards: [{
+    card_type: "concept",
+    title: "一个独立成立的知识标题",
+    content: "这条知识是什么，以及在什么场景下使用。",
+    tags: ["标签"],
+    projects: ["可选空间"],
+    source_excerpt: "可选的原文依据",
+  }],
+}, null, 2);
 
 type ImportMode = "ai" | "manual";
 type ManualFormat = "json" | "markdown" | "text";
@@ -140,6 +150,8 @@ export default function KnowledgeImportDialog({
   const [cancellingJob, setCancellingJob] = useState(false);
   const [aiError, setAiError] = useState("");
   const [aiConfig, setAiConfig] = useState<api.AiConfig | null>(null);
+  const [aiRouting, setAiRouting] = useState<api.AiRoutingConfig | null>(null);
+  const [routingError, setRoutingError] = useState("");
   const [configLoading, setConfigLoading] = useState(false);
   const [configError, setConfigError] = useState("");
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -163,6 +175,11 @@ export default function KnowledgeImportDialog({
   const aiSelectedCount = aiCandidates.filter((candidate) => selectedCandidateIds.includes(candidate.id)).length;
   const aiReady = !!aiConfig?.configured && !!aiConfig.api_key_configured;
   const aiConfigFailed = !!configError;
+  const knowledgeExtractProfile = useMemo(() => {
+    if (!aiRouting) return null;
+    const profileId = aiRouting.routes.knowledge_extract || aiRouting.fallback_profile;
+    return aiRouting.profiles.find((profile) => profile.id === profileId) || null;
+  }, [aiRouting]);
 
   function syncJobSnapshot(job: api.KnowledgeAnalyzeJob) {
     setAiJob(job);
@@ -224,6 +241,8 @@ export default function KnowledgeImportDialog({
       setCancellingJob(false);
       setAiError("");
       setAiConfig(null);
+      setAiRouting(null);
+      setRoutingError("");
       setConfigError("");
       return;
     }
@@ -231,6 +250,7 @@ export default function KnowledgeImportDialog({
     let cancelled = false;
     setConfigLoading(true);
     setConfigError("");
+    setRoutingError("");
     const savedJobId = readStoredJobId();
     if (savedJobId) setAiJobId(savedJobId);
     api.getAiConfig()
@@ -242,6 +262,13 @@ export default function KnowledgeImportDialog({
       })
       .finally(() => {
         if (!cancelled) setConfigLoading(false);
+      });
+    api.getAiRouting()
+      .then((routing) => {
+        if (!cancelled) setAiRouting(routing);
+      })
+      .catch((error) => {
+        if (!cancelled) setRoutingError(api.getErrorMessage(error));
       });
     return () => {
       cancelled = true;
@@ -289,12 +316,12 @@ export default function KnowledgeImportDialog({
     setAiError("");
   };
 
-  const copyPrompt = async () => {
+  const copyJsonExample = async () => {
     try {
-      await navigator.clipboard.writeText(knowledgeCardImportPrompt);
-      toast.success("JSON 格式提示词已复制。", { duration: 2200 });
+      await navigator.clipboard.writeText(knowledgeCardJsonExample);
+      toast.success("JSON 示例已复制。", { duration: 2200 });
     } catch {
-      toast.error("复制失败，请手动选中提示词复制。", { duration: 2800 });
+      toast.error("复制失败，请手动选中示例复制。", { duration: 2800 });
     }
   };
 
@@ -570,10 +597,10 @@ export default function KnowledgeImportDialog({
                         <div className="min-w-0">
                           <div className="text-xs font-semibold">{configLoading ? "正在检查 AI 配置" : aiConfigFailed ? "无法读取 AI 配置" : aiReady ? "AI 已就绪" : "还没有配置 AI"}</div>
                           <p className="mt-1 text-[11px] leading-5">
-                            {configLoading ? "正在读取服务端配置…" : aiConfigFailed ? configError : aiReady ? `${aiConfig?.model || "当前模型"} · API Key 保存在服务端` : "请先到“设置 → AI”填写兼容接口和 API Key。"}
+                            {configLoading ? "正在读取服务端配置…" : aiConfigFailed ? configError : aiReady ? knowledgeExtractProfile ? `任务路由：${knowledgeExtractProfile.name} · ${knowledgeExtractProfile.model} · API Key 保存在服务端` : routingError ? `任务路由读取失败：${routingError}` : "正在读取“知识卡片提取”任务路由…" : "请先到“设置 → AI”填写兼容接口和 API Key。"}
                           </p>
-                          {!configLoading && !aiReady && onOpenSettings && (
-                            <button type="button" onClick={onOpenSettings} className="ui-button-ghost mt-1.5 h-7 min-h-7 px-0 text-[11px] font-semibold">去设置 AI <span aria-hidden="true">→</span></button>
+                          {!configLoading && onOpenSettings && (
+                            <button type="button" onClick={onOpenSettings} className="ui-button-ghost mt-1.5 h-7 min-h-7 px-0 text-[11px] font-semibold">{aiReady ? "调整模型路由" : "去设置 AI"} <span aria-hidden="true">→</span></button>
                           )}
                         </div>
                       </div>
@@ -752,7 +779,7 @@ export default function KnowledgeImportDialog({
                   </Tabs>
                   <div className="flex items-center gap-1.5">
                     {manualFormat === "json" && (
-                      <button type="button" onClick={() => void copyPrompt()} className="ui-button-ghost h-8 min-h-8 gap-1.5 px-2 text-[11px]"><Copy size={13} /> 复制 JSON 格式</button>
+                      <button type="button" onClick={() => void copyJsonExample()} className="ui-button-ghost h-8 min-h-8 gap-1.5 px-2 text-[11px]"><Copy size={13} /> 复制 JSON 示例</button>
                     )}
                     <label className="ui-button-secondary h-8 cursor-pointer gap-1.5 px-2.5 text-[11px]">
                       <Upload size={13} /> 选择文件
@@ -776,7 +803,7 @@ export default function KnowledgeImportDialog({
                     <div className="ui-soft-divider flex shrink-0 items-start justify-between gap-3 border-b px-3.5 py-3">
                       <div className="min-w-0">
                         <h2 className="flex items-center gap-2 text-xs font-semibold text-[var(--ui-text)]"><Clipboard size={14} className="text-[var(--ui-accent-text)]" /> {formatLabel} 内容</h2>
-                        <p className="mt-1 text-[11px] leading-4 text-[var(--ui-text-subtle)]">{manualFormat === "json" ? "粘贴 AI 输出的 JSON 数组或 cards 对象。" : manualFormat === "markdown" ? "每个“## 标题”代表一张卡片，标签和空间可写在正文末尾。" : "明确按一张卡片导入，不会自动猜测如何拆分。"}</p>
+                        <p className="mt-1 text-[11px] leading-4 text-[var(--ui-text-subtle)]">{manualFormat === "json" ? "输入一个卡片数组或 cards 对象；每张卡片至少填写 title 和 content。" : manualFormat === "markdown" ? "每个“## 标题”代表一张卡片，标签和空间可写在正文末尾。" : "明确按一张卡片导入，不会自动拆分内容。"}</p>
                       </div>
                       {fileName && <span className="max-w-[160px] truncate text-[11px] text-[var(--ui-text-subtle)]" title={fileName}>{fileName}</span>}
                     </div>
@@ -1011,21 +1038,19 @@ function ImportSpaceField({
 }) {
   return (
     <div className="ui-panel-muted p-3.5">
-      <label className="block">
+      <div>
         <span className="ui-section-kicker mb-1.5 flex items-center gap-1.5"><FolderOpen size={12} /> 默认空间 <span className="font-normal normal-case tracking-normal text-[var(--ui-text-subtle)]">可选</span></span>
-        <input
+        <SpaceAutocomplete
+          spaces={spaces}
           value={value}
-          onChange={(event) => onChange(event.target.value)}
-          list="knowledge-import-spaces"
-          placeholder="例如：C++ 或投资学习"
-          className="ui-field h-9 text-xs"
-          aria-label="导入卡片的默认空间"
+          onChange={onChange}
+          placeholder="搜索或选择空间"
+          ariaLabel="导入卡片的默认空间"
+          inputClassName="ui-field h-10 pl-9 text-xs"
+          allowCustom={false}
         />
-      </label>
-      <datalist id="knowledge-import-spaces">
-        {spaces.map((space) => <option key={space.name} value={space.name} />)}
-      </datalist>
-      <p className="mt-1.5 text-[11px] leading-4 text-[var(--ui-text-subtle)]">只会补到没有该空间的卡片，不会覆盖 AI 或文件里的空间。</p>
+      </div>
+      <p className="mt-1.5 text-[11px] leading-4 text-[var(--ui-text-subtle)]">已有空间会在输入时快速匹配，优先选择已有项；也可以输入新名称。只会补到没有该空间的卡片，不会覆盖文件里的空间。</p>
     </div>
   );
 }

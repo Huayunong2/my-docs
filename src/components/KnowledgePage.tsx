@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type InputHTMLAttributes } from "react";
 import { motion } from "framer-motion";
-import * as Dialog from "@radix-ui/react-dialog";
 import { Link } from "@tanstack/react-router";
 import { useAutoAnimate } from "@formkit/auto-animate/react";
 import CodeMirror from "@uiw/react-codemirror";
@@ -10,7 +9,6 @@ import { Line, LineChart, ResponsiveContainer, Tooltip } from "recharts";
 import { Command } from "cmdk";
 import {
   ArrowLeft,
-  Bookmark,
   BookMarked,
   CalendarDays,
   CheckCircle2,
@@ -27,7 +25,6 @@ import {
   MoreHorizontal,
   Plus,
   Search,
-  Save,
   ShieldCheck,
   Rows3,
   SlidersHorizontal,
@@ -46,6 +43,7 @@ import MarkdownContent from "./MarkdownContent";
 import ReviewItemsPanel from "./ReviewItemsPanel";
 import KnowledgeImportDialog from "./KnowledgeImportDialog";
 import SpaceManagerDialog from "./SpaceManagerDialog";
+import SpaceAutocomplete from "./ui/space-autocomplete";
 import { useConfirmDialog } from "./ui/Feedback";
 import { refreshKnowledgeMetadata as refreshKnowledgeMetadataQuery } from "../lib/knowledgeMetadata";
 import {
@@ -261,11 +259,6 @@ export default function KnowledgePage({
   const [spaceArticlesLoading, setSpaceArticlesLoading] = useState(false);
   const [spaceArticlesError, setSpaceArticlesError] = useState("");
   const [projectInput, setProjectInput] = useState("");
-  const [savedViews, setSavedViews] = useState<api.KnowledgeSavedView[]>([]);
-  const [activeViewId, setActiveViewId] = useState("");
-  const [saveViewOpen, setSaveViewOpen] = useState(false);
-  const [viewName, setViewName] = useState("");
-  const [savingView, setSavingView] = useState(false);
   const [spaceManagerOpen, setSpaceManagerOpen] = useState(false);
   const [importOpen, setImportOpen] = useState(false);
   const [batchMode, setBatchMode] = useState<KnowledgeBatchMode>("");
@@ -303,7 +296,10 @@ export default function KnowledgePage({
   const { confirm, dialog } = useConfirmDialog();
   const queryClient = useQueryClient();
   const isNewRoute = initialView === "detail" && !initialCardId;
-  const invalidateKnowledgeQueries = () => queryClient.invalidateQueries({ queryKey: api.knowledgeQueryKeys.cardsRoot });
+  const invalidateKnowledgeQueries = () => Promise.all([
+    queryClient.invalidateQueries({ queryKey: api.knowledgeQueryKeys.cardsRoot }),
+    queryClient.invalidateQueries({ queryKey: api.knowledgeQueryKeys.summaryRoot }),
+  ]);
   const invalidateKnowledgeMetadata = () => Promise.all([
     queryClient.invalidateQueries({ queryKey: api.knowledgeQueryKeys.tags }),
     queryClient.invalidateQueries({ queryKey: api.knowledgeQueryKeys.projects }),
@@ -407,28 +403,24 @@ export default function KnowledgePage({
 
   const changeStatus = (status: KnowledgeStatusFilter) => {
     setActiveStatus(status);
-    setActiveViewId("");
     setPage(1);
     onSearchParamsChange?.({ status, page: undefined });
   };
 
   const changeType = (type: string) => {
     setTypeFilter(type);
-    setActiveViewId("");
     setPage(1);
     onSearchParamsChange?.({ type: type || undefined, page: undefined });
   };
 
   const changeProject = (project: string) => {
     setProjectFilter(project);
-    setActiveViewId("");
     setPage(1);
     onSearchParamsChange?.({ project: project || undefined, page: undefined });
   };
 
   const changeTag = (tag: string) => {
     setTagFilter(tag);
-    setActiveViewId("");
     setPage(1);
     onSearchParamsChange?.({ tag: tag || undefined, page: undefined });
   };
@@ -436,21 +428,18 @@ export default function KnowledgePage({
   const changeSort = (value: string) => {
     const next = sortOptions.some(([option]) => option === value) ? value as KnowledgeSort : "updated";
     setSort(next);
-    setActiveViewId("");
     setPage(1);
     onSearchParamsChange?.({ sort: next === "updated" ? undefined : next, page: undefined });
   };
 
   const changeUsage = (value: KnowledgeUsage) => {
     setUsageFilter(value);
-    setActiveViewId("");
     setPage(1);
     onSearchParamsChange?.({ usage: value || undefined, page: undefined });
   };
 
   const changeQuality = (value: KnowledgeQuality) => {
     setQualityFilter(value);
-    setActiveViewId("");
     setPage(1);
     onSearchParamsChange?.({ quality: value || undefined, page: undefined });
   };
@@ -458,138 +447,9 @@ export default function KnowledgePage({
   const searchCards = () => {
     const nextQuery = query.trim();
     routeQueryRef.current = nextQuery;
-    setActiveViewId("");
     setPage(1);
     onSearchParamsChange?.({ q: nextQuery || undefined, page: undefined });
     void loadCards(false, true, nextQuery, undefined, 1);
-  };
-
-  const currentViewFilters = useMemo<api.KnowledgeViewFilters>(() => ({
-    q: query.trim() || undefined,
-    project: projectFilter || undefined,
-    tag: tagFilter || undefined,
-    status: activeStatus,
-    type: typeFilter ? typeFilter as KnowledgeCardType : undefined,
-    usage: usageFilter || undefined,
-    sort: sort === "updated" ? undefined : sort,
-    quality: qualityFilter || undefined,
-  }), [activeStatus, projectFilter, qualityFilter, query, sort, tagFilter, typeFilter, usageFilter]);
-
-  useEffect(() => {
-    let cancelled = false;
-    queryClient.fetchQuery({
-      queryKey: api.knowledgeQueryKeys.savedViews,
-      queryFn: ({ signal }) => api.listKnowledgeSavedViews({ signal }),
-      staleTime: 60_000,
-    })
-      .then((views) => { if (!cancelled) setSavedViews(views); })
-      .catch((e) => { if (!cancelled) toast.error(api.getErrorMessage(e)); });
-    return () => { cancelled = true; };
-  }, [queryClient]);
-
-  const applySavedView = (view: api.KnowledgeSavedView) => {
-    const apply = async () => {
-      // 保存视图也可能把详情页切回列表；先处理当前编辑，避免路由变化卸载草稿。
-      if (dirty) {
-        if (selectedId) {
-          try {
-            if (!(await saveDirtyDraft())) return;
-          } catch (e) {
-            setSaveState("error");
-            showNotice(api.getErrorMessage(e), "bad");
-            return;
-          }
-        } else if (hasDraftInput(draft)) {
-          const leave = await confirm({
-            title: "切换保存视图",
-            message: "当前新卡片还没有创建，确定放弃这份草稿吗？",
-            confirmText: "放弃草稿",
-            danger: true,
-          });
-          if (!leave) return;
-        }
-      }
-      const filters = view.filters || {};
-      const nextStatus = filters.status || "all";
-      const nextQuery = filters.q || "";
-      setActiveViewId(view.id);
-      routeQueryRef.current = nextQuery;
-      setQuery(nextQuery);
-      setProjectFilter(filters.project || "");
-      setTagFilter(filters.tag || "");
-      setActiveStatus(nextStatus);
-      setTypeFilter(filters.type || "");
-      setUsageFilter(filters.usage || "");
-      setQualityFilter(filters.quality || "");
-      setSort(filters.sort || "updated");
-      setPage(1);
-      setSelectedIds([]);
-      if (isMobile) setMobileView("list");
-      if (initialCardId) onBackToList?.();
-      // 前面已经处理过当前编辑，避免同一次操作因闭包中的旧 dirty 状态重复保存。
-      void loadCards(false, false, nextQuery, {
-        cardType: filters.type || "",
-        status: nextStatus,
-        usage: filters.usage || "",
-        tag: filters.tag || "",
-        project: filters.project || "",
-        sort: filters.sort || "updated",
-        quality: filters.quality || "",
-      }, 1);
-      onSearchParamsChange?.({
-        q: nextQuery || undefined,
-        project: filters.project || undefined,
-        tag: filters.tag || undefined,
-        status: nextStatus === "all" ? undefined : nextStatus,
-        type: filters.type || undefined,
-        usage: filters.usage || undefined,
-        sort: filters.sort || undefined,
-        quality: filters.quality || undefined,
-        view: "list",
-        page: undefined,
-      });
-    };
-    void apply();
-  };
-
-  const saveCurrentView = async () => {
-    const name = viewName.trim();
-    if (!name || savingView) return;
-    setSavingView(true);
-    try {
-      const view = await api.createKnowledgeSavedView(name, currentViewFilters);
-      await queryClient.invalidateQueries({ queryKey: api.knowledgeQueryKeys.savedViews });
-      setSavedViews((current) => [view, ...current.filter((item) => item.id !== view.id)]);
-      setActiveViewId(view.id);
-      setViewName("");
-      setSaveViewOpen(false);
-      toast.success(`视图「${view.name}」已保存。`);
-    } catch (e) {
-      toast.error(api.getErrorMessage(e));
-    } finally {
-      setSavingView(false);
-    }
-  };
-
-  const deleteActiveView = async () => {
-    const view = savedViews.find((item) => item.id === activeViewId);
-    if (!view) return;
-    const accepted = await confirm({
-      title: "删除保存视图",
-      message: `删除视图「${view.name}」？这不会删除任何知识卡片。`,
-      confirmText: "删除视图",
-      danger: true,
-    });
-    if (!accepted) return;
-    try {
-      await api.deleteKnowledgeSavedView(view.id);
-      await queryClient.invalidateQueries({ queryKey: api.knowledgeQueryKeys.savedViews });
-      setSavedViews((current) => current.filter((item) => item.id !== view.id));
-      setActiveViewId("");
-      toast.success("保存视图已删除。");
-    } catch (e) {
-      toast.error(api.getErrorMessage(e));
-    }
   };
 
   useEffect(() => {
@@ -726,8 +586,8 @@ export default function KnowledgePage({
           staleTime: knowledgeQueryStaleTime,
         }),
         queryClient.fetchQuery({
-          queryKey: api.knowledgeQueryKeys.summary,
-          queryFn: ({ signal }) => api.getKnowledgeSummary({ signal }),
+          queryKey: api.knowledgeQueryKeys.summary(project),
+          queryFn: ({ signal }) => api.getKnowledgeSummary(project, { signal }),
           staleTime: knowledgeQueryStaleTime,
         }).catch(() => null),
       ]);
@@ -967,11 +827,6 @@ export default function KnowledgePage({
     await refreshMetadata().catch(() => undefined);
     await loadCards(false, false);
   };
-
-  const projectSuggestions = useMemo(
-    () => projectCounts.filter(({ name }) => !parsedProjects.includes(name)).slice(0, 6),
-    [projectCounts, parsedProjects]
-  );
 
   const tagSuggestions = useMemo(
     () => tagCounts.filter(({ tag }) => !parsedTags.includes(tag)).slice(0, 8),
@@ -1466,6 +1321,7 @@ export default function KnowledgePage({
   const activeFilterCount = [activeQuery, typeFilter, usageFilter, qualityFilter, tagFilter, projectFilter, activeStatus !== "all" ? activeStatus : "", sort !== "updated" ? sort : ""].filter(Boolean).length;
   const activeStatusLabel = activeStatus === "all" ? "全部状态" : statusLabels[activeStatus];
   const emptyStatusLabel = activeStatus === "all" ? "卡片" : `${statusLabels[activeStatus]}卡片`;
+  const qualityScopeLabel = projectFilter ? "空间「" + projectFilter + "」" : "全库";
 
   return (
     <motion.div
@@ -1478,7 +1334,7 @@ export default function KnowledgePage({
         title="知识工作台"
         description="把真实记录、Markdown 或 AI 整理的内容，沉淀成可追溯、可确认的知识卡片"
         navigation={
-          <Tabs value={activeStatus} onValueChange={(v) => changeStatus(v as KnowledgeStatusFilter)} className="hidden md:block md:w-[500px]">
+          <Tabs value={activeStatus} onValueChange={(v) => changeStatus(v as KnowledgeStatusFilter)} className="hidden min-w-0 md:block md:w-full md:max-w-[500px]">
             <TabsList className="grid w-full grid-cols-4">
               {statusFilterOptions.map(([status, label]) => (
                 <TabsTrigger key={status} value={status}>
@@ -1503,51 +1359,6 @@ export default function KnowledgePage({
           />
         }
       />
-
-      <div className="ui-panel-muted mb-4 flex flex-wrap items-center gap-2 p-2.5">
-        <span className="ui-status-accent flex h-8 w-8 shrink-0 items-center justify-center rounded-lg">
-          <Bookmark size={15} />
-        </span>
-        <div className="min-w-0 flex-1">
-          <div className="text-xs font-semibold text-[var(--ui-text)]">保存视图</div>
-          <div className="hidden truncate text-[11px] text-[var(--ui-text-subtle)] sm:block">把当前搜索、筛选和排序保存为可复用的工作入口</div>
-        </div>
-        {savedViews.length > 0 ? (
-          <select
-            value={activeViewId}
-            onChange={(event) => {
-              const view = savedViews.find((item) => item.id === event.target.value);
-              if (view) applySavedView(view);
-              else setActiveViewId("");
-            }}
-            className="ui-field h-9 min-w-0 max-w-[220px] flex-1 text-xs"
-            aria-label="选择保存视图"
-          >
-            <option value="">选择视图...</option>
-            {savedViews.map((view) => <option key={view.id} value={view.id}>{view.name}</option>)}
-          </select>
-        ) : (
-          <span className="hidden text-[11px] text-[var(--ui-text-subtle)] sm:block">还没有保存视图</span>
-        )}
-        <button
-          type="button"
-          onClick={() => { setViewName(""); setSaveViewOpen(true); }}
-          className="ui-button-secondary h-9 shrink-0 gap-1.5 px-2.5 text-xs"
-        >
-          <Save size={14} /> 保存当前
-        </button>
-        {activeViewId && (
-          <button
-            type="button"
-            onClick={() => void deleteActiveView()}
-            className="ui-icon-button ui-icon-button-danger h-9 w-9 shrink-0"
-            aria-label="删除当前保存视图"
-            title="删除当前保存视图"
-          >
-            <Trash2 size={14} />
-          </button>
-        )}
-      </div>
 
       {error && (
         <div className="ui-alert-bad mb-4 flex flex-wrap items-center justify-between gap-2">
@@ -1675,7 +1486,7 @@ export default function KnowledgePage({
                     </FilterButton>
                   ))}
                 </div>
-                <p className="mt-2 text-[11px] leading-4 text-[var(--ui-text-subtle)]">数量为全库活跃卡片，可继续叠加状态、空间或标签。</p>
+                <p className="mt-2 text-[11px] leading-4 text-[var(--ui-text-subtle)]">数量为{qualityScopeLabel}活跃卡片，可继续叠加状态、标签或质量筛选。</p>
                 {qualityFilter && <p className="mt-2 text-[11px] leading-4 text-[var(--ui-text-subtle)]">{qualityOptions.find(([value]) => value === qualityFilter)?.[2]}</p>}
               </div>
               <div>
@@ -1828,14 +1639,28 @@ export default function KnowledgePage({
                   </button>
                 </div>
                 <div className="flex items-center gap-2">
-                  <input
-                    value={batchValue}
-                    onChange={(e) => setBatchValue(e.target.value)}
-                    onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); void applyBatch(); } }}
-                    placeholder={batchMode === "tag" || batchMode === "remove_tag" ? "标签，逗号分隔多个" : batchMode === "move_project" ? "目标空间名" : "空间名"}
-                    className="ui-field h-11 min-w-0 flex-1"
-                    autoFocus
-                  />
+                  {batchMode === "tag" || batchMode === "remove_tag" ? (
+                    <input
+                      value={batchValue}
+                      onChange={(e) => setBatchValue(e.target.value)}
+                      onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); void applyBatch(); } }}
+                      placeholder="标签，逗号分隔多个"
+                      className="ui-field h-11 min-w-0 flex-1"
+                      autoFocus
+                    />
+                  ) : (
+                    <SpaceAutocomplete
+                      spaces={projectCounts}
+                      value={batchValue}
+                      onChange={setBatchValue}
+                      onEnter={() => void applyBatch()}
+                      placeholder={batchMode === "move_project" ? "选择目标空间" : "选择空间"}
+                      ariaLabel={batchMode === "move_project" ? "批量移动的目标空间" : "批量操作的空间"}
+                      inputClassName="ui-field h-11 pl-9 text-sm"
+                      containerClassName="min-w-0 flex-1"
+                      autoFocus
+                    />
+                  )}
                   <button type="button" onClick={() => void applyBatch()} disabled={saving || !batchValue.trim()} className="ui-button-primary h-11 shrink-0 px-3 text-xs">
                     应用
                   </button>
@@ -1845,7 +1670,7 @@ export default function KnowledgePage({
                     <button
                       key={value}
                       type="button"
-                      onClick={() => setBatchValue((current) => current ? `${current}, ${value}` : value)}
+                      onClick={() => setBatchValue((current) => batchMode === "tag" || batchMode === "remove_tag" ? current ? `${current}, ${value}` : value : value)}
                       className="ui-chip h-7 border-[var(--ui-selected-border)] bg-[var(--ui-surface-raised)] text-[var(--ui-accent-text)] hover:bg-[var(--ui-surface-hover)]"
                     >
                       {batchMode === "tag" || batchMode === "remove_tag" ? `#${value}` : value}
@@ -1896,11 +1721,15 @@ export default function KnowledgePage({
                 type="button"
                 onClick={() => changeProject("")}
                 className={[
-                  "ui-filter-button w-full justify-between text-[13px]",
+                  "ui-filter-button w-full justify-between gap-2 px-2.5 py-2 text-left text-[13px]",
                   !projectFilter ? "ui-filter-button-active" : "",
                 ].join(" ")}
               >
-                <span className="flex items-center gap-2"><Folder size={15} /> 全部卡片</span>
+                <span className="flex min-w-0 flex-1 items-center gap-2">
+                  <span className="ui-status-muted flex h-7 w-7 shrink-0 items-center justify-center rounded-md"><Folder size={14} /></span>
+                  <span className="truncate font-medium">全部卡片</span>
+                </span>
+                <span className={`shrink-0 rounded-full px-1.5 py-1 text-[11px] font-semibold leading-none ${!projectFilter ? "ui-status-accent" : "ui-status-muted"}`}>{projectFilter ? "全库" : String(summary.total) + " 卡"}</span>
               </button>
               {projectCounts.map(({ name, count, article_count = 0, kind }) => (
                 <button
@@ -1908,18 +1737,22 @@ export default function KnowledgePage({
                   type="button"
                   onClick={() => changeProject(projectFilter === name ? "" : name)}
                   className={[
-                    "ui-filter-button w-full justify-between text-[13px]",
+                    "ui-filter-button w-full justify-between gap-2 px-2.5 py-2 text-left text-[13px]",
                     projectFilter === name ? "ui-filter-button-active" : "",
                   ].join(" ")}
                 >
-                  <span className="flex min-w-0 items-center gap-2">
-                    <Folder size={15} className={projectFilter === name ? "opacity-90" : "opacity-70"} />
-                    <span className="min-w-0 truncate">{name}</span>
-                    {kind && <span className="shrink-0 text-[10px] text-[var(--ui-text-subtle)]">{kind === "topic" ? "主题" : "项目"}</span>}
+                  <span className="flex min-w-0 flex-1 items-center gap-2">
+                    <span className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-md ${projectFilter === name ? "ui-status-accent" : "ui-status-muted"}`}>
+                      <Folder size={14} />
+                    </span>
+                    <span className="min-w-0 flex-1">
+                      <span className="block truncate font-medium">{name}</span>
+                      {kind && <span className="mt-0.5 block text-[10px] leading-3 text-[var(--ui-text-subtle)]">{kind === "topic" ? "长期主题" : "项目空间"}</span>}
+                    </span>
                   </span>
-                  <span className={`ml-2 flex shrink-0 items-center gap-1 rounded-full px-1.5 py-0.5 text-[11px] font-semibold leading-none ${projectFilter === name ? "ui-status-accent" : "ui-status-muted"}`} title={`${count} 张知识卡片 · ${article_count} 篇每日记录`}>
-                    {count} 卡
-                    {article_count > 0 && <span className="opacity-60">· {article_count} 记</span>}
+                  <span className={`flex shrink-0 flex-col items-end gap-0.5 rounded-lg px-1.5 py-1 text-[11px] font-semibold leading-none ${projectFilter === name ? "ui-status-accent" : "ui-status-muted"}`} title={`${count} 张知识卡片 · ${article_count} 篇每日记录`}>
+                    <span>{count} 张卡片</span>
+                    {article_count > 0 && <span className="text-[10px] font-normal opacity-70">{article_count} 篇记录</span>}
                   </span>
                 </button>
               ))}
@@ -1992,7 +1825,7 @@ export default function KnowledgePage({
                       </FilterButton>
                     ))}
                   </div>
-                  <p className="mt-2 text-[11px] leading-4 text-[var(--ui-text-subtle)]">数量为全库活跃卡片，可继续叠加其他筛选。</p>
+                  <p className="mt-2 text-[11px] leading-4 text-[var(--ui-text-subtle)]">数量为{qualityScopeLabel}活跃卡片，可继续叠加其他筛选。</p>
                   {qualityFilter && <p className="mt-2 text-[11px] leading-4 text-[var(--ui-text-subtle)]">{qualityOptions.find(([value]) => value === qualityFilter)?.[2]}</p>}
                 </div>
                 <div>
@@ -2062,11 +1895,22 @@ export default function KnowledgePage({
         </aside>
 
         <section className={["knowledge-card-index ui-panel flex flex-col overflow-visible p-2 xl:h-full xl:min-h-0 xl:overflow-hidden", mobileView === "list" ? "" : "hidden", "xl:flex"].join(" ")}>
-          <div className="shrink-0 px-2 py-1">
-            <div className="flex min-h-9 items-center justify-between gap-2">
-              <div className="text-xs font-semibold text-[var(--ui-text-muted)]">
-                {activeStatusLabel} · {totalCards}
+          <div className="shrink-0 px-2 pt-1">
+            <div className="flex min-h-10 items-center justify-between gap-3 border-b border-[var(--ui-border)] pb-2">
+              <div className="flex min-w-0 items-center gap-2">
+                <span className="ui-status-accent flex h-7 w-7 shrink-0 items-center justify-center rounded-lg">
+                  <SlidersHorizontal size={14} />
+                </span>
+                <div className="min-w-0">
+                  <div className="truncate text-xs font-semibold text-[var(--ui-text)]">{activeStatusLabel}</div>
+                  <div className="mt-0.5 truncate text-[10px] leading-3 text-[var(--ui-text-subtle)]">{projectFilter ? "当前空间 · " + projectFilter : "当前筛选结果"}</div>
+                </div>
               </div>
+              <span className="ui-status-accent inline-flex h-7 min-w-8 shrink-0 items-center justify-center rounded-lg px-2 font-mono text-xs font-bold" aria-label={activeStatusLabel + " " + totalCards + " 张"}>
+                {totalCards}
+              </span>
+            </div>
+            <div className="flex min-h-9 items-center justify-end gap-2 pt-1">
               {cards.length > 0 && (
                 <div className="flex flex-wrap items-center justify-end gap-1">
                   <div className="ui-segment min-h-8 gap-0.5 p-0.5" role="group" aria-label="列表密度">
@@ -2123,11 +1967,15 @@ export default function KnowledgePage({
                     {hiddenSelectedCount > 0 ? ` · 当前列表可见 ${visibleSelectedCount} 张` : " · 当前列表"}
                   </span>
                   <div className="flex flex-wrap items-center justify-end gap-1">
-                    {selectedDraftCount > 0 && (
-                      <button type="button" onClick={() => updateStatus("confirmed", selectedIds.filter((id) => cards.some((card) => card.id === id && card.status === "draft")))} disabled={saving} className="ui-button-success h-8 min-h-8 px-2 text-xs">
-                        确认 {selectedDraftCount}
-                      </button>
-                    )}
+                    <button
+                      type="button"
+                      onClick={() => updateStatus("confirmed", selectedIds.filter((id) => cards.some((card) => card.id === id && card.status === "draft")))}
+                      disabled={saving || selectedDraftCount === 0}
+                      title={selectedDraftCount > 0 ? "确认选中的草稿并沉淀入库" : "当前选择中没有待沉淀草稿"}
+                      className="ui-button-success h-8 min-h-8 shrink-0 gap-1 whitespace-nowrap px-2 text-xs"
+                    >
+                      <CheckCircle2 size={13} /> 一键沉淀{selectedDraftCount > 0 ? " " + selectedDraftCount : ""}
+                    </button>
                     <button type="button" onClick={() => setMobileBatchOpen(true)} disabled={saving} className="ui-button-ghost h-8 min-h-8 gap-1 px-2 text-xs font-semibold xl:hidden">
                       批量操作 <MoreHorizontal size={14} />
                     </button>
@@ -2173,14 +2021,28 @@ export default function KnowledgePage({
                       </button>
                     </div>
                     <div className="flex w-full items-center gap-1.5">
-                      <input
-                        value={batchValue}
-                        onChange={(e) => setBatchValue(e.target.value)}
-                        onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); void applyBatch(); } }}
-                        placeholder={batchMode === "tag" || batchMode === "remove_tag" ? "标签，逗号分隔多个" : batchMode === "move_project" ? "目标空间名" : "空间名"}
-                        className="ui-field h-9 min-w-0 flex-1 rounded-lg px-2.5 text-xs"
-                        autoFocus
-                      />
+                      {batchMode === "tag" || batchMode === "remove_tag" ? (
+                        <input
+                          value={batchValue}
+                          onChange={(e) => setBatchValue(e.target.value)}
+                          onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); void applyBatch(); } }}
+                          placeholder="标签，逗号分隔多个"
+                          className="ui-field h-9 min-w-0 flex-1 rounded-lg px-2.5 text-xs"
+                          autoFocus
+                        />
+                      ) : (
+                        <SpaceAutocomplete
+                          spaces={projectCounts}
+                          value={batchValue}
+                          onChange={setBatchValue}
+                          onEnter={() => void applyBatch()}
+                          placeholder={batchMode === "move_project" ? "选择目标空间" : "选择空间"}
+                          ariaLabel={batchMode === "move_project" ? "批量移动的目标空间" : "批量操作的空间"}
+                          inputClassName="ui-field h-9 pl-8 text-xs"
+                          containerClassName="min-w-0 flex-1"
+                          autoFocus
+                        />
+                      )}
                       <button type="button" onClick={() => void applyBatch()} disabled={saving || !batchValue.trim()} className="ui-button-primary h-9 shrink-0 px-3 text-xs">
                         应用
                       </button>
@@ -2492,38 +2354,26 @@ export default function KnowledgePage({
                     <Folder size={12} /> {project} <X size={12} />
                   </button>
                 ))}
-                <input
+                <SpaceAutocomplete
+                  spaces={projectCounts}
                   value={projectInput}
-                  onChange={(e) => setProjectInput(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter" || e.key === ",") {
-                      e.preventDefault();
-                      addProject();
-                    }
-                    if (e.key === "Backspace" && !projectInput && parsedProjects.length) {
+                  onChange={setProjectInput}
+                  onSelect={(name) => addProject(name)}
+                  onEnter={addProject}
+                  onComma={addProject}
+                  onKeyDown={(event) => {
+                    if (event.key === "Backspace" && !projectInput && parsedProjects.length) {
                       removeProject(parsedProjects[parsedProjects.length - 1]);
                     }
                   }}
-                  onBlur={() => addProject()}
-                  placeholder="归入空间（可多个）"
-                  className="h-8 min-w-[120px] flex-1 border-0 bg-transparent px-1 text-sm text-[var(--ui-text)] outline-hidden placeholder:text-[var(--ui-text-subtle)]"
+                  onBlurCommit={addProject}
+                  placeholder="选择或输入空间"
+                  ariaLabel="卡片所属空间"
+                  inputClassName="h-8 min-w-[120px] flex-1 border-0 bg-transparent px-1 pr-7 text-sm text-[var(--ui-text)] outline-hidden placeholder:text-[var(--ui-text-subtle)]"
+                  containerClassName="min-w-[140px] flex-1"
+                  showIcon={false}
                 />
               </div>
-              {projectSuggestions.length > 0 && (
-                <div className="mt-2 flex flex-wrap items-center gap-1.5">
-                  <span className="text-[11px] text-[var(--ui-text-subtle)]">建议</span>
-                  {projectSuggestions.map(({ name }) => (
-                    <button
-                      key={name}
-                      type="button"
-                      onClick={() => addProject(name)}
-                      className="ui-chip h-7 px-2 py-0.5 text-[11px]"
-                    >
-                      <Folder size={11} className="mr-0.5 inline" />{name}
-                    </button>
-                  ))}
-                </div>
-              )}
             </div>
             <Command shouldFilter={false} className="relative">
               <Command.Input
@@ -2678,40 +2528,6 @@ export default function KnowledgePage({
           )}
         </section>
       </div>
-      <Dialog.Root open={saveViewOpen} onOpenChange={setSaveViewOpen}>
-        <Dialog.Portal>
-          <Dialog.Overlay className="ui-overlay fixed inset-0 z-[70] backdrop-blur-[2px] data-[state=open]:animate-fade-in" />
-          <Dialog.Content className="ui-modal-surface fixed left-1/2 top-1/2 z-[71] w-[min(92vw,420px)] -translate-x-1/2 -translate-y-1/2 rounded-2xl border p-5 outline-hidden">
-            <Dialog.Title className="text-base font-semibold text-[var(--ui-text)]">保存当前视图</Dialog.Title>
-            <Dialog.Description className="mt-1 text-xs leading-5 text-[var(--ui-text-muted)]">
-              保存搜索、空间、标签、状态、类型、质量问题和排序，下次可以直接恢复这组工作条件。
-            </Dialog.Description>
-            <input
-              value={viewName}
-              onChange={(event) => setViewName(event.target.value)}
-              onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); void saveCurrentView(); } }}
-              className="ui-field mt-4 h-10"
-              placeholder="例如：待确认 · FPGA"
-              maxLength={80}
-              autoFocus
-            />
-            <div className="mt-4 flex justify-end gap-2">
-              <Dialog.Close asChild>
-                <button type="button" className="ui-button-secondary h-9 px-3 text-xs">取消</button>
-              </Dialog.Close>
-              <button
-                type="button"
-                onClick={() => void saveCurrentView()}
-                disabled={savingView || !viewName.trim()}
-                className="ui-button-primary h-9 px-3 text-xs"
-              >
-                {savingView ? "保存中..." : "保存视图"}
-              </button>
-            </div>
-          </Dialog.Content>
-        </Dialog.Portal>
-      </Dialog.Root>
-
       <SpaceManagerDialog
         open={spaceManagerOpen}
         onOpenChange={setSpaceManagerOpen}

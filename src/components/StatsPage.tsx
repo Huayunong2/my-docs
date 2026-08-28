@@ -157,8 +157,8 @@ export default function StatsPage({
   const loadRevision = useRef(0);
   const generationInFlight = useRef(false);
   const knowledgeSummaryQuery = useQuery({
-    queryKey: api.knowledgeQueryKeys.summary,
-    queryFn: ({ signal }) => api.getKnowledgeSummary({ signal }),
+    queryKey: api.knowledgeQueryKeys.summary(),
+    queryFn: ({ signal }) => api.getKnowledgeSummary("", { signal }),
     staleTime: 30_000,
   });
 
