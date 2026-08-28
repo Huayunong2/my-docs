@@ -157,7 +157,7 @@ APP_DIR=/srv/daily-summary ./setup.sh --cur
 | `DAILY_SUMMARY_AI_MODEL` | AI 模型名 |
 | `VITE_API_BASE_URL` | 构建桌面端时写入的默认 API 地址 |
 
-AI Key 只应存放在服务端。备份相关变量见 [server/backup.env.example](server/backup.env.example)，其中的 Restic 密码文件和对象存储凭据必须通过独立安全渠道保存。
+也可以直接打开「设置 → AI」编辑 API 地址和 Key，并通过「模型路由」按每日总结、知识卡片提取、周复盘、月复盘选择不同的模型档案。每个档案可以独立设置模型 ID、温度、输出上限、超时、重试和请求间隔；环境变量会作为尚未在设置页保存字段的回退值，设置页保存后服务端会在不重启的情况下使用新配置。API Key 只在服务端保存和使用，不会返回到前端；如果通过设置页保存，它会进入 SQLite 数据库，因此数据库备份同样需要按敏感凭据保护。备份相关变量见 [server/backup.env.example](server/backup.env.example)，其中的 Restic 密码文件和对象存储凭据必须通过独立安全渠道保存。
 
 ## 本地开发
 

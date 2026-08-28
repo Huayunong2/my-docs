@@ -185,6 +185,7 @@ pub(crate) async fn get_week_review(
             title: article.title,
             mood: article.mood,
             tags: article.tags,
+            spaces: article.spaces,
             word_count: article.word_count,
             preview: preview(&article.content, 120),
         };

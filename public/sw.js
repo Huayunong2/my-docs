@@ -1,5 +1,5 @@
 /* 每日总结 Service Worker —— 静态资源离线缓存 */
-const CACHE = "daily-summary-v1";
+const CACHE = "daily-summary-v2";
 const PRECACHE = ["/", "/index.html", "/manifest.webmanifest", "/icon-192.png", "/icon-512.png"];
 
 self.addEventListener("install", (event) => {

@@ -15,6 +15,7 @@ import { loadStatsSnapshot } from "../lib/statsSnapshot";
 import { useCountUp } from "../lib/useCountUp";
 import { ReviewStatusPill } from "./reviews/ReviewShared";
 import PageHeader from "./ui/PageHeader";
+import DatePickerPopover from "./ui/date-picker";
 import { toast } from "sonner";
 import { useQuery } from "@tanstack/react-query";
 
@@ -1445,11 +1446,12 @@ function ReviewPanel({
             <div className="mt-0.5 truncate text-xs font-semibold text-[var(--ui-text)]">{periodLabel}</div>
           </div>
           {kind === "weekly" && anchorDate && onAnchorDateChange && (
-            <ReviewDatePicker
+            <DatePickerPopover
               value={anchorDate}
               open={datePickerOpen}
               onOpenChange={setDatePickerOpen}
               onChange={onAnchorDateChange}
+              label="周内任意一天"
             />
           )}
         </div>
@@ -1514,82 +1516,6 @@ function ReviewPanel({
         </button>
       </div>
     </section>
-  );
-}
-
-function ReviewDatePicker({
-  value,
-  open,
-  onOpenChange,
-  onChange,
-}: {
-  value: string;
-  open: boolean;
-  onOpenChange: (open: boolean) => void;
-  onChange: (date: string) => void;
-}) {
-  const [viewDate, setViewDate] = useState(() => new Date(`${value}T12:00:00`));
-  useEffect(() => {
-    if (!open) return;
-    setViewDate(new Date(`${value}T12:00:00`));
-  }, [open, value]);
-  const year = viewDate.getFullYear();
-  const month = viewDate.getMonth();
-  const first = new Date(year, month, 1);
-  const daysInMonth = new Date(year, month + 1, 0).getDate();
-  const cells = [
-    ...Array.from({ length: first.getDay() }, () => ""),
-    ...Array.from({ length: daysInMonth }, (_, index) => {
-      const day = index + 1;
-      return `${year}-${String(month + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
-    }),
-  ];
-  return (
-    <div className="relative sm:w-[168px]">
-      <div className="mb-1 text-xs text-[var(--ui-text-subtle)]">周内任意一天</div>
-      <button
-        type="button"
-        onClick={() => onOpenChange(!open)}
-        className="ui-field flex h-9 w-full items-center justify-between rounded-lg px-3 py-0 font-mono text-xs font-semibold"
-      >
-        {value.replace(/-/g, "/")}
-        <CalendarRange size={13} className="text-[var(--ui-text-subtle)]" />
-      </button>
-      {open && (
-        <div className="ui-floating-surface absolute right-0 top-full z-40 mt-2 w-[280px] rounded-xl p-3">
-          <div className="mb-3 flex items-center justify-between">
-            <button type="button" onClick={() => setViewDate(new Date(year, month - 1, 1))} className="ui-icon-button h-8 w-8"><ChevronLeft size={16} /></button>
-            <div className="text-sm font-semibold text-[var(--ui-text)]">{year} 年 {month + 1} 月</div>
-            <button type="button" onClick={() => setViewDate(new Date(year, month + 1, 1))} className="ui-icon-button h-8 w-8"><ChevronRight size={16} /></button>
-          </div>
-          <div className="grid grid-cols-7 gap-1 text-center text-[11px] font-medium text-[var(--ui-text-subtle)]">
-            {weekdays.map((day) => <div key={day} className="py-1">{day}</div>)}
-          </div>
-          <div className="mt-1 grid grid-cols-7 gap-1">
-            {cells.map((cell, index) => (
-              cell ? (
-                <button
-                  key={cell}
-                  type="button"
-                  onClick={() => {
-                    onChange(cell);
-                    onOpenChange(false);
-                  }}
-                  className={[
-                    "h-8 rounded-lg text-xs font-medium transition-colors",
-                      cell === value ? "ui-button-primary h-8 px-0 text-xs" : "text-[var(--ui-text-muted)] hover:bg-[var(--ui-surface-hover)]",
-                  ].join(" ")}
-                >
-                  {Number(cell.slice(-2))}
-                </button>
-              ) : (
-                <div key={`blank-${index}`} className="h-8" />
-              )
-            ))}
-          </div>
-        </div>
-      )}
-    </div>
   );
 }
 

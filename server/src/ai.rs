@@ -6,30 +6,52 @@ use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::Json;
 use serde_json::Value;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
+use tokio::sync::Semaphore;
 
 type AppState = Arc<Mutex<Database>>;
 use std::collections::BTreeSet;
 
 type MonthlyReviewSource = (String, Vec<String>, Vec<String>);
+const MAX_CONCURRENT_AI_REQUESTS: usize = 8;
+const MAX_AI_SUMMARY_SOURCE_CHARS: usize = 40_000;
+static AI_REQUEST_SLOTS: OnceLock<Arc<Semaphore>> = OnceLock::new();
 
-// ── Helpers ─────────────────────────────────────────
+fn ai_request_slots() -> Arc<Semaphore> {
+    AI_REQUEST_SLOTS
+        .get_or_init(|| Arc::new(Semaphore::new(MAX_CONCURRENT_AI_REQUESTS)))
+        .clone()
+}
 
-fn env_u64(key: &str, default: u64) -> u64 {
-    std::env::var(key)
-        .ok()
-        .and_then(|v| v.parse::<u64>().ok())
-        .unwrap_or(default)
+// ── AI configuration ────────────────────────────────
+
+pub(crate) fn load_ai_config_for_task(
+    db: &Arc<Mutex<Database>>,
+    task: AiTask,
+) -> Result<AiConfig, (StatusCode, String)> {
+    let db = db
+        .lock()
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    db.ai_config_for_task(task)
+        .map(|(config, _)| config)
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))
 }
 
 pub(crate) async fn call_ai(
+    config: AiConfig,
     prompt: String,
     system: &str,
 ) -> Result<(String, String), (StatusCode, String)> {
-    let retries = env_u64("DAILY_SUMMARY_AI_RETRIES", 2);
+    let _permit = ai_request_slots().try_acquire_owned().map_err(|_| {
+        (
+            StatusCode::TOO_MANY_REQUESTS,
+            "当前 AI 请求较多，请稍后再试。".into(),
+        )
+    })?;
+    let retries = config.retries;
     let result = async {
-        let adapter =
-            HttpAiAdapter::from_env().map_err(|failure| (failure.status, failure.message))?;
+        let adapter = HttpAiAdapter::from_config(&config)
+            .map_err(|failure| (failure.status, failure.message))?;
         let response = complete_with_retry(&adapter, &prompt, system, retries, true)
             .await
             .map_err(|failure| (failure.status, failure.message))?;
@@ -43,6 +65,291 @@ pub(crate) async fn call_ai(
     }
     result
 }
+
+fn ai_config_response(config: &AiConfig, api_key_source: &str) -> AiConfigResponse {
+    let configured = !config.api_key.trim().is_empty();
+    AiConfigResponse {
+        configured,
+        api_key_configured: configured,
+        api_key_source: api_key_source.to_string(),
+        base_url: config.base_url.clone(),
+        model: config.model.clone(),
+        temperature: config.temperature,
+        max_tokens: config.max_tokens,
+        timeout_secs: config.timeout_secs,
+        retries: config.retries,
+        min_interval_ms: config.min_interval_ms,
+    }
+}
+
+fn valid_ai_base_url(value: &str) -> bool {
+    let Some((scheme, host_and_path)) = value.split_once("://") else {
+        return false;
+    };
+    matches!(scheme, "http" | "https")
+        && !host_and_path.is_empty()
+        && !host_and_path.starts_with('/')
+        && !value.chars().any(|character| character.is_whitespace())
+}
+
+fn validate_ai_generation_settings(
+    model: &str,
+    temperature: f32,
+    max_tokens: u64,
+    timeout_secs: u64,
+    retries: u64,
+    min_interval_ms: u64,
+) -> Result<(), (StatusCode, String)> {
+    if model.trim().is_empty() || model.chars().count() > 160 {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "AI 模型不能为空，且长度不能超过 160 个字符。".into(),
+        ));
+    }
+    if !temperature.is_finite() || !(0.0..=2.0).contains(&temperature) {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "温度必须是 0–2 之间的数字。".into(),
+        ));
+    }
+    if max_tokens > 1_000_000 {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "输出上限必须是 0–1,000,000 之间的整数，0 表示不主动限制。".into(),
+        ));
+    }
+    if !(1..=600).contains(&timeout_secs) {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "超时必须是 1–600 秒之间的整数。".into(),
+        ));
+    }
+    if retries > 10 {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "重试次数必须是 0–10 之间的整数。".into(),
+        ));
+    }
+    if min_interval_ms > 60_000 {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "请求间隔必须是 0–60,000 毫秒之间的整数。".into(),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_ai_config(config: &AiConfig) -> Result<(), (StatusCode, String)> {
+    if !valid_ai_base_url(&config.base_url) {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "AI API 地址必须是 http:// 或 https:// 开头的兼容接口地址。".into(),
+        ));
+    }
+    validate_ai_generation_settings(
+        &config.model,
+        config.temperature,
+        config.max_tokens,
+        config.timeout_secs,
+        config.retries,
+        config.min_interval_ms,
+    )
+}
+
+fn valid_ai_profile_id(value: &str) -> bool {
+    let mut characters = value.chars();
+    matches!(characters.next(), Some(character) if character.is_ascii_lowercase() || character.is_ascii_digit())
+        && characters.all(|character| {
+            character.is_ascii_lowercase()
+                || character.is_ascii_digit()
+                || character == '-'
+                || character == '_'
+        })
+        && value.chars().count() <= 32
+}
+
+fn normalize_ai_routing(mut routing: AiRoutingConfig) -> AiRoutingConfig {
+    for profile in &mut routing.profiles {
+        profile.id = profile.id.trim().to_string();
+        profile.name = profile.name.trim().to_string();
+        profile.model = profile.model.trim().to_string();
+    }
+    routing.fallback_profile = routing.fallback_profile.trim().to_string();
+    routing.routes = routing
+        .routes
+        .into_iter()
+        .map(|(task, profile)| (task.trim().to_string(), profile.trim().to_string()))
+        .collect();
+    routing
+}
+
+fn validate_ai_routing(routing: &AiRoutingConfig) -> Result<(), (StatusCode, String)> {
+    if routing.profiles.is_empty() || routing.profiles.len() > 8 {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "模型档案数量必须是 1–8 个。".into(),
+        ));
+    }
+    let mut profile_ids = BTreeSet::new();
+    for profile in &routing.profiles {
+        if !valid_ai_profile_id(&profile.id) {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                "模型档案 ID 只能包含小写字母、数字、连字符或下划线。".into(),
+            ));
+        }
+        if !profile_ids.insert(profile.id.as_str()) {
+            return Err((StatusCode::BAD_REQUEST, "模型档案 ID 不能重复。".into()));
+        }
+        if profile.name.is_empty() || profile.name.chars().count() > 40 {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                "模型档案名称不能为空，且长度不能超过 40 个字符。".into(),
+            ));
+        }
+        validate_ai_generation_settings(
+            &profile.model,
+            profile.temperature,
+            profile.max_tokens,
+            profile.timeout_secs,
+            profile.retries,
+            profile.min_interval_ms,
+        )?;
+    }
+    if !profile_ids.contains(routing.fallback_profile.as_str()) {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "默认模型档案必须指向一个已存在的档案。".into(),
+        ));
+    }
+    for (task, profile_id) in &routing.routes {
+        if !AiTask::ALL.iter().any(|candidate| candidate.key() == task) {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                format!("不支持的 AI 任务路由：{task}"),
+            ));
+        }
+        if !profile_ids.contains(profile_id.as_str()) {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                format!("任务路由引用了不存在的模型档案：{profile_id}"),
+            ));
+        }
+    }
+    Ok(())
+}
+
+pub(crate) async fn get_ai_config(
+    State(db): State<AppState>,
+) -> Result<Json<AiConfigResponse>, (StatusCode, String)> {
+    let db = db
+        .lock()
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let config = db
+        .ai_config()
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let source = db
+        .ai_api_key_source()
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    Ok(Json(ai_config_response(&config, source)))
+}
+
+pub(crate) async fn update_ai_config(
+    State(db): State<AppState>,
+    Json(payload): Json<UpdateAiConfigPayload>,
+) -> Result<Json<AiConfigResponse>, (StatusCode, String)> {
+    let UpdateAiConfigPayload {
+        api_key,
+        clear_api_key,
+        base_url,
+        model,
+        temperature,
+        max_tokens,
+        timeout_secs,
+        retries,
+        min_interval_ms,
+    } = payload;
+    if clear_api_key
+        && api_key
+            .as_ref()
+            .map(|value| !value.trim().is_empty())
+            .unwrap_or(false)
+    {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "清除 API Key 时不要同时填写新的 API Key。".into(),
+        ));
+    }
+    if !clear_api_key
+        && api_key
+            .as_ref()
+            .map(|value| value.trim().is_empty())
+            .unwrap_or(false)
+    {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "API Key 不能为空；如需停用，请勾选清除 API Key。".into(),
+        ));
+    }
+
+    let mut db = db
+        .lock()
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let update_api_key = clear_api_key || api_key.is_some();
+    let current = db
+        .ai_config()
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let config = AiConfig {
+        api_key: if clear_api_key {
+            String::new()
+        } else if let Some(value) = api_key {
+            value.trim().to_string()
+        } else {
+            current.api_key
+        },
+        base_url: base_url.trim().trim_end_matches('/').to_string(),
+        model: model.trim().to_string(),
+        temperature,
+        max_tokens,
+        timeout_secs,
+        retries,
+        min_interval_ms,
+    };
+    validate_ai_config(&config)?;
+    let config = db
+        .update_ai_config(&config, update_api_key)
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let source = db
+        .ai_api_key_source()
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    Ok(Json(ai_config_response(&config, source)))
+}
+
+pub(crate) async fn get_ai_routing(
+    State(db): State<AppState>,
+) -> Result<Json<AiRoutingConfig>, (StatusCode, String)> {
+    let db = db
+        .lock()
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    db.ai_routing()
+        .map(Json)
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))
+}
+
+pub(crate) async fn update_ai_routing(
+    State(db): State<AppState>,
+    Json(payload): Json<AiRoutingConfig>,
+) -> Result<Json<AiRoutingConfig>, (StatusCode, String)> {
+    let routing = normalize_ai_routing(payload);
+    validate_ai_routing(&routing)?;
+    let mut db = db
+        .lock()
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    db.update_ai_routing(&routing)
+        .map(Json)
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))
+}
+
 pub(crate) async fn list_reviews(
     State(db): State<AppState>,
     Query(q): Query<ReviewListQuery>,
@@ -507,7 +814,14 @@ pub(crate) async fn generate_review(
             source = source
         )
     };
+    let task = if kind == "weekly" {
+        AiTask::WeeklyReview
+    } else {
+        AiTask::MonthlyReview
+    };
+    let ai_config = load_ai_config_for_task(&db, task)?;
     let (raw_content, model) = call_ai(
+        ai_config,
         prompt,
         "你是一个严谨的中文复盘文档整理助手。只基于给定材料，区分事实和猜测，不编造。必须输出 Markdown，不要输出 JSON。",
     )
@@ -591,10 +905,22 @@ pub(crate) async fn delete_review(
     Ok(StatusCode::NO_CONTENT)
 }
 pub(crate) async fn ai_summary(
+    State(db): State<AppState>,
     Json(payload): Json<AiSummaryPayload>,
 ) -> Result<Json<AiSummaryResponse>, (StatusCode, String)> {
-    if payload.content.trim().is_empty() {
+    let source = payload.content.trim();
+    if source.is_empty() {
         return Err((StatusCode::BAD_REQUEST, "Content is required".into()));
+    }
+    let source_chars = source.chars().count();
+    if source_chars > MAX_AI_SUMMARY_SOURCE_CHARS {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            format!(
+                "内容过长（{} 字），当日 AI 复盘最多处理 {} 字，请先拆分或缩短内容",
+                source_chars, MAX_AI_SUMMARY_SOURCE_CHARS
+            ),
+        ));
     }
 
     let prompt = r#"基于以下记录整理一份简洁的当日复盘，只提炼原文已有信息，不做推断。
@@ -630,9 +956,11 @@ pub(crate) async fn ai_summary(
 
 原文：
 {content}"#
-        .replace("{content}", &payload.content);
+        .replace("{content}", source);
 
+    let ai_config = load_ai_config_for_task(&db, AiTask::DailySummary)?;
     let (summary, _) = call_ai(
+        ai_config,
         prompt,
         "你是一个严谨、克制的中文复盘文档整理助手。只基于给定原文整理，不编造、不推断。不要输出未来计划、建议或心理评价，除非原文明确写出。你的目标是生成一份短小、可复习、可自测、答案有依据的当日复盘。",
     )

@@ -1,6 +1,6 @@
 import { useEffect, useState, useCallback } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { ChevronDown, ChevronRight, FileText, FolderArchive } from "lucide-react";
+import { ChevronDown, ChevronRight, FileText, Folder, FolderArchive } from "lucide-react";
 import * as api from "../lib/api";
 import type { Article, ArticleSummary } from "../lib/api";
 import ArticleDetail from "./ArticleDetail";
@@ -171,8 +171,13 @@ export default function ArchivePage({ onEditDate }: { onEditDate: (date: string)
                     </div>
                     <h4 className="mt-0.5 text-sm font-medium text-[var(--ui-text)]">{a.title || "(无标题)"}</h4>
                     <p className="mt-0.5 line-clamp-2 text-xs text-[var(--ui-text-muted)]">{a.preview}</p>
-                    {a.tags.length > 0 && (
+                    {(a.spaces?.length || a.tags.length > 0) && (
                       <div className="mt-2 flex flex-wrap gap-1">
+                        {(a.spaces || []).map((space) => (
+                          <span key={space} className="ui-chip h-6 gap-1 border-[var(--ui-selected-border)] bg-[var(--ui-surface-selected)] px-2 py-0 text-[11px] text-[var(--ui-accent-text)]">
+                            <Folder size={10} /> {space}
+                          </span>
+                        ))}
                         {a.tags.map((tag) => (
                           <span key={tag} className="ui-chip h-6 px-2 py-0 text-[11px]">
                             #{tag}

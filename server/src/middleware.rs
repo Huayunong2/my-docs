@@ -104,10 +104,50 @@ pub(crate) fn configured_cors() -> CorsLayer {
         .allow_headers([header::AUTHORIZATION, header::CONTENT_TYPE])
         .allow_origin(AllowOrigin::predicate(move |origin: &HeaderValue, _| {
             let origin = origin.to_str().unwrap_or_default();
-            origin.starts_with("http://localhost:")
-                || origin.starts_with("http://127.0.0.1:")
-                || origin.starts_with("tauri://")
-                || origin.starts_with("https://tauri.localhost")
-                || allowed.iter().any(|candidate| candidate == origin)
+            is_allowed_local_origin(origin) || allowed.iter().any(|candidate| candidate == origin)
         }))
+}
+
+fn is_allowed_local_origin(origin: &str) -> bool {
+    // Keep the built-in origins deliberately exact. A prefix check would also
+    // accept values such as `https://tauri.localhost.attacker.example`.
+    if matches!(
+        origin,
+        "tauri://localhost" | "http://tauri.localhost" | "https://tauri.localhost"
+    ) {
+        return true;
+    }
+
+    let Some((scheme, authority)) = origin.split_once("://") else {
+        return false;
+    };
+    if scheme != "http" || authority.is_empty() || authority.contains(['/', '?', '#', '@']) {
+        return false;
+    }
+
+    let (host, port) = match authority.rsplit_once(':') {
+        Some((host, port)) if !host.contains(':') => (host, Some(port)),
+        _ => (authority, None),
+    };
+    if !matches!(host, "localhost" | "127.0.0.1") {
+        return false;
+    }
+    port.is_none_or(|value| !value.is_empty() && value.parse::<u16>().is_ok())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_allowed_local_origin;
+
+    #[test]
+    fn local_cors_origins_require_a_known_host() {
+        assert!(is_allowed_local_origin("http://localhost:5173"));
+        assert!(is_allowed_local_origin("http://127.0.0.1"));
+        assert!(is_allowed_local_origin("https://tauri.localhost"));
+        assert!(!is_allowed_local_origin(
+            "https://tauri.localhost.attacker.example"
+        ));
+        assert!(!is_allowed_local_origin("http://localhost.evil:5173"));
+        assert!(!is_allowed_local_origin("http://localhost:not-a-port"));
+    }
 }

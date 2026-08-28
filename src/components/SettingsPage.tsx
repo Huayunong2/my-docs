@@ -9,8 +9,22 @@ import BackupPanel from "./settings/BackupPanel";
 import ExportPanel from "./settings/ExportPanel";
 import ReviewSettingsPanel from "./settings/ReviewSettingsPanel";
 import PageHeader from "./ui/PageHeader";
+import { readSessionStorage, removeSessionStorage } from "../lib/storage";
 
 type Tab = "connect" | "review" | "ai" | "backup" | "export" | "appearance";
+
+const settingsTabStorageKey = "daily-summary-settings-tab";
+const settingsTabs: Tab[] = ["connect", "review", "ai", "backup", "export", "appearance"];
+
+function initialSettingsTab(): Tab {
+  if (typeof window === "undefined") return "connect";
+  const requested = readSessionStorage(settingsTabStorageKey);
+  if (requested && settingsTabs.includes(requested as Tab)) {
+    removeSessionStorage(settingsTabStorageKey);
+    return requested as Tab;
+  }
+  return "connect";
+}
 
 interface SettingsPageProps {
   accentTheme: string;
@@ -29,7 +43,7 @@ const THEMES = [
 ];
 
 export default function SettingsPage({ accentTheme, onChangeAccentTheme, themeMode, onChangeThemeMode }: SettingsPageProps) {
-  const [tab, setTab] = useState<Tab>("connect");
+  const [tab, setTab] = useState<Tab>(initialSettingsTab);
   const contentRef = useRef<HTMLDivElement>(null);
   const labels: Record<Tab, string> = { connect: "连接", review: "复习", ai: "AI", backup: "备份", export: "导出", appearance: "外观" };
   const icons: Record<Tab, LucideIcon> = { connect: Plug, review: SlidersHorizontal, ai: Bot, backup: DatabaseBackup, export: Download, appearance: Palette };
