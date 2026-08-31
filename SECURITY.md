@@ -24,8 +24,11 @@
 ## 部署安全边界
 
 - 生产环境必须配置 `DAILY_SUMMARY_TOKEN`，不要启用 `DAILY_SUMMARY_ALLOW_NO_TOKEN=1`。
+- 服务端会拒绝 `DAILY_SUMMARY_ALLOW_NO_TOKEN=1` 与非 loopback 监听地址的组合；本地无令牌开发只能绑定 `127.0.0.1`、`localhost` 或 `::1`。
 - 长期公网使用应采用域名 + HTTPS；公网 IP + HTTP 不提供传输加密。
+- 公网 IP 模式必须视为受控网络例外，启用令牌并限制防火墙或私有网络访问；不要把明文 HTTP 当作安全传输。
 - `server/.env`、`server/.env.backup`、迁移包和 Restic 密码文件都可能包含敏感信息，必须保存在 Git 忽略范围之外并限制文件权限。
+- `setup.sh` 只显示访问令牌的脱敏提示；不得把完整 token、AI Key 或 Restic 密码输出到终端日志、CI 日志或监控消息。
 - AI 功能会把相关内容发送给配置的 AI 服务商；启用前应评估数据处理政策和记录敏感性。
 - Restic 密码丢失会导致异地备份无法恢复，密码需要通过独立安全渠道保存。
 

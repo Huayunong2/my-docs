@@ -19,7 +19,6 @@ import {
   FileText,
   Folder,
   FolderCog,
-  Lightbulb,
   LayoutList,
   LoaderCircle,
   MoreHorizontal,
@@ -28,7 +27,6 @@ import {
   ShieldCheck,
   Rows3,
   SlidersHorizontal,
-  Sparkles,
   Tags,
   Trash2,
   Upload,
@@ -40,6 +38,8 @@ import type { Article, KnowledgeCard, KnowledgeCardStatus, KnowledgeCardType } f
 import { cardStatusLabels as statusLabels, cardTypeLabels as typeLabels } from "../lib/cardLabels";
 import { normalizeSpaceNames, normalizeTags } from "../lib/tags";
 import MarkdownContent from "./MarkdownContent";
+import ArticleDetail from "./ArticleDetail";
+import ReviewSourceDetail from "./ReviewSourceDetail";
 import ReviewItemsPanel from "./ReviewItemsPanel";
 import KnowledgeImportDialog from "./KnowledgeImportDialog";
 import SpaceManagerDialog from "./SpaceManagerDialog";
@@ -60,13 +60,14 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from ".
 import PageHeader, { PageHeaderActions } from "./ui/PageHeader";
 import { toast } from "sonner";
 import { useQueryClient } from "@tanstack/react-query";
-import { readLocalStorage, writeLocalStorage, writeSessionStorage } from "../lib/storage";
+import { connectionReturnStorageKey, readLocalStorage, writeLocalStorage, writeSessionStorage } from "../lib/storage";
 
 const typeOptions = Object.entries(typeLabels) as Array<[KnowledgeCardType, string]>;
 const statusOptions = Object.entries(statusLabels) as Array<[KnowledgeCardStatus, string]>;
 const statusFilterOptions: Array<[KnowledgeStatusFilter, string]> = [["all", "全部"], ...statusOptions];
 const knowledgeQueryStaleTime = 30_000;
 const knowledgePageSize = 24;
+const workflowHelpDismissedKey = "knowledge-workflow-help-dismissed";
 const sortOptions: Array<[KnowledgeSort, string]> = [
   ["updated", "最近更新"],
   ["created", "最近创建"],
@@ -96,6 +97,8 @@ const emptyDraft = {
 type DraftState = typeof emptyDraft;
 type SaveState = "idle" | "saving" | "saved" | "error";
 type NoticeTone = "neutral" | "good" | "bad";
+type KnowledgeValidationField = "title" | "content" | "source";
+type KnowledgeValidationErrors = Partial<Record<KnowledgeValidationField, string>>;
 type KnowledgeView = "list" | "detail";
 type KnowledgeSort = "updated" | "created" | "usage" | "review";
 type KnowledgeUsage = "" | "never_used";
@@ -280,17 +283,26 @@ export default function KnowledgePage({
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [noticeTone, setNoticeTone] = useState<NoticeTone>("neutral");
+  const [fieldErrors, setFieldErrors] = useState<KnowledgeValidationErrors>({});
   const [sourceArticle, setSourceArticle] = useState<Article | null>(null);
+  const [sourceReview, setSourceReview] = useState<api.Review | null>(null);
   const [sourceLoading, setSourceLoading] = useState(false);
+  const [sourceError, setSourceError] = useState("");
+  const [sourceDetailOpen, setSourceDetailOpen] = useState(false);
+  const [organizeOpen, setOrganizeOpen] = useState(false);
+  const [workflowHelpOpen, setWorkflowHelpOpen] = useState(() => readLocalStorage(workflowHelpDismissedKey) !== "1");
   const [draftRelatedIds, setDraftRelatedIds] = useState<string[]>([]);
   const [relatedQuery, setRelatedQuery] = useState("");
   const [reviewHistory, setReviewHistory] = useState<api.ReviewHistoryEntry[]>([]);
   const autoSaveTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
+  const validationSummaryRef = useRef<HTMLDivElement>(null);
+  const knowledgeEditorRef = useRef<EditorView | null>(null);
   const editorGenerationRef = useRef(0);
   const lastSavedSignature = useRef("");
   const touchedCardIds = useRef<Set<string>>(new Set());
   const routeQueryRef = useRef(initialQuery || "");
   const cardListRequestRef = useRef(0);
+  const sourceRequestRef = useRef(0);
   const relatedSearchRequestRef = useRef(0);
   const duplicateSearchRequestRef = useRef(0);
   const { confirm, dialog } = useConfirmDialog();
@@ -314,6 +326,70 @@ export default function KnowledgePage({
     setNotice(message);
     setNoticeTone(tone);
   };
+  const dismissWorkflowHelp = () => {
+    setWorkflowHelpOpen(false);
+    writeLocalStorage(workflowHelpDismissedKey, "1");
+  };
+  const showWorkflowHelp = () => setWorkflowHelpOpen(true);
+
+  const validationFieldLabels: Record<KnowledgeValidationField, string> = {
+    title: "标题",
+    content: "正文",
+    source: "来源追溯",
+  };
+  const validationFieldIds: Record<KnowledgeValidationField, string> = {
+    title: "knowledge-card-title",
+    content: "knowledge-card-content",
+    source: "knowledge-source-excerpt",
+  };
+  const validationErrorIds: Record<KnowledgeValidationField, string> = {
+    title: "knowledge-card-title-error",
+    content: "knowledge-card-content-error",
+    source: "knowledge-source-error",
+  };
+  const validationEntries = (Object.entries(fieldErrors) as Array<[KnowledgeValidationField, string]>)
+    .filter(([, message]) => !!message);
+
+  const focusValidationField = (field: KnowledgeValidationField) => {
+    const target = document.getElementById(validationFieldIds[field]);
+    if (!target) return;
+    target.scrollIntoView({ block: "center", behavior: "smooth" });
+    if (field === "content") {
+      const editorContent = target.querySelector<HTMLElement>(".cm-content");
+      editorContent?.focus();
+      return;
+    }
+    (target as HTMLElement).focus();
+  };
+
+  const reportValidation = (errors: KnowledgeValidationErrors) => {
+    setFieldErrors(errors);
+    showNotice(`还有 ${Object.keys(errors).length} 项需要处理。`, "bad");
+    window.setTimeout(() => validationSummaryRef.current?.focus(), 0);
+  };
+
+  const clearValidationFields = (...fields: KnowledgeValidationField[]) => {
+    if (!fields.length) return;
+    setFieldErrors((current) => {
+      const next = { ...current };
+      fields.forEach((field) => { delete next[field]; });
+      return next;
+    });
+  };
+
+  const syncEditorAccessibility = () => {
+    const editorContent = knowledgeEditorRef.current?.contentDOM;
+    if (!editorContent) return;
+    editorContent.setAttribute("aria-label", "知识卡片正文");
+    editorContent.setAttribute("aria-required", "true");
+    editorContent.setAttribute("aria-describedby", ["knowledge-card-content-help", fieldErrors.content ? validationErrorIds.content : ""].filter(Boolean).join(" "));
+    if (fieldErrors.content) editorContent.setAttribute("aria-invalid", "true");
+    else editorContent.removeAttribute("aria-invalid");
+  };
+
+  useEffect(() => {
+    syncEditorAccessibility();
+  }, [fieldErrors.content]);
 
   const changeDensity = (next: KnowledgeDensity) => {
     setDensity(next);
@@ -452,6 +528,39 @@ export default function KnowledgePage({
     void loadCards(false, true, nextQuery, undefined, 1);
   };
 
+  const resetFilters = () => {
+    routeQueryRef.current = "";
+    setQuery("");
+    setActiveStatus("all");
+    setTypeFilter("");
+    setUsageFilter("");
+    setQualityFilter("");
+    setTagFilter("");
+    setProjectFilter("");
+    setSort("updated");
+    setPage(1);
+    onSearchParamsChange?.({
+      q: undefined,
+      status: "all",
+      type: undefined,
+      usage: undefined,
+      quality: undefined,
+      tag: undefined,
+      project: undefined,
+      sort: undefined,
+      page: undefined,
+    });
+    void loadCards(false, true, "", {
+      cardType: "",
+      status: "all",
+      usage: "",
+      quality: "",
+      tag: "",
+      project: "",
+      sort: "updated",
+    }, 1);
+  };
+
   useEffect(() => {
     if (!projectFilter.trim()) {
       setSpaceArticles([]);
@@ -477,7 +586,11 @@ export default function KnowledgePage({
     }
     const saveGeneration = editorGenerationRef.current;
     const pending = payloadFromDraft(draft, draftRelatedIds);
-    if (!pending.title || !pending.content) {
+    const pendingErrors: KnowledgeValidationErrors = {};
+    if (!pending.title) pendingErrors.title = "请输入标题，用一句话说明这条知识。";
+    if (!pending.content) pendingErrors.content = "请输入正文，先写清可复习的结论。";
+    if (Object.keys(pendingErrors).length > 0) {
+      reportValidation(pendingErrors);
       throw new Error("请先补全当前卡片的标题和内容。");
     }
     const currentCard = selectedCard?.id === selectedId
@@ -686,6 +799,47 @@ export default function KnowledgePage({
     return () => { cancelled = true; };
   }, [queryClient]);
 
+  const loadSourceDetail = async (): Promise<boolean> => {
+    const sourceArticleId = (draft.source_article_id || selectedCard?.source_article_id || "").trim();
+    const sourceReviewId = (draft.source_review_id || selectedCard?.source_review_id || "").trim();
+    const sourceDate = (draft.source_date || selectedCard?.source_date || "").trim();
+    const requestId = ++sourceRequestRef.current;
+    setSourceLoading(true);
+    setSourceError("");
+    setSourceArticle(null);
+    setSourceReview(null);
+    try {
+      if (sourceArticleId) {
+        const article = await api.getArticle(sourceArticleId);
+        if (requestId !== sourceRequestRef.current) return false;
+        setSourceArticle(article);
+        return true;
+      }
+      if (sourceReviewId) {
+        const review = await api.getReview(sourceReviewId);
+        if (requestId !== sourceRequestRef.current) return false;
+        setSourceReview(review);
+        return true;
+      }
+      if (sourceDate) {
+        const article = await api.getTodayArticle(sourceDate);
+        if (!article) throw new Error(`找不到 ${sourceDate} 的每日记录`);
+        if (requestId !== sourceRequestRef.current) return false;
+        setSourceArticle(article);
+        return true;
+      }
+      throw new Error("当前卡片没有可定位的来源");
+    } catch (loadError) {
+      if (requestId !== sourceRequestRef.current) return false;
+      setSourceArticle(null);
+      setSourceReview(null);
+      setSourceError(api.getErrorMessage(loadError));
+      return false;
+    } finally {
+      if (requestId === sourceRequestRef.current) setSourceLoading(false);
+    }
+  };
+
   useEffect(() => {
     let cancelled = false;
     queryClient.fetchQuery({
@@ -700,17 +854,29 @@ export default function KnowledgePage({
 
   useEffect(() => {
     if (!selectedCard?.source_article_id) {
+      sourceRequestRef.current += 1;
       setSourceArticle(null);
+      setSourceReview(null);
+      setSourceError("");
+      setSourceLoading(false);
       return;
     }
     let cancelled = false;
+    const requestId = ++sourceRequestRef.current;
+    setSourceArticle(null);
+    setSourceReview(null);
+    setSourceError("");
     setSourceLoading(true);
     api.getArticle(selectedCard.source_article_id)
-      .then((article) => { if (!cancelled) setSourceArticle(article); })
-      .catch(() => { if (!cancelled) setSourceArticle(null); })
-      .finally(() => { if (!cancelled) setSourceLoading(false); });
+      .then((article) => { if (!cancelled && requestId === sourceRequestRef.current) setSourceArticle(article); })
+      .catch((error) => { if (!cancelled && requestId === sourceRequestRef.current) { setSourceArticle(null); setSourceReview(null); setSourceError(api.getErrorMessage(error)); } })
+      .finally(() => { if (!cancelled && requestId === sourceRequestRef.current) setSourceLoading(false); });
     return () => { cancelled = true; };
   }, [selectedCard?.source_article_id]);
+
+  const retrySourceLoad = () => {
+    void loadSourceDetail();
+  };
 
   useEffect(() => {
     if (!selectedId || !dirty) return;
@@ -754,6 +920,11 @@ export default function KnowledgePage({
     editorGenerationRef.current += 1;
     setDraft((value) => ({ ...value, ...patch }));
     setDirty(true);
+    const fieldsToClear: KnowledgeValidationField[] = [];
+    if ("title" in patch) fieldsToClear.push("title");
+    if ("content" in patch) fieldsToClear.push("content");
+    if (["source_date", "source_article_id", "source_review_id", "source_excerpt"].some((field) => field in patch)) fieldsToClear.push("source");
+    clearValidationFields(...fieldsToClear);
     setNotice("");
     setSaveState("idle");
   };
@@ -840,8 +1011,12 @@ export default function KnowledgePage({
     setDraft(toDraft(card));
     setDraftRelatedIds(declaredRelatedIds(card));
     setDirty(false);
+    setFieldErrors({});
     setNotice("");
     setSaveState("idle");
+    setOrganizeOpen(false);
+    setSourceDetailOpen(false);
+    setSourceReview(null);
     lastSavedSignature.current = JSON.stringify(payloadFromDraft(toDraft(card), declaredRelatedIds(card)));
     // 复用追踪：每张卡在页面会话内只记一次打开
     if (!touchedCardIds.current.has(card.id)) {
@@ -1040,7 +1215,13 @@ export default function KnowledgePage({
       editorGenerationRef.current += 1;
       setSelectedId(null);
       setDraft({ ...emptyDraft, status: "draft" });
+      setOrganizeOpen(false);
+      setSourceDetailOpen(false);
+      setSourceArticle(null);
+      setSourceReview(null);
+      setSourceError("");
       setDraftRelatedIds([]);
+      setFieldErrors({});
       setRelatedQuery("");
       setDirty(false);
       setNotice("");
@@ -1078,10 +1259,14 @@ export default function KnowledgePage({
 
   const saveNewCard = async () => {
     const payload = payloadFromDraft(draft);
-    if (!payload.title || !payload.content) {
-      showNotice("标题和内容都必填。");
+    const validationErrors: KnowledgeValidationErrors = {};
+    if (!payload.title) validationErrors.title = "请输入标题，用一句话说明这条知识。";
+    if (!payload.content) validationErrors.content = "请输入正文，先写清可复习的结论。";
+    if (Object.keys(validationErrors).length > 0) {
+      reportValidation(validationErrors);
       return;
     }
+    setFieldErrors({});
     setSaving(true);
     try {
       const creating = !selectedId;
@@ -1097,6 +1282,7 @@ export default function KnowledgePage({
       setDraftRelatedIds(declaredRelatedIds(saved));
       setDetailCard(saved);
       setDirty(false);
+      setFieldErrors({});
       setSaveState("saved");
       lastSavedSignature.current = JSON.stringify(payloadFromDraft(toDraft(saved), declaredRelatedIds(saved)));
       const message = selectedId ? "已保存知识卡片。" : "已创建知识卡片。";
@@ -1123,13 +1309,15 @@ export default function KnowledgePage({
       });
       if (missingSource.length > 0) {
         const message = missingSource.length === 1
-          ? "确认入库前请补充来源日期、来源 ID 或原文片段。"
+          ? "确认沉淀前请补充来源日期、来源 ID 或原文片段。"
           : `有 ${missingSource.length} 张卡片缺少来源，请补齐后再批量确认。`;
-        showNotice(message, "bad");
+        if (missingSource.length === 1 && missingSource[0] === selectedId) reportValidation({ source: message });
+        else showNotice(message, "bad");
         toast.error(message);
         return;
       }
     }
+    setFieldErrors({});
     setSaving(true);
     try {
       if (!(await saveDirtyDraft())) {
@@ -1143,6 +1331,7 @@ export default function KnowledgePage({
       await invalidateKnowledgeQueries();
       setSelectedIds([]);
       await loadCards(false, false);
+      setFieldErrors({});
       const message = status === "confirmed" ? `已确认 ${ids.length} 张卡片。` : "状态已更新。";
       showNotice(message, "good");
       toast.success(message);
@@ -1293,14 +1482,82 @@ export default function KnowledgePage({
   };
 
   const openSource = () => {
-    if (draft.source_review_id || selectedCard?.source_review_id) {
-      onNavigate("reviews");
-      return;
-    }
-    const sourceDate = sourceArticle?.date || draft.source_date || selectedCard?.source_date;
-    if (sourceDate) onEditDate(sourceDate);
+    const open = async () => {
+      if (dirty && selectedId) {
+        try {
+          if (!(await saveDirtyDraft())) return;
+        } catch (e) {
+          setSaveState("error");
+          showNotice(api.getErrorMessage(e), "bad");
+          return;
+        }
+      } else if (dirty && hasDraftInput(draft)) {
+        const leave = await confirm({
+          title: "离开新卡片",
+          message: "当前新卡片还没有创建，确定先离开去查看来源吗？",
+          confirmText: "离开并查看来源",
+          danger: true,
+        });
+        if (!leave) return;
+      }
+      if (sourceArticle || sourceReview) {
+        setSourceDetailOpen(true);
+        return;
+      }
+      if (await loadSourceDetail()) setSourceDetailOpen(true);
+    };
+    void open();
+  };
+  const editSourceArticle = (date: string) => {
+    const open = async () => {
+      if (dirty && selectedId) {
+        try {
+          if (!(await saveDirtyDraft())) return;
+        } catch (e) {
+          setSaveState("error");
+          showNotice(api.getErrorMessage(e), "bad");
+          return;
+        }
+      }
+      setSourceDetailOpen(false);
+      onEditDate(date);
+    };
+    void open();
+  };
+  const openConnectionSettings = () => {
+    const open = async () => {
+      if (dirty && selectedId) {
+        try {
+          if (!(await saveDirtyDraft())) return;
+        } catch (e) {
+          setSaveState("error");
+          showNotice(api.getErrorMessage(e), "bad");
+          return;
+        }
+      } else if (dirty && hasDraftInput(draft)) {
+        const leave = await confirm({
+          title: "离开编辑",
+          message: "当前内容尚未创建，确定先去连接设置吗？",
+          confirmText: "离开并打开设置",
+          danger: true,
+        });
+        if (!leave) return;
+      }
+      if (typeof window !== "undefined") {
+        writeSessionStorage("daily-summary-settings-tab", "connect");
+        writeSessionStorage(connectionReturnStorageKey, `${window.location.pathname}${window.location.search}`);
+      }
+      onNavigate("settings");
+    };
+    void open();
   };
   const currentSourceType = draft.source_review_id || selectedCard?.source_review_id ? "AI 复盘" : "每日记录";
+  const verificationStage = draft.status === "confirmed"
+    ? "confirmed"
+    : hasKnowledgeSource(draft)
+      ? "source"
+      : "draft";
+  const verificationStageIndex = verificationStage === "confirmed" ? 3 : verificationStage === "source" ? 2 : 1;
 
   const toggleBatchMode = (mode: Exclude<KnowledgeBatchMode, "">) => {
     setBatchMode((current) => current === mode ? "" : mode);
@@ -1322,17 +1579,68 @@ export default function KnowledgePage({
   const activeStatusLabel = activeStatus === "all" ? "全部状态" : statusLabels[activeStatus];
   const emptyStatusLabel = activeStatus === "all" ? "卡片" : `${statusLabels[activeStatus]}卡片`;
   const qualityScopeLabel = projectFilter ? "空间「" + projectFilter + "」" : "全库";
+  const authError = /令牌|token|授权|认证/i.test(error);
+  const sourceAuthError = /令牌|token|授权|认证/i.test(sourceError);
+  const sourceArticleId = (draft.source_article_id || selectedCard?.source_article_id || "").trim();
+  const sourceReviewId = (draft.source_review_id || selectedCard?.source_review_id || "").trim();
+  const hasSourceReference = Boolean(
+    sourceArticleId
+    || sourceReviewId
+    || draft.source_date
+    || selectedCard?.source_date
+    || sourceArticle?.date,
+  );
+  const sourceActionLabel = sourceArticle
+    ? "查看原文"
+    : sourceReview ? "查看复盘" : sourceReviewId ? "查看复盘" : "定位原文";
+  const organizeSummary = selectedId
+    ? [
+        typeLabels[draft.card_type],
+        statusLabels[draft.status],
+        parsedTags.length ? `${parsedTags.length} 个标签` : "无标签",
+        parsedProjects.length ? `${parsedProjects.length} 个空间` : "未归入空间",
+        hasKnowledgeSource(draft) ? "有来源" : "缺来源",
+      ].join(" · ")
+    : "类型、标签、空间和关联可稍后补充";
+  const hasSearchFilters = Boolean(activeQuery || typeFilter || usageFilter || qualityFilter || tagFilter || projectFilter);
+  const emptyStateTitle = totalCards > 0
+    ? `第 ${page} 页没有卡片`
+    : hasSearchFilters ? "没有符合当前条件的卡片" : `没有${emptyStatusLabel}`;
+  const emptyStateDescription = totalCards > 0
+    ? "当前页已经超出结果范围，请返回上一页。"
+    : hasSearchFilters
+      ? "换个关键词或清除筛选条件，原有卡片不会被删除。"
+      : activeStatus === "draft"
+        ? "从每日记录或周/月复盘提取草稿后，在这里逐条确认。"
+        : activeStatus === "all"
+          ? "先创建一张卡片，标题和正文写好后再补充来源。"
+          : "当前状态还没有卡片，可以回到全部卡片继续整理。";
+  const emptyStateAction = totalCards > 0 && page > 1
+    ? { label: "回到上一页", onClick: () => changePage(page - 1) }
+    : hasSearchFilters
+      ? { label: "清除筛选", onClick: resetFilters }
+      : activeStatus === "draft"
+        ? { label: "导入卡片", onClick: () => setImportOpen(true) }
+        : activeStatus === "all"
+          ? { label: "新建卡片", onClick: startNew }
+          : { label: "查看全部卡片", onClick: () => changeStatus("all") };
 
   return (
     <motion.div
       initial={{ opacity: 0, y: 10 }}
       animate={{ opacity: 1, y: 0 }}
-      className="page-surface page-surface-knowledge min-h-full px-3 pb-24 pt-4 sm:px-4 md:px-8 md:py-6 xl:flex xl:h-full xl:min-h-0 xl:flex-col xl:overflow-hidden"
+      className="page-surface page-surface-knowledge min-w-0 min-h-full overflow-x-hidden px-3 pb-24 pt-4 sm:px-4 md:px-8 md:py-6 xl:flex xl:h-full xl:min-h-0 xl:flex-col xl:overflow-hidden"
     >
       <PageHeader
+        className="knowledge-page-header"
         icon={BookMarked}
         title="知识工作台"
-        description="把真实记录、Markdown 或 AI 整理的内容，沉淀成可追溯、可确认的知识卡片"
+        description={
+          <>
+            <span className="hidden xl:inline">把真实记录、Markdown 或 AI 整理的内容，沉淀成可追溯、可确认的知识卡片</span>
+            <span className="xl:hidden">把记录、Markdown 或 AI 内容，沉淀成可追溯的知识卡片</span>
+          </>
+        }
         navigation={
           <Tabs value={activeStatus} onValueChange={(v) => changeStatus(v as KnowledgeStatusFilter)} className="hidden min-w-0 md:block md:w-full md:max-w-[500px]">
             <TabsList className="grid w-full grid-cols-4">
@@ -1361,28 +1669,39 @@ export default function KnowledgePage({
       />
 
       {error && (
-        <div className="ui-alert-bad mb-4 flex flex-wrap items-center justify-between gap-2">
-          <span>{error}</span>
-          <button type="button" onClick={() => void loadCards(false, false)} disabled={loading} className="ui-button-danger h-8 shrink-0 px-2.5 text-xs">
-            {loading ? "重试中..." : "重试"}
-          </button>
+        <div className="ui-alert-bad mb-4 flex flex-wrap items-center justify-between gap-3" role="alert">
+          <span className="min-w-0 flex-1">{error}</span>
+          <div className="flex shrink-0 items-center gap-2">
+            {authError && (
+              <button
+                type="button"
+                onClick={openConnectionSettings}
+                className="ui-button-primary h-8 px-2.5 text-xs"
+              >
+                前往连接设置
+              </button>
+            )}
+            <button type="button" onClick={() => void loadCards(false, false)} disabled={loading} className="ui-button-ghost h-8 shrink-0 px-2.5 text-xs">
+              {loading ? "重试中..." : "重试"}
+            </button>
+          </div>
         </div>
       )}
 
       {mobileView === "list" && (
-        <div className="mb-3 flex gap-2 xl:hidden">
+        <div className="knowledge-mobile-toolbar mb-4 grid gap-2 xl:hidden">
+          <button type="button" onClick={startNew} className="ui-button-primary h-11 min-h-11 w-full px-3">
+            <Plus size={15} /> <span>新建卡片</span>
+          </button>
           <button
             type="button"
             onClick={() => setMobileFiltersOpen(true)}
-            className="ui-mobile-control flex h-11 min-w-0 flex-1 items-center gap-2 text-left shadow-xs"
+            className="ui-mobile-control flex h-11 min-h-11 w-full min-w-0 items-center gap-2 text-left shadow-xs"
           >
             <Search size={16} className="shrink-0 text-[var(--ui-accent-text)]" />
-            <span className="min-w-0 flex-1 truncate">{query || "搜索与筛选卡片"}</span>
+            <span className="min-w-0 flex-1 truncate">{query || "搜索标题、内容或来源"}</span>
             {activeFilterCount > 0 && <span className="ui-status-accent inline-flex h-5 min-w-5 items-center justify-center rounded-full px-1.5 text-[10px] font-bold">{activeFilterCount}</span>}
             <SlidersHorizontal size={15} className="shrink-0 text-[var(--ui-text-subtle)]" />
-          </button>
-          <button type="button" onClick={startNew} className="ui-button-primary h-11 shrink-0 px-3">
-            <Plus size={15} /> <span>新建</span>
           </button>
         </div>
       )}
@@ -1390,7 +1709,14 @@ export default function KnowledgePage({
       <Sheet open={mobileFiltersOpen} onOpenChange={setMobileFiltersOpen}>
         <SheetContent side="bottom" className="px-0 pb-[calc(0.75rem+env(safe-area-inset-bottom,0px))]">
           <SheetHeader>
-            <SheetTitle>搜索与筛选</SheetTitle>
+            <div className="flex items-center justify-between gap-3">
+              <SheetTitle>搜索与筛选</SheetTitle>
+              {activeFilterCount > 0 && (
+                <button type="button" onClick={resetFilters} className="ui-button-ghost h-8 min-h-8 shrink-0 px-2 text-xs">
+                  重置全部
+                </button>
+              )}
+            </div>
             <SheetDescription>筛选结果会同步到地址栏，刷新后仍可恢复。</SheetDescription>
           </SheetHeader>
           <div className="min-h-0 flex-1 overflow-y-auto px-4">
@@ -1401,6 +1727,7 @@ export default function KnowledgePage({
                 onChange={(e) => setQuery(e.target.value)}
                 onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); searchCards(); setMobileFiltersOpen(false); } }}
                 placeholder="搜索标题、内容或来源"
+                aria-label="搜索标题、内容或来源"
                 className="ui-field h-11 pl-10"
                 autoFocus
               />
@@ -1645,6 +1972,7 @@ export default function KnowledgePage({
                       onChange={(e) => setBatchValue(e.target.value)}
                       onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); void applyBatch(); } }}
                       placeholder="标签，逗号分隔多个"
+                      aria-label={batchMode === "tag" ? "要添加的标签" : "要移除的标签"}
                       className="ui-field h-11 min-w-0 flex-1"
                       autoFocus
                     />
@@ -1684,8 +2012,8 @@ export default function KnowledgePage({
         </SheetContent>
       </Sheet>
 
-      <div className="knowledge-workspace grid gap-4 xl:min-h-0 xl:flex-1 xl:grid-cols-[244px_minmax(360px,430px)_minmax(0,1fr)] xl:items-stretch xl:overflow-hidden">
-        <aside className="knowledge-project-index ui-panel hidden flex-col p-3 xl:flex xl:h-full xl:min-h-0 xl:overflow-hidden">
+      <div className="knowledge-workspace grid min-w-0 gap-4 xl:min-h-0 xl:flex-1 xl:grid-cols-[minmax(320px,430px)_minmax(0,1fr)] 2xl:grid-cols-[244px_minmax(360px,430px)_minmax(0,1fr)] xl:items-stretch xl:overflow-hidden">
+        <aside className="knowledge-project-index ui-panel hidden flex-col p-3 2xl:flex 2xl:h-full 2xl:min-h-0 2xl:overflow-hidden">
           <div className="flex shrink-0 gap-2">
             <div className="relative min-w-0 flex-1">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-[var(--ui-text-subtle)]" size={15} />
@@ -1694,6 +2022,7 @@ export default function KnowledgePage({
               onChange={(e) => setQuery(e.target.value)}
               onKeyDown={(e) => { if (e.key === "Enter") searchCards(); }}
               placeholder="搜索卡片"
+              aria-label="搜索知识卡片"
               className="ui-field h-10 pl-9"
             />
             </div>
@@ -1702,7 +2031,7 @@ export default function KnowledgePage({
             </button>
           </div>
 
-          <div className="mt-4 min-h-0 xl:flex-1 xl:overflow-y-auto xl:overscroll-contain xl:pr-1">
+          <div className="mt-4 min-h-0 2xl:flex-1 2xl:overflow-y-auto 2xl:overscroll-contain 2xl:pr-1">
           {/* 空间导航（一级，突出） */}
           <div>
             <div className="mb-2 flex items-center justify-between gap-2 px-1">
@@ -1767,6 +2096,8 @@ export default function KnowledgePage({
             <button
               type="button"
               onClick={() => setShowFilters(!showFilters)}
+              aria-expanded={showFilters}
+              aria-controls="knowledge-filters"
               className="flex w-full items-center justify-between rounded-lg px-1 py-1.5 text-[11px] font-semibold tracking-[0.06em] text-[var(--ui-text-subtle)] transition-colors hover:text-[var(--ui-text)]"
             >
               <span className="flex items-center gap-2">
@@ -1776,7 +2107,7 @@ export default function KnowledgePage({
               <ChevronDown size={14} className={`transition-transform ${showFilters ? "rotate-180" : ""}`} />
             </button>
             {showFilters && (
-              <div className="mt-2 space-y-4">
+              <div id="knowledge-filters" className="mt-2 space-y-4">
                 <div className="grid grid-cols-3 gap-1.5">
                   {statusFilterOptions.map(([status, label]) => (
                     <button
@@ -1859,20 +2190,31 @@ export default function KnowledgePage({
             )}
           </div>
 
-          <div className="ui-panel-muted mt-4 p-3">
-            <div className="flex items-center gap-2 text-xs font-semibold text-[var(--ui-text)]">
-              <CheckCircle2 size={14} className="text-[var(--ui-accent-text)]" /> 工作流
+          {workflowHelpOpen ? (
+            <div id="knowledge-workflow-help" className="ui-panel-muted mt-4 p-3">
+              <div className="flex items-center justify-between gap-2">
+                <div className="flex items-center gap-2 text-xs font-semibold text-[var(--ui-text)]">
+                  <CheckCircle2 size={14} className="text-[var(--ui-accent-text)]" /> 工作流
+                </div>
+                <button type="button" onClick={dismissWorkflowHelp} className="ui-icon-button h-7 w-7" title="不再显示工作流提示" aria-label="不再显示工作流提示">
+                  <X size={14} />
+                </button>
+              </div>
+              <div className="mt-2.5 space-y-2 text-xs leading-5 text-[var(--ui-text-muted)]">
+                <div className="flex items-start gap-2"><span className="ui-status-muted flex h-5 w-5 shrink-0 items-center justify-center rounded-md font-mono text-[10px]">1</span><span>从记录、复盘或文档生成草稿</span></div>
+                <div className="flex items-start gap-2"><span className="ui-status-muted flex h-5 w-5 shrink-0 items-center justify-center rounded-md font-mono text-[10px]">2</span><span>对照来源片段确认</span></div>
+                <div className="flex items-start gap-2"><span className="ui-status-muted flex h-5 w-5 shrink-0 items-center justify-center rounded-md font-mono text-[10px]">3</span><span>沉淀后用于复习检索</span></div>
+              </div>
+              <div className="ui-soft-divider mt-3 border-t pt-3 text-[11px] leading-5 text-[var(--ui-text-muted)]">
+                <div className="flex items-center gap-1.5 font-semibold text-[var(--ui-accent-text)]"><ShieldCheck size={13} /> 来源约束</div>
+                <p className="mt-1">没有来源片段的内容，不建议确认沉淀。</p>
+              </div>
             </div>
-            <div className="mt-2.5 space-y-2 text-xs leading-5 text-[var(--ui-text-muted)]">
-              <div className="flex items-start gap-2"><span className="ui-status-muted flex h-5 w-5 shrink-0 items-center justify-center rounded-md font-mono text-[10px]">1</span><span>从记录、复盘或文档生成草稿</span></div>
-              <div className="flex items-start gap-2"><span className="ui-status-muted flex h-5 w-5 shrink-0 items-center justify-center rounded-md font-mono text-[10px]">2</span><span>对照来源片段确认</span></div>
-              <div className="flex items-start gap-2"><span className="ui-status-muted flex h-5 w-5 shrink-0 items-center justify-center rounded-md font-mono text-[10px]">3</span><span>沉淀后用于复习检索</span></div>
-            </div>
-            <div className="ui-soft-divider mt-3 border-t pt-3 text-[11px] leading-5 text-[var(--ui-text-muted)]">
-              <div className="flex items-center gap-1.5 font-semibold text-[var(--ui-accent-text)]"><ShieldCheck size={13} /> 来源约束</div>
-              <p className="mt-1">没有来源片段的内容，不建议确认入库。</p>
-            </div>
-          </div>
+          ) : (
+            <button type="button" onClick={showWorkflowHelp} className="ui-button-ghost mt-3 h-8 w-full justify-start px-2 text-xs" aria-expanded={false} aria-controls="knowledge-workflow-help">
+              <CheckCircle2 size={13} /> 显示工作流提示
+            </button>
+          )}
           </div>
           <div className="ui-soft-divider mt-3 shrink-0 border-t pt-3">
             <div className="grid grid-cols-[minmax(0,1fr)_auto] gap-2">
@@ -1894,7 +2236,7 @@ export default function KnowledgePage({
           </div>
         </aside>
 
-        <section className={["knowledge-card-index ui-panel flex flex-col overflow-visible p-2 xl:h-full xl:min-h-0 xl:overflow-hidden", mobileView === "list" ? "" : "hidden", "xl:flex"].join(" ")}>
+        <section className={["knowledge-card-index ui-panel flex min-w-0 flex-col overflow-visible p-2 xl:h-full xl:min-h-0 xl:overflow-hidden", mobileView === "list" ? "" : "hidden", "xl:flex"].join(" ")}>
           <div className="shrink-0 px-2 pt-1">
             <div className="flex min-h-10 items-center justify-between gap-3 border-b border-[var(--ui-border)] pb-2">
               <div className="flex min-w-0 items-center gap-2">
@@ -1910,9 +2252,45 @@ export default function KnowledgePage({
                 {totalCards}
               </span>
             </div>
-            <div className="flex min-h-9 items-center justify-end gap-2 pt-1">
+            <div className="hidden min-h-9 items-center justify-end gap-2 pt-1 xl:flex">
               {cards.length > 0 && (
                 <div className="flex flex-wrap items-center justify-end gap-1">
+                  <div className="hidden 2xl:hidden xl:block">
+                    <DropdownMenu>
+                      <DropdownMenuTrigger asChild>
+                        <button
+                          type="button"
+                          className="ui-button-ghost h-8 min-h-8 max-w-[8.5rem] gap-1 px-2 text-xs"
+                          aria-label="选择空间"
+                          title={projectFilter ? `当前空间：${projectFilter}` : "选择空间"}
+                        >
+                          <Folder size={13} className="shrink-0" />
+                          <span className="truncate">{projectFilter || "全部空间"}</span>
+                          <ChevronDown size={12} className="shrink-0 opacity-70" />
+                        </button>
+                      </DropdownMenuTrigger>
+                      <DropdownMenuContent align="start" className="w-56">
+                        <DropdownMenuLabel>空间</DropdownMenuLabel>
+                        <DropdownMenuItem onSelect={() => changeProject("")}>
+                          <Folder size={14} />
+                          <span className="flex-1">全部空间</span>
+                          {!projectFilter && <span className="text-[var(--ui-accent-text)]">当前</span>}
+                        </DropdownMenuItem>
+                        {projectCounts.map((space) => (
+                          <DropdownMenuItem key={space.name} onSelect={() => changeProject(space.name)}>
+                            <Folder size={14} />
+                            <span className="min-w-0 flex-1 truncate">{space.name}</span>
+                            {projectFilter === space.name && <span className="text-[var(--ui-accent-text)]">当前</span>}
+                          </DropdownMenuItem>
+                        ))}
+                        {projectCounts.length === 0 && <DropdownMenuLabel className="font-normal text-[var(--ui-text-subtle)]">暂无空间</DropdownMenuLabel>}
+                        <DropdownMenuSeparator />
+                        <DropdownMenuItem onSelect={openSpaceManager}>
+                          <FolderCog size={14} /> 空间管理
+                        </DropdownMenuItem>
+                      </DropdownMenuContent>
+                    </DropdownMenu>
+                  </div>
                   <div className="ui-segment min-h-8 gap-0.5 p-0.5" role="group" aria-label="列表密度">
                     <button
                       type="button"
@@ -1959,24 +2337,56 @@ export default function KnowledgePage({
                 </div>
               )}
             </div>
+            {cards.length > 0 && (
+              <div className="mt-2 grid gap-2 xl:hidden">
+                <div className="grid min-w-0 grid-cols-[minmax(0,1fr)_auto] gap-2">
+                  <Select value={sort} onValueChange={changeSort}>
+                    <SelectTrigger className="h-11 min-h-11 w-full min-w-0 justify-between gap-2 rounded-xl px-3 py-0 text-left text-xs font-medium" aria-label="卡片排序">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent align="start" className="min-w-[160px]">
+                      {sortOptions.map(([value, label]) => <SelectItem key={value} value={value} className="justify-start px-2 pr-8 text-xs">{label}</SelectItem>)}
+                    </SelectContent>
+                  </Select>
+                  <label className="ui-button-ghost h-11 min-h-11 min-w-0 max-w-[8.5rem] gap-1.5 px-3 text-xs">
+                    <TriStateCheckbox
+                      checked={allVisibleSelected}
+                      indeterminate={someVisibleSelected && !allVisibleSelected}
+                      onChange={selectAllVisible}
+                      aria-label={allVisibleSelected ? "取消选择当前列表" : "选择当前列表"}
+                      className="h-5 w-5 shrink-0 rounded border-[var(--ui-border-strong)] accent-[var(--ui-accent-solid)] focus:ring-2 focus:ring-[var(--ui-focus)]/30"
+                    />
+                    <span className="truncate">{allVisibleSelected ? "取消全选" : someVisibleSelected ? "部分选中" : "全选当前"}</span>
+                  </label>
+                </div>
+                <div className="flex min-h-7 items-center justify-between gap-2 px-1">
+                  <span className="min-w-0 truncate text-[11px] leading-4 text-[var(--ui-text-subtle)]">
+                    {visibleSelectedCount > 0 ? `已选 ${visibleSelectedCount} 张` : "点击卡片打开详情 · 勾选可批量处理"}
+                  </span>
+                  <button type="button" onClick={invertVisibleSelection} className="ui-button-ghost h-8 min-h-8 shrink-0 px-2 text-xs">
+                    反选
+                  </button>
+                </div>
+              </div>
+            )}
             {selectedIds.length > 0 && (
               <div role="toolbar" aria-label="知识卡片批量操作" className="ui-status-accent ui-mobile-fixed-toolbar mt-1 flex flex-col gap-2 rounded-xl px-2.5 py-2 shadow-md max-xl:fixed max-xl:inset-x-3 max-xl:z-30 max-xl:mx-auto max-xl:max-w-xl xl:shadow-none">
-                <div className="flex flex-wrap items-center justify-between gap-2">
+                <div className="flex flex-col gap-2 xl:flex-row xl:items-center xl:justify-between">
                   <span className="text-xs font-semibold text-[var(--ui-accent-text)]">
                     已选 {selectedIds.length} 张
                     {hiddenSelectedCount > 0 ? ` · 当前列表可见 ${visibleSelectedCount} 张` : " · 当前列表"}
                   </span>
-                  <div className="flex flex-wrap items-center justify-end gap-1">
+                  <div className="grid grid-cols-2 gap-1.5 xl:flex xl:flex-wrap xl:items-center xl:justify-end xl:gap-1">
                     <button
                       type="button"
                       onClick={() => updateStatus("confirmed", selectedIds.filter((id) => cards.some((card) => card.id === id && card.status === "draft")))}
                       disabled={saving || selectedDraftCount === 0}
                       title={selectedDraftCount > 0 ? "确认选中的草稿并沉淀入库" : "当前选择中没有待沉淀草稿"}
-                      className="ui-button-success h-8 min-h-8 shrink-0 gap-1 whitespace-nowrap px-2 text-xs"
+                      className="ui-button-success h-10 min-h-10 min-w-0 gap-1 whitespace-nowrap px-2 text-xs xl:h-8 xl:min-h-8"
                     >
-                      <CheckCircle2 size={13} /> 一键沉淀{selectedDraftCount > 0 ? " " + selectedDraftCount : ""}
+                      <CheckCircle2 size={13} className="shrink-0" /> <span className="truncate">一键沉淀{selectedDraftCount > 0 ? " " + selectedDraftCount : ""}</span>
                     </button>
-                    <button type="button" onClick={() => setMobileBatchOpen(true)} disabled={saving} className="ui-button-ghost h-8 min-h-8 gap-1 px-2 text-xs font-semibold xl:hidden">
+                    <button type="button" onClick={() => setMobileBatchOpen(true)} disabled={saving} className="ui-button-ghost h-10 min-h-10 min-w-0 gap-1 px-2 text-xs font-semibold xl:hidden">
                       批量操作 <MoreHorizontal size={14} />
                     </button>
                     <div className="hidden xl:block">
@@ -2000,11 +2410,11 @@ export default function KnowledgePage({
                         </DropdownMenuContent>
                       </DropdownMenu>
                     </div>
-                    <button type="button" onClick={clearSelection} className="ui-button-ghost h-8 min-h-8 px-2 text-xs">
+                    <button type="button" onClick={clearSelection} className="ui-button-ghost h-10 min-h-10 min-w-0 px-2 text-xs xl:h-8 xl:min-h-8">
                       清空
                     </button>
                     {hiddenSelectedCount > 0 && (
-                      <button type="button" onClick={clearHiddenSelection} className="ui-button-ghost h-8 min-h-8 px-2 text-xs">
+                      <button type="button" onClick={clearHiddenSelection} className="ui-button-ghost col-span-2 h-10 min-h-10 min-w-0 px-2 text-xs xl:col-span-1 xl:h-8 xl:min-h-8">
                         清除不可见项
                       </button>
                     )}
@@ -2027,6 +2437,7 @@ export default function KnowledgePage({
                           onChange={(e) => setBatchValue(e.target.value)}
                           onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); void applyBatch(); } }}
                           placeholder="标签，逗号分隔多个"
+                          aria-label={batchMode === "tag" ? "要添加的标签" : "要移除的标签"}
                           className="ui-field h-9 min-w-0 flex-1 rounded-lg px-2.5 text-xs"
                           autoFocus
                         />
@@ -2061,27 +2472,23 @@ export default function KnowledgePage({
                 <span className="ui-status-muted mx-auto flex h-10 w-10 items-center justify-center rounded-xl">
                   <FileText size={22} />
                 </span>
-                <p className="mt-3 text-sm font-medium text-[var(--ui-text)]">
-                  {totalCards > 0 ? `第 ${page} 页没有卡片` : `没有${emptyStatusLabel}`}
-                </p>
-                <p className="mt-1 text-xs leading-5 text-[var(--ui-text-muted)]">
-                  {totalCards > 0 ? "当前页已经超出结果范围，请返回上一页。" : activeStatus === "draft" ? "从每日记录或周/月复盘提取草稿后，在这里逐条确认。" : activeStatus === "all" ? "可以新建卡片，或调整筛选条件查看其他状态。" : "切换到待确认，先把草稿确认成沉淀内容。"}
-                </p>
-              </div>
-              <div className="mt-3 grid gap-2">
-                <KnowledgeHint icon={ShieldCheck} title="先看来源" desc="确认前先核对原文片段，避免把 AI 推断当成事实。" />
-                <KnowledgeHint icon={Tags} title="类型要克制" desc="事实、方法、原则优先；不确定的内容先留在草稿。" />
-                <KnowledgeHint icon={Lightbulb} title="写成复习卡" desc="标题回答“这是什么”，正文沉淀可复用判断或方法。" />
+                <p className="mt-3 text-sm font-medium text-[var(--ui-text)]">{emptyStateTitle}</p>
+                <p className="mt-1 text-xs leading-5 text-[var(--ui-text-muted)]">{emptyStateDescription}</p>
+                {emptyStateAction && (
+                  <button type="button" onClick={emptyStateAction.onClick} className="ui-button-primary mt-4 h-9 px-3 text-xs">
+                    {emptyStateAction.label}
+                  </button>
+                )}
               </div>
             </div>
           ) : (
             <div
               ref={listParent}
               aria-busy={loading}
-              className={["relative pr-1 xl:min-h-0 xl:flex-1 xl:overflow-y-auto", density === "comfortable" ? "space-y-1.5" : "space-y-1", loading ? "opacity-60 transition-opacity" : ""].join(" ")}
+              className={["relative min-w-0 pr-1 pb-[calc(var(--ui-mobile-nav-total-height)+1rem)] xl:min-h-0 xl:flex-1 xl:overflow-y-auto xl:pb-0", density === "comfortable" ? "space-y-1.5" : "space-y-1", loading ? "opacity-60 transition-opacity" : ""].join(" ")}
             >
               {loading && (
-                <div className="ui-status-accent sticky top-0 z-10 mb-1 flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-[11px] font-medium shadow-xs backdrop-blur">
+                <div className="ui-status-accent sticky top-0 z-10 mb-1 flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-[11px] font-medium shadow-xs backdrop-blur" role="status" aria-live="polite">
                   <LoaderCircle size={12} className="animate-spin" /> 更新列表中...
                 </div>
               )}
@@ -2091,13 +2498,13 @@ export default function KnowledgePage({
                   data-state={selectedIds.includes(card.id) ? "selected" : selectedId === card.id ? "active" : "idle"}
                   data-active={selectedId === card.id ? "true" : undefined}
                   className={[
-                    "knowledge-card-row group relative flex w-full items-start gap-1",
+                    "knowledge-card-row group relative flex w-full min-w-0 items-start gap-1.5",
                     density === "comfortable" ? "rounded-xl p-1.5" : "rounded-lg p-1",
                   ].join(" ")}
                 >
                   <label
                     className={[
-                      "relative z-[1] mt-0.5 flex h-7 w-7 shrink-0 cursor-pointer items-center justify-center rounded-md transition-colors",
+                      "relative z-[1] mt-0.5 flex h-11 w-11 shrink-0 cursor-pointer items-center justify-center rounded-lg transition-colors xl:h-8 xl:w-8 xl:rounded-md",
                       selectedIds.includes(card.id) ? "ui-status-accent" : "hover:bg-[var(--ui-surface-hover)]",
                     ].join(" ")}
                   >
@@ -2106,7 +2513,7 @@ export default function KnowledgePage({
                       checked={selectedIds.includes(card.id)}
                       onChange={() => toggleSelected(card.id)}
                       aria-label={`${selectedIds.includes(card.id) ? "取消选择" : "选择"}：${card.title}`}
-                      className="h-4 w-4 cursor-pointer rounded border-[var(--ui-border-strong)] accent-[var(--ui-accent-solid)] focus:ring-2 focus:ring-[var(--ui-focus)]/40"
+                      className="h-5 w-5 cursor-pointer rounded border-[var(--ui-border-strong)] accent-[var(--ui-accent-solid)] focus:ring-2 focus:ring-[var(--ui-focus)]/40 xl:h-4 xl:w-4"
                     />
                   </label>
                   <Link
@@ -2134,12 +2541,12 @@ export default function KnowledgePage({
                       density === "comfortable" ? "px-2 py-2" : "px-1.5 py-1.5",
                     ].join(" ")}
                   >
-                    <div className="flex items-center justify-between gap-2">
-                      <span className="truncate text-sm font-semibold text-[var(--ui-text)]">{card.title}</span>
-                      <ChevronRight size={14} className="shrink-0 text-[var(--ui-text-disabled)] group-hover:text-[var(--ui-text-subtle)]" />
+                    <div className="flex items-start justify-between gap-2">
+                      <span className="min-w-0 flex-1 line-clamp-2 break-words text-sm font-semibold leading-5 text-[var(--ui-text)] xl:truncate">{card.title}</span>
+                      <ChevronRight size={16} className="mt-0.5 shrink-0 text-[var(--ui-text-disabled)] group-hover:text-[var(--ui-text-subtle)]" />
                     </div>
                     <div className={[
-                      "flex flex-wrap items-center gap-1.5 text-[11px] text-[var(--ui-text-subtle)]",
+                      "flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-[11px] leading-5 text-[var(--ui-text-subtle)]",
                       density === "comfortable" ? "mt-1.5" : "mt-1",
                     ].join(" ")}>
                       <span>{typeLabels[card.card_type]}</span>
@@ -2148,7 +2555,7 @@ export default function KnowledgePage({
                       {card.tags.slice(0, density === "comfortable" ? 4 : 2).map((tag) => <span key={tag}>#{tag}</span>)}
                     </div>
                     {density === "comfortable" && card.content.trim() && (
-                      <p className="mt-1 line-clamp-1 text-xs leading-5 text-[var(--ui-text-muted)]">{card.content}</p>
+                      <p className="mt-1 line-clamp-2 text-xs leading-5 text-[var(--ui-text-muted)] xl:line-clamp-1">{card.content}</p>
                     )}
                   </Link>
                   {selectedIds.length === 0 && (
@@ -2157,7 +2564,7 @@ export default function KnowledgePage({
                         <DropdownMenuTrigger asChild>
                           <button
                             type="button"
-                            className="ui-icon-button h-8 w-8"
+                            className="ui-icon-button h-10 w-10 xl:h-8 xl:w-8"
                             aria-label={`卡片操作：${card.title}`}
                             title="卡片操作"
                           >
@@ -2167,7 +2574,7 @@ export default function KnowledgePage({
                         <DropdownMenuContent align="end" className="w-40">
                           <DropdownMenuLabel>卡片操作</DropdownMenuLabel>
                           <DropdownMenuItem onSelect={() => void updateStatus(card.status === "draft" ? "confirmed" : "outdated", [card.id])}>
-                            {card.status === "draft" ? "确认入库" : card.status === "outdated" ? "恢复卡片" : "标记为过时"}
+                            {card.status === "draft" ? "确认沉淀" : card.status === "outdated" ? "恢复卡片" : "标记为过时"}
                           </DropdownMenuItem>
                           <DropdownMenuSeparator />
                         <DropdownMenuItem onSelect={() => void deleteCards([card.id])} className="text-[var(--ui-danger-text)] focus:bg-[var(--ui-danger-surface)] focus:text-[var(--ui-danger-text)]">
@@ -2212,7 +2619,7 @@ export default function KnowledgePage({
           )}
         </section>
 
-        <section className={["knowledge-inspector ui-panel flex flex-col overflow-visible p-4 xl:h-full xl:min-h-0 xl:overflow-y-auto", mobileView === "detail" ? "" : "hidden", "xl:flex"].join(" ")}>
+        <section aria-label="知识卡片编辑" className={["knowledge-inspector ui-panel flex scroll-pb-[calc(var(--ui-mobile-nav-total-height)+5rem)] flex-col overflow-visible p-4 max-xl:pb-[calc(var(--ui-mobile-nav-total-height)+5rem)] xl:h-full xl:min-h-0 xl:overflow-y-auto xl:pb-4", mobileView === "detail" ? "" : "hidden", "xl:flex"].join(" ")}>
           <div className="mb-3 flex items-center gap-2 xl:hidden">
             <button type="button" onClick={() => void closeMobileDetail()} className="ui-button-ghost h-10 px-2.5 text-sm">
               <ArrowLeft size={16} /> 知识卡片
@@ -2229,12 +2636,12 @@ export default function KnowledgePage({
               onEditDate={onEditDate}
             />
           )}
-          <div className="mb-4 flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+          <div className="knowledge-inspector-header mb-4 flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
             <div className="min-w-0">
               <div className="flex items-center gap-2">
-                <h3 className="truncate text-sm font-bold text-[var(--ui-text)]">{selectedId ? "卡片详情" : "新建知识卡片"}</h3>
-                {saveState === "saving" && <span className="inline-flex items-center gap-1 text-xs text-[var(--ui-accent-text)]"><LoaderCircle size={12} className="animate-spin" /> 自动保存</span>}
-                {saveState === "saved" && <span className="text-xs text-[var(--ui-success-text)]">已保存</span>}
+                <h3 className="truncate text-base font-bold tracking-[-0.02em] text-[var(--ui-text)]">{selectedId ? "核验知识卡片" : "新建知识卡片"}</h3>
+                {saveState === "saving" && <span className="inline-flex items-center gap-1 text-xs text-[var(--ui-accent-text)]" role="status" aria-live="polite"><LoaderCircle size={12} className="animate-spin" /> 正在保存</span>}
+                {saveState === "saved" && <span className="text-xs text-[var(--ui-success-text)]" role="status" aria-live="polite">已保存</span>}
                 {saveState === "error" && (
                   <button
                     type="button"
@@ -2252,10 +2659,10 @@ export default function KnowledgePage({
                 {selectedCard?.last_used_at ? ` · 最近使用 ${selectedCard.last_used_at}` : ""}
               </p>
             </div>
-            <div className="flex flex-wrap gap-2">
+            <div className="flex flex-wrap gap-2 max-xl:hidden">
               {selectedId && draft.status === "draft" && (
                 <button type="button" onClick={() => updateStatus("confirmed")} disabled={saving} className="ui-button-primary">
-                  <CheckCircle2 size={14} /> 确认入库
+                  <CheckCircle2 size={14} /> 确认沉淀
                 </button>
               )}
               {selectedId && (
@@ -2276,25 +2683,132 @@ export default function KnowledgePage({
             </div>
           </div>
 
-          <div className="grid gap-4">
-            <input value={draft.title} onChange={(e) => updateDraft({ title: e.target.value })} placeholder="卡片标题" className="ui-field h-10" />
-            <div className="grid gap-3 2xl:grid-cols-[1fr_auto]">
-              <Picker label="类型" value={draft.card_type} options={typeOptions} onChange={(value) => updateDraft({ card_type: value as KnowledgeCardType })} />
-              <Picker label="状态" value={draft.status} options={statusOptions} onChange={(value) => updateDraft({ status: value as KnowledgeCardStatus })} />
+          <div className="knowledge-verification-rail mb-5" data-stage={verificationStage} aria-label="知识沉淀流程">
+            <div className="knowledge-verification-step" data-complete={verificationStageIndex > 1 ? "true" : undefined} data-active={verificationStage === "draft" ? "true" : undefined}>
+              <span className="knowledge-verification-icon"><BookMarked size={14} /></span>
+              <span className="knowledge-verification-copy"><strong>起草</strong><small>写清结论</small></span>
             </div>
-            <div className="ui-editor-surface overflow-hidden">
-              <CodeMirror
-                value={draft.content}
-                onChange={(value) => updateDraft({ content: value })}
-                extensions={[markdown(), EditorView.lineWrapping]}
-                placeholder="沉淀事实、方法、概念、决策依据或案例..."
-                theme={dark ? "dark" : "light"}
-                height="200px"
-                basicSetup={{ lineNumbers: false, foldGutter: false, highlightActiveLine: false }}
+            <span className="knowledge-verification-connector" aria-hidden="true" />
+            <div className="knowledge-verification-step" data-complete={verificationStageIndex > 2 ? "true" : undefined} data-active={verificationStage === "source" ? "true" : undefined}>
+              <span className="knowledge-verification-icon"><ShieldCheck size={14} /></span>
+              <span className="knowledge-verification-copy"><strong>核验</strong><small>对照来源</small></span>
+            </div>
+            <span className="knowledge-verification-connector" aria-hidden="true" />
+            <div className="knowledge-verification-step" data-complete={verificationStageIndex > 3 ? "true" : undefined} data-active={verificationStage === "confirmed" ? "true" : undefined}>
+              <span className="knowledge-verification-icon"><CheckCircle2 size={14} /></span>
+              <span className="knowledge-verification-copy"><strong>沉淀</strong><small>进入复习</small></span>
+            </div>
+            <span className="knowledge-verification-caption">
+              {verificationStage === "confirmed" ? "已确认，可用于复习" : verificationStage === "source" ? "已有来源，确认前再看一眼" : "先写内容，再补证据"}
+            </span>
+          </div>
+
+          {validationEntries.length > 0 && (
+            <div
+              ref={validationSummaryRef}
+              id="knowledge-validation-summary"
+              tabIndex={-1}
+              role="alert"
+              aria-labelledby="knowledge-validation-summary-title"
+              className="ui-alert-bad mb-4 outline-hidden focus-visible:ring-2 focus-visible:ring-[var(--ui-focus)]/50"
+            >
+              <div id="knowledge-validation-summary-title" className="font-semibold">
+                提交前需要处理 {validationEntries.length} 项
+              </div>
+              <ul className="mt-1.5 space-y-1 text-xs">
+                {validationEntries.map(([field, message]) => (
+                  <li key={field}>
+                    <a
+                      href={`#${validationFieldIds[field]}`}
+                      onClick={(event) => {
+                        event.preventDefault();
+                        focusValidationField(field);
+                      }}
+                      className="underline decoration-[var(--ui-danger-border)] underline-offset-2 hover:decoration-current"
+                    >
+                      {validationFieldLabels[field]}：{message}
+                    </a>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+
+          <div className="knowledge-editor-fields grid gap-4">
+            <div>
+              <label htmlFor="knowledge-card-title" className="knowledge-field-label mb-1.5 block">知识标题</label>
+              <input
+                id="knowledge-card-title"
+                value={draft.title}
+                onChange={(e) => updateDraft({ title: e.target.value })}
+                placeholder="用一句话回答：这条知识是什么？"
+                aria-required="true"
+                aria-invalid={!!fieldErrors.title}
+                aria-describedby={["knowledge-card-title-help", fieldErrors.title ? validationErrorIds.title : ""].filter(Boolean).join(" ")}
+                className="knowledge-title-field ui-field h-11"
               />
+              <p id="knowledge-card-title-help" className="mt-1.5 text-[11px] leading-4 text-[var(--ui-text-subtle)]">一句话说清这条知识解决什么问题。</p>
+              {fieldErrors.title && <p id={validationErrorIds.title} className="mt-1.5 text-xs font-medium text-[var(--ui-danger-text)]" role="alert">{fieldErrors.title}</p>}
             </div>
             <div>
-              <div className="ui-section-kicker mb-1.5">标签</div>
+              <div id="knowledge-card-content-label" className="knowledge-field-label mb-1.5">可复习正文</div>
+              <div id="knowledge-card-content" className="knowledge-body-editor ui-editor-surface overflow-hidden" role="group" tabIndex={-1} aria-labelledby="knowledge-card-content-label">
+                <CodeMirror
+                  value={draft.content}
+                  onChange={(value) => updateDraft({ content: value })}
+                  extensions={[markdown(), EditorView.lineWrapping]}
+                  placeholder="先写清可复习的结论，再补充判断依据或方法..."
+                  onCreateEditor={(view) => {
+                    knowledgeEditorRef.current = view;
+                    syncEditorAccessibility();
+                  }}
+                  theme={dark ? "dark" : "light"}
+                  height="220px"
+                  basicSetup={{ lineNumbers: false, foldGutter: false, highlightActiveLine: false }}
+                />
+              </div>
+              <p id="knowledge-card-content-help" className="mt-1.5 text-[11px] leading-4 text-[var(--ui-text-subtle)]">先写可复习的结论，再补充判断依据或方法。</p>
+              {fieldErrors.content && <p id={validationErrorIds.content} className="mt-1.5 text-xs font-medium text-[var(--ui-danger-text)]" role="alert">{fieldErrors.content}</p>}
+            </div>
+
+            <div className="ui-panel-muted rounded-xl p-3">
+              <button
+                type="button"
+                onClick={() => setOrganizeOpen((open) => !open)}
+                aria-expanded={organizeOpen}
+                aria-controls="knowledge-card-organization"
+                className="flex w-full items-center justify-between gap-3 text-left"
+              >
+                  <span className="min-w-0">
+                    <span className="block text-xs font-semibold text-[var(--ui-text)]">整理卡片</span>
+                    <span className="mt-1 block truncate text-[11px] text-[var(--ui-text-subtle)]">
+                    {organizeSummary}
+                    </span>
+                </span>
+                <ChevronDown size={15} className={`shrink-0 transition-transform ${organizeOpen ? "rotate-180" : ""}`} />
+              </button>
+              {organizeOpen && (
+                <div id="knowledge-card-organization" className="mt-3 grid gap-4 border-t border-[var(--ui-border)] pt-3">
+                  <div className="grid gap-3 2xl:grid-cols-[1fr_auto]">
+                    <Picker
+                      label="类型"
+                      value={draft.card_type}
+                      options={typeOptions}
+                      primaryValues={["fact", "method", "concept", "principle"]}
+                      onChange={(value) => updateDraft({ card_type: value as KnowledgeCardType })}
+                    />
+                    {selectedId ? (
+                      <Picker label="状态" value={draft.status} options={statusOptions} onChange={(value) => updateDraft({ status: value as KnowledgeCardStatus })} />
+                    ) : (
+                      <div className="min-w-0">
+                        <div className="ui-section-kicker mb-1.5">状态</div>
+                        <div className="ui-status-accent inline-flex min-h-8 items-center rounded-lg px-3 text-xs font-semibold">待确认</div>
+                        <p className="mt-1.5 text-[11px] leading-4 text-[var(--ui-text-subtle)]">新卡会先保存为草稿，补充来源后再确认沉淀。</p>
+                      </div>
+                    )}
+                  </div>
+              <div>
+              <label htmlFor="knowledge-card-tags" className="ui-section-kicker mb-1.5 block">标签</label>
               <div className="ui-token-input">
                 {parsedTags.map((tag) => (
                   <button
@@ -2303,11 +2817,13 @@ export default function KnowledgePage({
                     onClick={() => removeTag(tag)}
                     className="ui-chip border-[var(--ui-selected-border)] bg-[var(--ui-surface-selected)] text-[var(--ui-accent-text)] hover:bg-[var(--ui-surface-hover)]"
                     title="点击移除标签"
+                    aria-label={`移除标签：${tag}`}
                   >
                     #{tag} <X size={12} />
                   </button>
                 ))}
                 <input
+                  id="knowledge-card-tags"
                   value={tagInput}
                   onChange={(e) => setTagInput(e.target.value)}
                   onKeyDown={(e) => {
@@ -2339,8 +2855,8 @@ export default function KnowledgePage({
                   ))}
                 </div>
               )}
-            </div>
-            <div>
+                  </div>
+              <div>
               <div className="ui-section-kicker mb-1.5">空间（主题或项目）</div>
               <div className="ui-token-input">
                 {parsedProjects.map((project) => (
@@ -2350,6 +2866,7 @@ export default function KnowledgePage({
                     onClick={() => removeProject(project)}
                     className="ui-chip border-[var(--ui-selected-border)] bg-[var(--ui-surface-selected)] text-[var(--ui-accent-text)] hover:bg-[var(--ui-surface-hover)]"
                     title="点击移除空间"
+                    aria-label={`移除空间：${project}`}
                   >
                     <Folder size={12} /> {project} <X size={12} />
                   </button>
@@ -2374,12 +2891,15 @@ export default function KnowledgePage({
                   showIcon={false}
                 />
               </div>
-            </div>
-            <Command shouldFilter={false} className="relative">
+                  </div>
+                  <div>
+                    <div className="ui-section-kicker mb-1.5">关联卡片</div>
+                    <Command shouldFilter={false} className="relative">
               <Command.Input
                 value={relatedQuery}
                 onValueChange={setRelatedQuery}
                 placeholder="搜索并添加关联卡片…"
+                aria-label="关联卡片"
                 className="ui-field h-10 w-full"
               />
               {relatedQuery.trim() && (
@@ -2403,16 +2923,120 @@ export default function KnowledgePage({
                   ))}
                 </Command.List>
               )}
-            </Command>
+                    </Command>
+                  </div>
+                </div>
+              )}
+            </div>
           </div>
 
-          {selectedCard && (
-            <ReviewItemsPanel
-              cardId={selectedCard.id}
-              cardStatus={draft.status}
-              contentVersion={selectedCard.content_version}
-            />
-          )}
+          <div className="knowledge-reading-grid mt-5 grid items-stretch gap-4 xl:flex-1 2xl:grid-cols-[minmax(0,1fr)_minmax(360px,400px)]">
+            <div className="flex min-w-0 flex-col">
+              <div className="knowledge-field-label mb-2">复习预览</div>
+              <div className="knowledge-preview-panel ui-panel-muted min-h-[280px] flex-1 p-5">
+                {draft.content ? (
+                  <MarkdownContent content={draft.content} onWikiLink={onWikiLink} />
+                ) : (
+                  <KnowledgeEmptyPreview />
+                )}
+              </div>
+            </div>
+            <div className="flex min-w-0 flex-col">
+              <div className="knowledge-source-heading mb-2 flex items-center justify-between gap-2">
+                <div className="knowledge-field-label flex items-center gap-1.5">
+                  <ShieldCheck size={14} /> 核验来源
+                </div>
+                <div className="flex shrink-0 items-center gap-2">
+                  <span className="knowledge-source-state" data-state={sourceError ? "error" : hasKnowledgeSource(draft) ? "linked" : "empty"}>
+                    {sourceError ? "加载失败" : hasKnowledgeSource(draft) ? "已有证据" : "未核验"}
+                  </span>
+                  {hasSourceReference && (
+                    <button type="button" onClick={openSource} disabled={sourceLoading} className="ui-button-ghost h-7 min-h-7 gap-1 px-2 text-xs font-semibold text-[var(--ui-accent-text)] disabled:cursor-wait disabled:opacity-60">
+                      <ExternalLink size={12} /> {sourceActionLabel}
+                    </button>
+                  )}
+                </div>
+              </div>
+              <div className="knowledge-source-panel ui-editor-surface flex min-h-[280px] flex-1 flex-col overflow-hidden" data-source-state={sourceError ? "error" : hasKnowledgeSource(draft) ? "linked" : "empty"} aria-busy={sourceLoading}>
+                <div className="knowledge-source-titlebar ui-soft-divider flex items-center gap-2 border-b px-4 py-3" role="status" aria-live="polite">
+                  <FileText size={13} className="shrink-0 text-[var(--ui-text-subtle)]" />
+                  <div className="min-w-0 flex-1 truncate text-xs font-medium text-[var(--ui-text-muted)]">
+                    {sourceLoading ? "加载来源..." : sourceError ? "来源暂时无法加载" : sourceArticle?.title || sourceReview?.title || (draft.source_date ? `${draft.source_date} · ${currentSourceType}` : "暂无来源")}
+                  </div>
+                </div>
+                {sourceError && (
+                  <div className="ui-alert-warn m-3 mb-0 flex items-start justify-between gap-3 text-xs leading-5" role="alert">
+                    <span className="min-w-0">{sourceError}。仍可补充来源片段，或稍后重试加载原文。</span>
+                    <span className="flex shrink-0 items-center gap-1">
+                      {sourceAuthError && (
+                        <button
+                          type="button"
+                          onClick={openConnectionSettings}
+                          className="ui-button-ghost h-7 min-h-7 px-2 text-[11px]"
+                        >
+                          连接设置
+                        </button>
+                      )}
+                      <button type="button" onClick={retrySourceLoad} disabled={sourceLoading} className="ui-button-ghost h-7 min-h-7 px-2 text-[11px]">
+                        {sourceLoading ? "重试中..." : "重试加载"}
+                      </button>
+                    </span>
+                  </div>
+                )}
+                {fieldErrors.source && (
+                  <p id={validationErrorIds.source} className="ui-alert-bad m-3 mb-0 text-xs leading-5" role="alert">
+                    {fieldErrors.source}
+                  </p>
+                )}
+                <div className="knowledge-source-excerpt px-4 pt-4">
+                  <label htmlFor="knowledge-source-excerpt" className="knowledge-field-label mb-1.5 block">证据片段</label>
+                  <p id="knowledge-source-excerpt-help" className="mb-1.5 text-[11px] leading-4 text-[var(--ui-text-subtle)]">粘贴能直接支撑正文的连续片段，方便以后复核。</p>
+                  <textarea
+                    id="knowledge-source-excerpt"
+                    aria-label="支撑知识卡片的来源片段"
+                    aria-invalid={!!fieldErrors.source}
+                    aria-describedby={["knowledge-source-excerpt-help", fieldErrors.source ? validationErrorIds.source : ""].filter(Boolean).join(" ")}
+                    value={draft.source_excerpt}
+                    onChange={(e) => updateDraft({ source_excerpt: e.target.value })}
+                    placeholder="粘贴来源片段"
+                    className="min-h-[120px] w-full resize-none border-0 bg-transparent px-0 py-1 text-xs leading-5 text-[var(--ui-text)] outline-hidden placeholder:text-[var(--ui-text-subtle)]"
+                  />
+                </div>
+                <div className="ui-soft-divider grid gap-2 border-t p-3 pt-2">
+                  <label className="ui-section-kicker" htmlFor="knowledge-source-date">来源日期</label>
+                  <input
+                    id="knowledge-source-date"
+                    type="date"
+                    value={draft.source_date}
+                    onChange={(e) => updateDraft({ source_date: e.target.value })}
+                    aria-invalid={!!fieldErrors.source}
+                    aria-describedby={["knowledge-source-date-help", fieldErrors.source ? validationErrorIds.source : ""].filter(Boolean).join(" ")}
+                    className="ui-field h-9 text-xs"
+                  />
+                  <p id="knowledge-source-date-help" className="text-[11px] leading-4 text-[var(--ui-text-subtle)]">可填写原文日期，格式为 YYYY-MM-DD。</p>
+                  <label className="ui-section-kicker" htmlFor="knowledge-source-id">来源 ID（只读）</label>
+                  <p id="knowledge-source-id-help" className="text-[11px] leading-4 text-[var(--ui-text-subtle)]">由来源记录自动带入，不能手动编辑。</p>
+                  <input
+                    id="knowledge-source-id"
+                    value={draft.source_article_id || draft.source_review_id}
+                    readOnly
+                    placeholder="保存后自动关联"
+                    aria-describedby="knowledge-source-id-help"
+                    className="ui-field h-9 text-xs text-[var(--ui-text-muted)]"
+                  />
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div className="knowledge-review-stack">
+            {selectedCard && (
+              <ReviewItemsPanel
+                cardId={selectedCard.id}
+                cardStatus={draft.status}
+                contentVersion={selectedCard.content_version}
+              />
+            )}
 
           {selectedCard && (relatedChips.length > 0 || reviewHistory.length > 1) && (
             <div className="mt-4 grid gap-3">
@@ -2467,67 +3091,61 @@ export default function KnowledgePage({
             </div>
           )}
 
-          {(duplicateHint || notice) && (
-            <div
-              className={["mt-3", duplicateHint ? "ui-alert-warn" : noticeTone === "good" ? "ui-alert-good" : noticeTone === "bad" ? "ui-alert-bad" : "ui-alert-warn"].join(" ")}
-              role={noticeTone === "bad" && !duplicateHint ? "alert" : "status"}
-              aria-live="polite"
-            >
-              {duplicateHint || notice}
+          {duplicateHint && (
+            <div className="mt-3 ui-alert-warn" role="status" aria-live="polite">
+              {duplicateHint}
             </div>
           )}
-
-          <div className="mt-5 grid items-stretch gap-4 xl:flex-1 2xl:grid-cols-[minmax(0,1fr)_340px]">
-            <div className="flex min-w-0 flex-col">
-              <div className="ui-section-kicker mb-2">预览</div>
-              <div className="ui-panel-muted min-h-[280px] flex-1 p-4">
-                {draft.content ? (
-                  <MarkdownContent content={draft.content} onWikiLink={onWikiLink} />
-                ) : (
-                  <KnowledgeEmptyPreview />
-                )}
+            {notice && validationEntries.length === 0 && (
+              <div
+                className={["mt-3", noticeTone === "good" ? "ui-alert-good" : noticeTone === "bad" ? "ui-alert-bad" : "ui-alert-warn"].join(" ")}
+                role={noticeTone === "bad" ? "alert" : "status"}
+                aria-live="polite"
+              >
+                {notice}
               </div>
-            </div>
-            <div className="flex min-w-0 flex-col">
-              <div className="mb-2 flex items-center justify-between gap-2">
-                <div className="ui-section-kicker flex items-center gap-1.5">
-                  <ExternalLink size={12} /> 来源追溯
-                </div>
-                {(draft.source_date || sourceArticle?.date) && (
-                  <button type="button" onClick={openSource} className="ui-button-ghost h-7 min-h-7 gap-1 px-2 text-xs font-semibold text-[var(--ui-accent-text)]">
-                    <ExternalLink size={12} /> 定位原文
+            )}
+          </div>
+
+          <div className="ui-mobile-editor-actions relative z-20 mt-5 flex flex-wrap gap-2 rounded-xl border border-[var(--ui-border)] bg-[var(--ui-surface)]/95 p-2 shadow-md backdrop-blur-xl max-xl:fixed max-xl:inset-x-3 max-xl:bottom-[calc(var(--ui-mobile-nav-total-height)+0.5rem)] max-xl:mx-auto max-xl:max-w-xl xl:hidden">
+            {!selectedId ? (
+              <button type="button" onClick={saveNewCard} disabled={saving} className="ui-button-primary min-h-11 flex-1 px-3">
+                <Plus size={14} /> 创建草稿
+              </button>
+            ) : (
+              <>
+                {draft.status === "draft" && (
+                  <button type="button" onClick={() => updateStatus("confirmed")} disabled={saving} className="ui-button-primary min-h-11 flex-1 px-3">
+                    <CheckCircle2 size={14} /> 确认沉淀
                   </button>
                 )}
-              </div>
-              <div className="ui-editor-surface flex min-h-[280px] flex-1 flex-col overflow-hidden">
-                <div className="ui-soft-divider flex items-center gap-2 border-b px-3 py-2">
-                  <FileText size={13} className="shrink-0 text-[var(--ui-text-subtle)]" />
-                  <div className="min-w-0 flex-1 truncate text-xs font-medium text-[var(--ui-text-muted)]">
-                    {sourceLoading ? "加载来源..." : sourceArticle?.title || (draft.source_date ? `${draft.source_date} · ${currentSourceType}` : "暂无来源")}
-                  </div>
-                </div>
-                <textarea
-                  value={draft.source_excerpt}
-                  onChange={(e) => updateDraft({ source_excerpt: e.target.value })}
-                  placeholder="支撑这张卡片的原文片段"
-                  className="min-h-[120px] flex-1 w-full resize-none border-0 bg-transparent px-3 py-2 text-xs leading-5 text-[var(--ui-text)] outline-hidden placeholder:text-[var(--ui-text-subtle)]"
-                />
-                <div className="ui-soft-divider grid gap-2 border-t p-3 pt-2">
-                  <input value={draft.source_date} onChange={(e) => updateDraft({ source_date: e.target.value })} placeholder="来源日期 YYYY-MM-DD" className="ui-field h-9 text-xs" />
-                  <input value={draft.source_article_id || draft.source_review_id} readOnly placeholder="来源 ID" className="ui-field h-9 text-xs text-[var(--ui-text-muted)]" />
-                </div>
-              </div>
-            </div>
+                <button type="button" onClick={() => void deleteCards()} disabled={saving} className="ui-button-danger min-h-11 px-3">
+                  <Trash2 size={14} /> 删除
+                </button>
+              </>
+            )}
           </div>
-          {!draft.content && !draft.source_excerpt && (
-            <div className="mt-4 grid gap-3 lg:grid-cols-3">
-              <KnowledgeHint icon={ShieldCheck} title="可信边界" desc="只确认来源里明确出现的事实、方法和原则。" />
-              <KnowledgeHint icon={Sparkles} title="AI 只起草" desc="AI 生成内容默认是草稿，确认后才算沉淀。" />
-              <KnowledgeHint icon={ExternalLink} title="保留回跳" desc="来源日期和片段越完整，后续复习越可靠。" />
-            </div>
-          )}
         </section>
       </div>
+      {sourceDetailOpen && sourceArticle && (
+        <ArticleDetail
+          article={sourceArticle}
+          highlight={draft.source_excerpt || selectedCard?.source_excerpt || ""}
+          onClose={() => setSourceDetailOpen(false)}
+          onEdit={editSourceArticle}
+        />
+      )}
+      {sourceDetailOpen && sourceReview && (
+        <ReviewSourceDetail
+          review={sourceReview}
+          highlight={draft.source_excerpt || selectedCard?.source_excerpt || ""}
+          onClose={() => setSourceDetailOpen(false)}
+          onOpenReview={() => {
+            setSourceDetailOpen(false);
+            onNavigate("reviews");
+          }}
+        />
+      )}
       <SpaceManagerDialog
         open={spaceManagerOpen}
         onOpenChange={setSpaceManagerOpen}
@@ -2663,55 +3281,18 @@ function FilterButton({ active, onClick, children }: { active: boolean; onClick:
   );
 }
 
-function KnowledgeHint({
-  icon: Icon,
-  title,
-  desc,
-}: {
-  icon: typeof FileText;
-  title: string;
-  desc: string;
-}) {
-  return (
-    <div className="ui-panel-muted p-3">
-      <div className="flex items-start gap-2">
-        <span className="ui-status-accent mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-lg">
-          <Icon size={14} />
-        </span>
-        <div className="min-w-0">
-          <div className="text-xs font-semibold text-[var(--ui-text)]">{title}</div>
-          <p className="mt-1 text-xs leading-5 text-[var(--ui-text-muted)]">{desc}</p>
-        </div>
-      </div>
-    </div>
-  );
-}
-
 function KnowledgeEmptyPreview() {
   return (
-    <div className="grid gap-3 text-sm text-[var(--ui-text-muted)]">
-      <div className="ui-panel-muted p-3">
-        <div className="mb-1 flex items-center gap-2 text-xs font-semibold text-[var(--ui-text)]">
-          <FileText size={14} /> 卡片正文建议
-        </div>
-        <p className="text-xs leading-5 text-[var(--ui-text-muted)]">
-          用一两段写清楚可复习的结论，避免只写“以后注意”。
-        </p>
-      </div>
-      <div className="grid gap-2 text-xs leading-5">
-        <div className="ui-panel-muted p-3">
-          <span className="font-semibold text-[var(--ui-text)]">事实：</span>
-          记录已经发生、可被来源片段支撑的内容。
-        </div>
-        <div className="ui-panel-muted p-3">
-          <span className="font-semibold text-[var(--ui-text)]">方法：</span>
-          沉淀具体步骤、判断顺序或排查清单。
-        </div>
-        <div className="ui-panel-muted p-3">
-          <span className="font-semibold text-[var(--ui-text)]">原则：</span>
-          从多次记录里确认过的稳定做法。
-        </div>
-      </div>
+    <div className="grid gap-3 text-xs leading-5 text-[var(--ui-text-muted)]">
+      <p className="flex items-start gap-2">
+        <FileText size={14} className="mt-0.5 shrink-0 text-[var(--ui-accent-text)]" />
+        <span>用一两段写清楚可复习的结论，避免只写“以后注意”。</span>
+      </p>
+      <ul className="list-disc space-y-1 pl-5">
+        <li><span className="font-semibold text-[var(--ui-text)]">事实</span>：记录可由来源片段支撑的内容。</li>
+        <li><span className="font-semibold text-[var(--ui-text)]">方法</span>：沉淀步骤、判断顺序或排查清单。</li>
+        <li><span className="font-semibold text-[var(--ui-text)]">原则</span>：从多次记录中确认的稳定做法。</li>
+      </ul>
     </div>
   );
 }
@@ -2720,18 +3301,32 @@ function Picker<T extends string>({
   label,
   value,
   options,
+  primaryValues,
   onChange,
 }: {
   label: string;
   value: string;
   options: Array<[T, string]>;
+  primaryValues?: T[];
   onChange: (value: string) => void;
 }) {
+  const [showAll, setShowAll] = useState(false);
+  const primaryOptions = primaryValues
+    ? options.filter(([itemValue]) => primaryValues.includes(itemValue))
+    : options;
+  const selectedOption = options.find(([itemValue]) => itemValue === value);
+  const visibleOptions = primaryValues && !showAll
+    ? selectedOption && !primaryOptions.some(([itemValue]) => itemValue === value)
+      ? [selectedOption, ...primaryOptions]
+      : primaryOptions
+    : options;
+  const hasMoreOptions = !!primaryValues && options.length > primaryOptions.length;
+
   return (
-    <div className="min-w-0">
-      <div className="ui-section-kicker mb-1.5">{label}</div>
+    <div className="min-w-0" role="group" aria-labelledby={`knowledge-picker-${label}`}>
+      <div id={`knowledge-picker-${label}`} className="ui-section-kicker mb-1.5">{label}</div>
       <div className="flex flex-wrap gap-1.5">
-        {options.map(([itemValue, itemLabel]) => (
+        {visibleOptions.map(([itemValue, itemLabel]) => (
           <button
             key={itemValue}
             type="button"
@@ -2742,6 +3337,16 @@ function Picker<T extends string>({
             {itemLabel}
           </button>
         ))}
+        {hasMoreOptions && (
+          <button
+            type="button"
+            onClick={() => setShowAll((open) => !open)}
+            aria-expanded={showAll}
+            className="ui-filter-button text-[var(--ui-accent-text)]"
+          >
+            {showAll ? "收起其他类型" : `更多类型（${options.length - primaryOptions.length}）`}
+          </button>
+        )}
       </div>
     </div>
   );

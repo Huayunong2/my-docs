@@ -43,12 +43,15 @@ npm run build
 cargo fmt --manifest-path server/Cargo.toml --check
 cargo test --manifest-path server/Cargo.toml --locked
 cargo clippy --manifest-path server/Cargo.toml --all-targets --locked -- -D warnings
+cargo fmt --manifest-path src-tauri/Cargo.toml --check
 cargo check --manifest-path src-tauri/Cargo.toml --locked
 bash -n setup.sh ops.sh
 bash scripts/test-setup-mode-guards.sh
 ```
 
 涉及数据库迁移、备份恢复、部署脚本或 API 契约的修改，应补充测试，并在 Pull Request 中说明兼容性和回滚方式。
+
+不要为了让检查通过而删除、弱化或绕过回归断言。修改测试期望值或 snapshot 时，需要在 Pull Request 中说明对应的行为变化和依据；安全相关修改还应覆盖未授权请求、错误 token、CORS、路径校验、恢复回滚和敏感信息不泄露场景。
 
 ## Pull Request
 

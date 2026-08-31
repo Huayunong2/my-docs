@@ -142,7 +142,7 @@ APP_DIR=/srv/daily-summary ./setup.sh --cur
 
 ## 配置
 
-生产配置由 `setup.sh` 管理，也可以参考 [server/.env.example](server/.env.example) 手动创建 `server/.env`。真实配置文件不会被 Git 追踪。
+生产配置由 `setup.sh` 管理，也可以参考 [server/.env.example](server/.env.example) 手动创建 `server/.env`。真实配置文件不会被 Git 追踪。部署完成时脚本只显示访问令牌的脱敏提示；完整 token 保存在权限为 0600 的 `server/.env` 中，应通过安全的本地渠道读取。
 
 常用变量：
 
@@ -151,7 +151,7 @@ APP_DIR=/srv/daily-summary ./setup.sh --cur
 | `DAILY_SUMMARY_TOKEN` | API 访问令牌；生产环境必填 |
 | `DAILY_SUMMARY_BIND` | 监听地址，例如 `127.0.0.1:8080` 或 `0.0.0.0:8080` |
 | `DAILY_SUMMARY_ALLOWED_ORIGINS` | CORS 白名单，应填写实际 Web 来源 |
-| `DAILY_SUMMARY_ALLOW_NO_TOKEN` | 仅本地开发使用；生产环境不要开启 |
+| `DAILY_SUMMARY_ALLOW_NO_TOKEN` | 仅 loopback 本地开发使用；生产环境必须为 `0` 或未设置 |
 | `DAILY_SUMMARY_AI_API_KEY` | 服务端 AI Key，可留空以关闭 AI |
 | `DAILY_SUMMARY_AI_BASE_URL` | OpenAI-compatible API 地址 |
 | `DAILY_SUMMARY_AI_MODEL` | AI 模型名 |

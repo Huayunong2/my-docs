@@ -4,7 +4,7 @@ import * as api from "../../lib/api";
 import { useConfirmDialog } from "../ui/Feedback";
 import { Card, DangerBtn, Input, PrimaryBtn, SecondaryBtn, SectionTitle, StatusBox, type Tone, normalizeInputUrl } from "./shared";
 
-export default function ConnectionPanel() {
+export default function ConnectionPanel({ onConnectionSaved }: { onConnectionSaved?: () => void }) {
   const [serverUrl, setServerUrl] = useState(api.getServerUrl());
   const [token, setToken] = useState(api.getApiToken());
   const [showToken, setShowToken] = useState(false);
@@ -66,7 +66,8 @@ export default function ConnectionPanel() {
   const saveAndTest = async () => {
     api.setServerUrl(serverUrl);
     api.setApiToken(token);
-    await testConnection(serverUrl, token);
+    const connected = await testConnection(serverUrl, token);
+    if (connected) onConnectionSaved?.();
   };
 
   const clearLocalConfig = async () => {

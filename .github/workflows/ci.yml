@@ -25,13 +25,29 @@ jobs:
         with:
           components: clippy,rustfmt
 
+      - name: Install Tauri Linux dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y \
+            build-essential \
+            file \
+            libayatana-appindicator3-dev \
+            libssl-dev \
+            librsvg2-dev \
+            libwebkit2gtk-4.1-dev \
+            libxdo-dev \
+            patchelf
+
       - run: npm ci
       - run: npm audit --omit=dev --audit-level=moderate
       - run: npm test
       - run: npm run check:bundle
+      - run: npm run build
       - run: cargo fmt --manifest-path server/Cargo.toml --check
       - run: cargo test --manifest-path server/Cargo.toml --locked
       - run: cargo clippy --manifest-path server/Cargo.toml --all-targets --locked -- -D warnings
+      - run: cargo fmt --manifest-path src-tauri/Cargo.toml --check
+      - run: cargo check --manifest-path src-tauri/Cargo.toml --locked
       - run: bash -n setup.sh ops.sh
       - run: bash scripts/test-setup-mode-guards.sh
 

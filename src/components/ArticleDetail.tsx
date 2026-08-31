@@ -10,12 +10,14 @@ export default function ArticleDetail({
   onClose,
   onEdit,
   onDelete,
+  highlight = "",
 }: {
   article: Article;
   mode?: "modal" | "panel";
   onClose: () => void;
   onEdit: (date: string) => void;
   onDelete?: (article: Article) => void;
+  highlight?: string;
 }) {
   const [copied, setCopied] = useState(false);
   const tags = article.tags;
@@ -55,12 +57,12 @@ export default function ArticleDetail({
           </div>
           {mode === "modal" ? (
             <Dialog.Title asChild>
-              <h2 className="mt-2 truncate text-xl font-bold text-[var(--ui-text)]">
+              <h2 className="mt-2 break-words text-xl font-bold leading-7 text-[var(--ui-text)]">
                 {article.title || "(无标题)"}
               </h2>
             </Dialog.Title>
           ) : (
-            <h2 className="mt-2 truncate text-xl font-bold text-[var(--ui-text)]">
+            <h2 className="mt-2 break-words text-xl font-bold leading-7 text-[var(--ui-text)]">
               {article.title || "(无标题)"}
             </h2>
           )}
@@ -89,16 +91,16 @@ export default function ArticleDetail({
           )}
         </div>
         <div className="flex shrink-0 items-center gap-1.5">
-          <button type="button" onClick={copyContent} className="ui-button-secondary hidden sm:inline-flex" aria-label={copied ? "已复制记录内容" : "复制记录内容"}>
+          <button type="button" onClick={copyContent} className="ui-button-secondary inline-flex h-9 w-9 justify-center px-0 sm:h-auto sm:w-auto sm:px-3" aria-label={copied ? "已复制记录内容" : "复制记录内容"}>
             {copied ? <Check size={14} /> : <Copy size={14} />}
-            {copied ? "已复制" : "复制"}
+            <span className="hidden sm:inline">{copied ? "已复制" : "复制"}</span>
           </button>
-          <button type="button" onClick={() => onEdit(article.date)} className="ui-button-primary">
-            <Edit3 size={14} /> 编辑
+          <button type="button" onClick={() => onEdit(article.date)} className="ui-button-primary inline-flex h-9 w-9 justify-center px-0 sm:h-auto sm:w-auto sm:px-3" aria-label="编辑记录">
+            <Edit3 size={14} /> <span className="hidden sm:inline">编辑</span>
           </button>
           {onDelete && (
-            <button type="button" onClick={() => onDelete(article)} className="ui-button-danger hidden sm:inline-flex">
-              <Trash2 size={14} /> 删除
+            <button type="button" onClick={() => onDelete(article)} className="ui-button-danger inline-flex h-9 w-9 justify-center px-0 sm:h-auto sm:w-auto sm:px-3" aria-label="删除记录">
+              <Trash2 size={14} /> <span className="hidden sm:inline">删除</span>
             </button>
           )}
           <button type="button" onClick={onClose} className="ui-icon-button h-9 w-9" title="关闭" aria-label="关闭详情">
@@ -109,22 +111,38 @@ export default function ArticleDetail({
       </div>
       <div className="flex-1 overflow-y-auto px-4 py-5 md:px-6">
         <div className="ui-reader">
+          {highlight.trim() && (
+            <figure className="ui-status-accent mb-5 rounded-xl p-3" aria-label="当前卡片引用的来源片段">
+              <figcaption className="mb-1 text-xs font-semibold">当前卡片引用的片段</figcaption>
+              <blockquote className="whitespace-pre-wrap break-words text-sm leading-6">{highlight}</blockquote>
+            </figure>
+          )}
           <MarkdownContent content={article.content} />
         </div>
       </div>
       <div className="ui-soft-divider border-t px-4 py-3 text-xs text-[var(--ui-text-subtle)] md:px-6">
-        <div className="ui-reader flex items-center justify-between gap-3">
-          <span>共 {article.word_count} 字</span>
-          <span className="truncate">更新于 {article.updated_at}</span>
+        <div className="ui-reader flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <div className="flex min-w-0 items-center justify-between gap-3">
+            <span>共 {article.word_count} 字</span>
+            <span className="truncate">更新于 {article.updated_at}</span>
+          </div>
+          {highlight.trim() && (
+            <button type="button" onClick={onClose} className="ui-button-primary shrink-0 self-end text-xs sm:self-auto">
+              返回卡片
+            </button>
+          )}
         </div>
       </div>
     </div>
   );
 
-  const touchY = useRef(0);
-  const onTouchStart = (e: React.TouchEvent) => { touchY.current = e.touches[0].clientY; };
+  const touchY = useRef<number | null>(null);
+  const onTouchStart = (e: React.TouchEvent) => {
+    touchY.current = e.target === e.currentTarget ? e.touches[0].clientY : null;
+  };
   const onTouchEnd = (e: React.TouchEvent) => {
-    if (e.changedTouches[0].clientY - touchY.current > 150) onClose();
+    if (touchY.current !== null && e.target === e.currentTarget && e.changedTouches[0].clientY - touchY.current > 150) onClose();
+    touchY.current = null;
   };
 
   if (mode === "panel") return content;

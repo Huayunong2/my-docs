@@ -31,6 +31,7 @@ interface SettingsPageProps {
   onChangeAccentTheme: (theme: string) => void;
   themeMode: ThemeMode;
   onChangeThemeMode: (mode: ThemeMode) => void;
+  onConnectionSaved?: () => void;
 }
 
 const THEMES = [
@@ -48,7 +49,7 @@ const themeIcons: Record<ThemeMode, LucideIcon> = {
   dark: Moon,
 };
 
-export default function SettingsPage({ accentTheme, onChangeAccentTheme, themeMode, onChangeThemeMode }: SettingsPageProps) {
+export default function SettingsPage({ accentTheme, onChangeAccentTheme, themeMode, onChangeThemeMode, onConnectionSaved }: SettingsPageProps) {
   const [tab, setTab] = useState<Tab>(initialSettingsTab);
   const contentRef = useRef<HTMLDivElement>(null);
   const labels: Record<Tab, string> = { connect: "连接", review: "复习", ai: "AI", backup: "备份", export: "导出", appearance: "外观" };
@@ -88,7 +89,7 @@ export default function SettingsPage({ accentTheme, onChangeAccentTheme, themeMo
         </div>
       </div>
       <div ref={contentRef} className="settings-content min-h-0 flex-1 overflow-y-auto px-3 py-4 sm:px-4 md:px-8 md:py-6">
-        {tab === "connect" && <ConnectionPanel />}
+        {tab === "connect" && <ConnectionPanel onConnectionSaved={onConnectionSaved} />}
         {tab === "review" && <ReviewSettingsPanel />}
         {tab === "ai" && <AIPanel />}
         {tab === "backup" && <BackupPanel />}

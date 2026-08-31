@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  colorSchemeForMode,
   nextExplicitThemeMode,
   resolveDarkTheme,
   themeColorForMode,
@@ -31,5 +32,10 @@ describe("theme state", () => {
   it("turns the quick toggle into an explicit persisted mode", () => {
     expect(nextExplicitThemeMode(true)).toBe("light");
     expect(nextExplicitThemeMode(false)).toBe("dark");
+  });
+
+  it("opts the browser out of a second automatic recoloring pass", () => {
+    expect(colorSchemeForMode(false)).toBe("only light");
+    expect(colorSchemeForMode(true)).toBe("only dark");
   });
 });

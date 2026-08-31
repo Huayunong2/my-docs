@@ -324,6 +324,7 @@ function SettingsRoute() {
       onChangeAccentTheme={shell.onChangeAccentTheme}
       themeMode={shell.themeMode}
       onChangeThemeMode={shell.onChangeThemeMode}
+      onConnectionSaved={shell.returnFromConnectionSettings}
     />
   );
 }

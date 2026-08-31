@@ -4,7 +4,12 @@
     <meta charset="UTF-8" />
     <link rel="icon" href="/icon.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
-    <meta name="color-scheme" content="light dark" />
+    <!--
+      The page owns both themes. `only` prevents mobile browsers with a
+      forced/automatic dark mode (such as Quark) from recoloring the result a
+      second time before the app theme is applied.
+    -->
+    <meta name="color-scheme" content="only light" />
     <meta name="theme-color" content="#eef2f6" />
     <script>
       (() => {
@@ -14,7 +19,9 @@
           const accentTheme = storage?.getItem("accentTheme");
           const isDark = mode === "dark" || (mode !== "light" && window.matchMedia("(prefers-color-scheme: dark)").matches);
           document.documentElement.classList.toggle("dark", isDark);
-          document.documentElement.style.colorScheme = isDark ? "dark" : "light";
+          const colorScheme = isDark ? "only dark" : "only light";
+          document.documentElement.style.colorScheme = colorScheme;
+          document.querySelector('meta[name="color-scheme"]')?.setAttribute("content", colorScheme);
           document.querySelector('meta[name="theme-color"]')?.setAttribute("content", isDark ? "#11151b" : "#eef2f6");
           if (accentTheme) document.documentElement.dataset.theme = accentTheme;
         } catch {

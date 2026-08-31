@@ -308,6 +308,22 @@ random_token() {
   fi
 }
 
+mask_token() {
+  local token="$1"
+  local length="${#token}"
+  if [ "$length" -le 8 ]; then
+    printf '********'
+    return
+  fi
+  printf '%s...%s' "${token:0:4}" "${token: -4}"
+}
+
+token_display_text() {
+  local token="$1"
+  printf 'Access token: stored in %s (permissions 0600)\nToken hint:  %s' \
+    "$ENV_FILE" "$(mask_token "$token")"
+}
+
 node_is_supported() {
   has_cmd node && node -v | grep -Eq '^v(20|21|22|23|24)\.'
 }
@@ -498,6 +514,7 @@ write_env_file() {
 DAILY_SUMMARY_TOKEN=$token
 DAILY_SUMMARY_BIND=$BIND_ADDR
 DAILY_SUMMARY_ALLOWED_ORIGINS=$PUBLIC_URL
+DAILY_SUMMARY_ALLOW_NO_TOKEN=0
 DAILY_SUMMARY_AI_API_KEY=$ai_key
 DAILY_SUMMARY_AI_BASE_URL=${ai_base:-https://api.openai.com/v1}
 DAILY_SUMMARY_AI_MODEL=${ai_model:-gpt-4o-mini}
@@ -1133,6 +1150,9 @@ configure_firewall_if_needed() {
 }
 
 print_result() {
+  local token_notice
+  token_notice="$(token_display_text "$TOKEN")"
+
   cat <<EOF
 
 Deployment complete.
@@ -1152,14 +1172,13 @@ EOF
 
   cat <<EOF
 
-Access token:
-$TOKEN
+$token_notice
 
 Next steps:
 1. Open $PUBLIC_URL
 2. Go to Settings -> Connection
 3. Server URL: $API_URL
-4. Access token: the token printed above
+4. Access token: read DAILY_SUMMARY_TOKEN from $ENV_FILE through a secure local channel
 
 Useful commands:
   systemctl status $SERVICE_NAME
@@ -1168,7 +1187,7 @@ Useful commands:
   $OPS_SCRIPT backup-bundle
   $OPS_SCRIPT maintain-backups
   $OPS_SCRIPT monitor
-  curl $PUBLIC_URL/api/articles?page=1\\&page_size=1
+  curl "$PUBLIC_URL/health"
 EOF
 
   if [ "$MODE" = "ip" ]; then
