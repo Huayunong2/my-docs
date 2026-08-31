@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Bar, BarChart, Cell, ResponsiveContainer, Tooltip } from "recharts";
+import { Bar, BarChart, Cell, ResponsiveContainer, Tooltip, XAxis } from "recharts";
 import type { MouseEvent } from "react";
 import { motion } from "framer-motion";
 import * as Dialog from "@radix-ui/react-dialog";
@@ -8,8 +8,8 @@ import type { LucideIcon } from "lucide-react";
 import * as api from "../lib/api";
 import type { MonthDayStats, Review, ReviewKind, StatsOverview, WeekReview } from "../lib/api";
 import type { Page } from "../App";
-import { normalizeReviewContent } from "../lib/reviewContent";
-import { generateReviewVersion, upsertReviewVersion } from "../lib/reviewGeneration";
+import { reviewPreview } from "../lib/reviewContent";
+import { generateReviewVersion, selectLatestReview, upsertReviewVersion } from "../lib/reviewGeneration";
 import type { ReviewGenerationStep } from "../lib/reviewGeneration";
 import { loadStatsSnapshot } from "../lib/statsSnapshot";
 import { useCountUp } from "../lib/useCountUp";
@@ -29,7 +29,7 @@ function ChartTooltip({ active, payload, label }: {
   return (
     <div className="ui-modal-surface w-auto px-3 py-2 text-xs">
       {label != null && label !== "" && (
-        <div className="mb-1 font-medium text-[var(--ui-text-muted)]">{label}</div>
+        <div className="mb-1 font-medium text-[var(--ui-text-muted)]">{formatDateLabel(String(label))}</div>
       )}
       <div className="flex items-center gap-2">
         <span
@@ -47,6 +47,39 @@ function ChartTooltip({ active, payload, label }: {
 
 function formatDate(d: Date): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
+function formatMonthLabel(year: number, month: number): string {
+  return `${year} 年 ${month} 月`;
+}
+
+function dateParts(value: string) {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
+  if (!match) return null;
+  return { year: Number(match[1]), month: Number(match[2]), day: Number(match[3]) };
+}
+
+function formatDateLabel(value: string): string {
+  const parts = dateParts(value);
+  return parts ? `${parts.year}年${parts.month}月${parts.day}日` : value;
+}
+
+function formatMonthDay(value: string): string {
+  const parts = dateParts(value);
+  return parts ? `${parts.month}月${parts.day}日` : value;
+}
+
+function formatDateRange(from: string, to: string): string {
+  const start = dateParts(from);
+  const end = dateParts(to);
+  if (!start || !end) return `${from} 至 ${to}`;
+  if (start.year === end.year && start.month === end.month) {
+    return `${start.year}年${start.month}月${start.day}—${end.day}日`;
+  }
+  if (start.year === end.year) {
+    return `${start.year}年${start.month}月${start.day}日—${end.month}月${end.day}日`;
+  }
+  return `${formatDateLabel(from)}—${formatDateLabel(to)}`;
 }
 
 function monthBounds(year: number, month: number) {
@@ -110,9 +143,7 @@ const STEP_LABELS: Record<Exclude<ReviewGenerationStep, "idle">, string> = {
 };
 
 function chooseCurrentReview(reviews: Review[]): Review | null {
-  if (reviews.length === 0) return null;
-  const byVersion = [...reviews].sort((a, b) => b.version - a.version);
-  return byVersion.find((review) => review.status === "confirmed") || byVersion[0];
+  return selectLatestReview(reviews);
 }
 
 export default function StatsPage({
@@ -132,8 +163,10 @@ export default function StatsPage({
 }) {
   const now = new Date();
   const initialMonthParts = parseMonthParam(initialMonth);
+  const initialIsCurrentMonth = Boolean(initialMonthParts && initialMonthParts.year === now.getFullYear() && initialMonthParts.month === now.getMonth() + 1);
   const [year, setYear] = useState(initialMonthParts?.year ?? now.getFullYear());
   const [month, setMonth] = useState(initialMonthParts?.month ?? now.getMonth() + 1);
+  const lastInitialMonth = useRef(initialMonth);
   const [overview, setOverview] = useState<StatsOverview | null>(null);
   const [days, setDays] = useState<MonthDayStats[]>([]);
   const [reviewStats, setReviewStats] = useState<api.ReviewStatsResponse | null>(null);
@@ -141,7 +174,9 @@ export default function StatsPage({
   const [weekReview, setWeekReview] = useState<WeekReview | null>(null);
   const [weeklyReviews, setWeeklyReviews] = useState<Review[]>([]);
   const [monthlyReviews, setMonthlyReviews] = useState<Review[]>([]);
-  const [reviewWeekDate, setReviewWeekDate] = useState(() => todayDate());
+  const [reviewWeekDate, setReviewWeekDate] = useState(() =>
+    initialMonthParts && !initialIsCurrentMonth ? `${initialMonthParts.year}-${String(initialMonthParts.month).padStart(2, "0")}-15` : todayDate()
+  );
   const [reviewError, setReviewError] = useState("");
   const [generatingKind, setGeneratingKind] = useState<ReviewKind | null>(null);
   const [generationStep, setGenerationStep] = useState<ReviewGenerationStep>("idle");
@@ -154,8 +189,12 @@ export default function StatsPage({
   const [savingExemption, setSavingExemption] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [reviewStatsError, setReviewStatsError] = useState("");
+  const [heatmapError, setHeatmapError] = useState("");
   const loadRevision = useRef(0);
   const generationInFlight = useRef(false);
+  const loadedMonthKey = useRef<string | null>(null);
+  const loadedWeekDate = useRef<string | null>(null);
   const knowledgeSummaryQuery = useQuery({
     queryKey: api.knowledgeQueryKeys.summary(),
     queryFn: ({ signal }) => api.getKnowledgeSummary("", { signal }),
@@ -166,12 +205,17 @@ export default function StatsPage({
   const selectedWeekBounds = useMemo(() => weekBounds(reviewWeekDate), [reviewWeekDate]);
   const generationAnchors = useRef({ weekly: reviewWeekDate, monthly: bounds.first });
   generationAnchors.current = { weekly: reviewWeekDate, monthly: bounds.first };
+  const selectedMonthKey = `${year}-${String(month).padStart(2, "0")}`;
+  const monthDataChanged = loadedMonthKey.current !== selectedMonthKey;
+  const weekReady = Boolean(weekReview && loadedWeekDate.current === reviewWeekDate);
   const maxMoodCount = Math.max(1, ...Object.values(overview?.mood_counts || {}));
   const writtenDays = overview?.days_written || 0;
   const exemptedDays = overview?.exempted_days || 0;
   const coveredDays = writtenDays + exemptedDays;
   const completion = bounds.daysInMonth > 0 ? Math.round((coveredDays / bounds.daysInMonth) * 100) : 0;
-  const animatedCompletion = useCountUp(loading ? null : completion);
+  const coreLoading = (loading && !overview) || (monthDataChanged && Boolean(overview));
+  const coreError = !overview && !loading && Boolean(error);
+  const animatedCompletion = useCountUp(coreLoading ? null : completion);
   const today = todayDate();
   const selectedWeeklyReview = chooseCurrentReview(weeklyReviews);
   const selectedMonthlyReview = chooseCurrentReview(monthlyReviews);
@@ -184,7 +228,7 @@ export default function StatsPage({
   const rhythmData = useMemo(
     () =>
       days.map((day) => {
-        let color = "#d1d5db";
+        let color = "var(--ui-border-strong)";
         let value = 0;
         let status = "空缺";
         if (day.has_article) {
@@ -195,12 +239,12 @@ export default function StatsPage({
           const reason = day.exemption.reason;
           color =
             reason === "休息" || reason === "放假"
-              ? "#34d399"
+              ? "var(--ui-success-action)"
               : reason === "生病"
-                ? "#fb7185"
+                ? "var(--ui-danger-action)"
                 : reason === "出差"
-                  ? "#38bdf8"
-                  : "#fbbf24";
+                  ? "var(--ui-info-action)"
+                  : "var(--ui-warning-action)";
           value = 1;
           status = `豁免：${reason}`;
         }
@@ -242,11 +286,11 @@ export default function StatsPage({
   const knowledgeQualityIssueCount = knowledgeSummary
     ? knowledgeQualityOptions.reduce((total, option) => total + knowledgeSummary[option.key], 0)
     : 0;
-  const missingDays = weekReview?.missing_days || [];
+  const missingDays = weekReady ? weekReview?.missing_days || [] : [];
   const visibleMissingDays = expandedMissingDays ? missingDays : missingDays.slice(0, 5);
   const monthHighlights = [
-    { icon: Trophy, label: "最长记录", value: longestDay ? `${longestDay.word_count} 字` : "暂无", meta: longestDay?.date || "写下第一篇后出现" },
-    { icon: Clock, label: "最近记录", value: latestDay ? latestDay.date.slice(5) : "暂无", meta: latestDay?.title || "本月还没有记录" },
+    { icon: Trophy, label: "最长记录", value: longestDay ? `${longestDay.word_count} 字` : "暂无", meta: longestDay ? formatDateLabel(longestDay.date) : "写下第一篇后出现" },
+    { icon: Clock, label: "最近记录", value: latestDay ? formatMonthDay(latestDay.date) : "暂无", meta: latestDay?.title || "本月还没有记录" },
     { icon: Target, label: "当前空缺", value: `${overview?.missing_days || 0} 天`, meta: remainingDays ? `本月还剩 ${remainingDays} 天` : "当前月份已无剩余天" },
   ];
 
@@ -262,9 +306,21 @@ export default function StatsPage({
 
   const loadStats = useCallback(async (showLoading = true) => {
     const revision = ++loadRevision.current;
+    const monthKey = `${year}-${String(month).padStart(2, "0")}`;
+    const monthChanged = loadedMonthKey.current !== monthKey;
+    const weekChanged = loadedWeekDate.current !== reviewWeekDate;
     if (showLoading) setLoading(true);
     setError("");
     setReviewError("");
+    if (showLoading && monthChanged) {
+      setOverview(null);
+      setDays([]);
+      setMonthlyReviews([]);
+    }
+    if (showLoading && weekChanged) {
+      setWeekReview(null);
+      setWeeklyReviews([]);
+    }
     try {
       const snapshot = await loadStatsSnapshot(api, {
         year,
@@ -281,6 +337,8 @@ export default function StatsPage({
       setWeekReview(snapshot.week);
       setWeeklyReviews(snapshot.weeklyReviews);
       setMonthlyReviews(snapshot.monthlyReviews);
+      loadedMonthKey.current = monthKey;
+      loadedWeekDate.current = reviewWeekDate;
 
       if (snapshot.reviewError) {
         const reviewLoadError = snapshot.reviewError;
@@ -303,10 +361,14 @@ export default function StatsPage({
   }, [loadStats]);
 
   useEffect(() => {
+    if (initialMonth === lastInitialMonth.current) return;
+    lastInitialMonth.current = initialMonth;
     const next = parseMonthParam(initialMonth);
-    if (!next || (next.year === year && next.month === month)) return;
+    if (!next) return;
+    if (next.year === year && next.month === month) return;
     setYear(next.year);
     setMonth(next.month);
+    setReviewWeekDate(`${next.year}-${String(next.month).padStart(2, "0")}-15`);
   }, [initialMonth, month, year]);
 
   useEffect(() => {
@@ -319,12 +381,14 @@ export default function StatsPage({
     const d = new Date(year, month - 1 + delta, 1);
     setYear(d.getFullYear());
     setMonth(d.getMonth() + 1);
+    setReviewWeekDate(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-15`);
     onMonthChange?.(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`);
   };
 
   const goCurrentMonth = () => {
     setYear(now.getFullYear());
     setMonth(now.getMonth() + 1);
+    setReviewWeekDate(today);
     onMonthChange?.(`${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`);
   };
 
@@ -396,14 +460,24 @@ export default function StatsPage({
     return () => { mountedRef.current = false; };
   }, []);
 
-  // 复习统计 + 热力图（静默失败，不影响页面主体）
+  // 复习统计 + 热力图（可降级提示，不影响页面主体）
   useEffect(() => {
+    setReviewStatsError("");
+    setHeatmapError("");
     api.getReviewStats()
       .then((stats) => { if (mountedRef.current) setReviewStats(stats); })
-      .catch(() => { if (mountedRef.current) setReviewStats(null); });
+      .catch((e) => {
+        if (!mountedRef.current) return;
+        setReviewStats(null);
+        setReviewStatsError(api.getErrorMessage(e) || "复习统计暂时不可用");
+      });
     api.getReviewHeatmap(365)
       .then((data) => { if (mountedRef.current) setHeatmap(data); })
-      .catch(() => { if (mountedRef.current) setHeatmap([]); });
+      .catch((e) => {
+        if (!mountedRef.current) return;
+        setHeatmap([]);
+        setHeatmapError(api.getErrorMessage(e) || "复习热力图暂时不可用");
+      });
   }, []);
 
   const generateAiReview = async (kind: ReviewKind) => {
@@ -426,7 +500,9 @@ export default function StatsPage({
         setMonthlyReviews((reviews) => upsertReviewVersion(reviews, generated));
       }
     } catch (e) {
-      setReviewError(api.getErrorMessage(e));
+      const message = api.getErrorMessage(e);
+      setReviewError(message);
+      toast.error(message);
     } finally {
       generationInFlight.current = false;
       if (mountedRef.current) {
@@ -440,34 +516,37 @@ export default function StatsPage({
     <motion.div
       initial={{ opacity: 0, y: 10 }}
       animate={{ opacity: 1, y: 0 }}
-      className="page-surface page-surface-stats min-h-full overflow-y-auto px-3 pb-24 pt-4 sm:px-4 md:px-8 md:py-6"
+      className="page-surface page-surface-stats min-h-full px-3 pb-24 pt-4 sm:px-4 md:px-8 md:py-6"
     >
       <PageHeader
         icon={BarChart3}
         title="统计"
-        description={`${year} 年 ${month} 月 · ${loading ? "加载中" : `${writtenDays} 天记录，${exemptedDays} 天豁免`}`}
+        description={`${formatMonthLabel(year, month)} · ${coreLoading ? "正在加载统计" : coreError ? "暂时无法加载统计" : `${writtenDays} 天记录，${exemptedDays} 天豁免`}`}
         navigation={
           <div className="ui-toolbar flex items-center gap-1">
             <button
               type="button"
               onClick={() => shiftMonth(-1)}
-              className="ui-icon-button h-8 w-8"
+              className="ui-icon-button h-11 w-11 md:h-8 md:w-8"
               title="上个月"
+              aria-label="上个月"
             >
               <ChevronLeft size={16} />
             </button>
             <button
               type="button"
               onClick={goCurrentMonth}
-              className="ui-button-ghost h-8 min-h-8 px-3 text-xs font-semibold text-[var(--ui-accent-text)]"
+              className="ui-button-ghost h-11 min-h-11 px-3 text-xs font-semibold text-[var(--ui-accent-text)] md:h-8 md:min-h-8"
+              aria-label="回到本月"
             >
               本月
             </button>
             <button
               type="button"
               onClick={() => shiftMonth(1)}
-              className="ui-icon-button h-8 w-8"
+              className="ui-icon-button h-11 w-11 md:h-8 md:w-8"
               title="下个月"
+              aria-label="下个月"
             >
               <ChevronRight size={16} />
             </button>
@@ -475,238 +554,47 @@ export default function StatsPage({
         }
       />
 
-      {error && (
-        <div className="ui-alert-bad mb-4">
-          {error}
+      {coreLoading ? (
+        <StatsLoadingState monthLabel={formatMonthLabel(year, month)} />
+      ) : coreError ? (
+        <StatsErrorState message={error} onRetry={() => loadStats()} onOpenSettings={() => onNavigate("settings")} />
+      ) : (
+        <>
+      {reviewError && (
+        <div className="ui-alert-bad mb-4" role="alert" aria-live="assertive">
+          {reviewError}
         </div>
       )}
-      {reviewError && (
-        <div className="ui-alert-bad mb-4">
-          {reviewError}
+      {reviewStatsError && !reviewStats && (
+        <div className="ui-alert-warn mb-4" role="status" aria-live="polite">
+          复习统计暂时不可用：{reviewStatsError}
         </div>
       )}
 
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 md:gap-3 mb-4 md:mb-6">
-        <StatCard icon={CalendarDays} label="记录天数" value={loading ? "..." : `${writtenDays} 天`} tone="accent" animate />
+        <StatCard icon={CalendarDays} label="记录天数" value={coreLoading ? "..." : `${writtenDays} 天`} tone="accent" animate />
         <StatCard
           icon={TrendingUp}
           label="连续覆盖"
-          value={loading ? "..." : `${overview?.current_streak || 0} 天`}
+          value={coreLoading ? "..." : `${overview?.current_streak || 0} 天`}
           meta={overview?.streak_exempted_days ? `含 ${overview.streak_exempted_days} 天豁免` : "不含豁免"}
           tone="sky"
           animate
         />
-        <StatCard icon={FileText} label="总字数" value={loading ? "..." : `${overview?.total_words || 0}`} tone="amber" animate />
+        <StatCard icon={FileText} label="总字数" value={coreLoading ? "..." : `${overview?.total_words || 0}`} tone="amber" animate />
         <StatCard
           icon={ShieldCheck}
           label="豁免天数"
-          value={loading ? "..." : `${exemptedDays} 天`}
+          value={coreLoading ? "..." : `${exemptedDays} 天`}
           meta={dominantExemptionReason ? `主要：${dominantExemptionReason}` : undefined}
           tone={exemptionMetricTone}
           animate
         />
       </div>
 
-      {reviewStats && (
-        <section className="ui-panel mb-4 p-4 md:mb-6">
-          <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-            <div>
-              <h3 className="flex items-center gap-2 text-sm font-semibold text-[var(--ui-text)]">
-                <Brain size={16} className="text-[var(--ui-accent-text)]" /> 复习
-              </h3>
-              <p className="mt-0.5 text-xs text-[var(--ui-text-subtle)]">
-                学习中 {reviewStats.learning} 张 · 已掌握 {reviewStats.mature} 张 · 累计确认 {reviewStats.total_confirmed} 张
-              </p>
-            </div>
-            {reviewStats.due > 0 && (
-              <button
-                type="button"
-                onClick={() => onNavigate("review")}
-                className="ui-button-primary h-8 px-3 text-xs"
-              >
-                去复习 {reviewStats.due} 张 →
-              </button>
-            )}
-          </div>
-          <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-            <CompactMetric icon={Repeat} label="累计复习" value={String(reviewStats.total_reviews)} unit="次" tone="accent" />
-            <CompactMetric icon={Flame} label="连续复习" value={String(reviewStats.streak_days)} unit="天" tone="amber" />
-            <CompactMetric icon={CheckCircle2} label="今日已复习" value={String(reviewStats.reviewed_today)} unit="张" tone="green" />
-            <CompactMetric icon={CalendarClock} label="待复习" value={reviewStats.due > 0 ? String(reviewStats.due) : "无"} unit={reviewStats.due > 0 ? "张" : ""} tone={reviewStats.due > 0 ? "rose" : "gray"} />
-          </div>
-          <div className="mt-4">
-            <div className="ui-section-kicker mb-1.5">
-              近 30 天复习趋势
-            </div>
-            {reviewStats.daily.some((d) => d.count > 0) ? (
-              <div className="h-24">
-                <ResponsiveContainer width="100%" height="100%">
-                  <BarChart data={reviewStats.daily} margin={{ top: 4, right: 0, left: 0, bottom: 0 }}>
-                    <defs>
-                      <linearGradient id="accentGradient" x1="0" y1="0" x2="0" y2="1">
-                        <stop offset="0%" stopColor="var(--ui-accent-solid)" />
-                        <stop offset="100%" stopColor="var(--ui-accent-text)" />
-                      </linearGradient>
-                    </defs>
-                    <Tooltip
-                      cursor={{ fill: "var(--ui-surface-selected)" }}
-                      content={<ChartTooltip />}
-                      formatter={(value) => [`${value} 次`, "复习"]}
-                    />
-                    <Bar dataKey="count" radius={[4, 4, 0, 0]} fill="url(#accentGradient)" />
-                  </BarChart>
-                </ResponsiveContainer>
-              </div>
-            ) : (
-              <p className="ui-panel-muted rounded-lg px-3 py-4 text-center text-xs text-[var(--ui-text-subtle)]">
-                还没有复习记录——确认卡片后到「复习」页开始第一次间隔复习
-              </p>
-            )}
-            {reviewStats.daily.some((d) => d.count > 0) && (
-              <p className="mt-1.5 text-[11px] text-[var(--ui-text-subtle)]">
-                每天复习的卡片数，坚持连续复习比单次量大更重要
-              </p>
-            )}
-          </div>
-          <div className="mt-4">
-            <div className="mb-1.5 flex items-center justify-between">
-              <span className="ui-section-kicker">
-                未来 7 天到期
-              </span>
-              <span className="text-[11px] text-[var(--ui-text-subtle)]">
-                {reviewStats.upcoming.reduce((sum, day) => sum + day.count, 0)} 张
-              </span>
-            </div>
-            <div className="flex items-end gap-1.5">
-              {reviewStats.upcoming.map((day) => (
-                <div key={day.date} className="flex flex-1 flex-col items-center gap-1" title={`${day.date} · ${day.count} 张`}>
-                  <span className={`font-mono text-[11px] leading-none ${day.count > 0 ? "text-[var(--ui-accent-text)]" : "text-[var(--ui-text-disabled)]"}`}>
-                    {day.count || ""}
-                  </span>
-                  <div className={`h-2 w-full rounded-full ${day.count > 0 ? "bg-[var(--ui-accent-text)]/50" : "bg-[var(--ui-surface-inset)]"}`} />
-                </div>
-              ))}
-            </div>
-          </div>
-          {heatmap.length > 0 && (
-            <div className="mt-4">
-              <div className="mb-1.5 flex items-center justify-between">
-                <span className="ui-section-kicker">
-                  一年复习热力图
-                </span>
-                <span className="flex items-center gap-1 text-[11px] text-[var(--ui-text-subtle)]">
-                  少
-                  {[0, 1, 2, 4, 7].map((level) => (
-                    <span
-                      key={level}
-                      className={`inline-block h-2.5 w-2.5 rounded-[3px] ${level === 0 ? "bg-[var(--ui-surface-inset)]" : level <= 1 ? "ui-accent-fill-20" : level <= 2 ? "ui-accent-fill-40" : level <= 4 ? "ui-accent-fill-70" : "ui-accent-fill"}`}
-                    />
-                  ))}
-                  多
-                </span>
-              </div>
-              <div className="overflow-x-auto pb-1">
-                <div className="grid min-w-[560px] grid-flow-col grid-rows-7 gap-[3px]">
-                  {heatmap.map((day) => (
-                    <span
-                      key={day.date}
-                      title={`${day.date} · 复习 ${day.count} 次`}
-                      className={[
-                        "h-[11px] w-[11px] rounded-[3px]",
-                        day.count === 0
-                          ? "bg-[var(--ui-surface-inset)]"
-                          : day.count === 1
-                            ? "ui-accent-fill-20"
-                            : day.count <= 2
-                              ? "ui-accent-fill-40"
-                              : day.count <= 4
-                                ? "ui-accent-fill-70"
-                                : "ui-accent-fill",
-                      ].join(" ")}
-                    />
-                  ))}
-                </div>
-              </div>
-            </div>
-          )}
-        </section>
-      )}
-
-      {(knowledgeSummary || knowledgeSummaryQuery.isPending) && (
-        <section className="ui-panel mb-4 p-4 md:mb-6">
-          <div className="mb-3 flex flex-wrap items-start justify-between gap-2">
-            <div>
-              <h3 className="flex items-center gap-2 text-sm font-semibold text-[var(--ui-text)]">
-                <BookMarked size={16} className="text-[var(--ui-accent-text)]" /> 知识健康
-              </h3>
-              <p className="mt-0.5 text-xs text-[var(--ui-text-subtle)]">
-                {knowledgeSummary ? `${knowledgeSummary.total} 张活跃卡片 · ${knowledgeQualityIssueCount} 个待完善项` : "正在检查卡片完整度..."}
-              </p>
-            </div>
-            <button type="button" onClick={() => onNavigate("knowledge")} className="ui-button-secondary h-8 px-2.5 text-xs">
-              打开知识库 <ChevronRight size={13} />
-            </button>
-          </div>
-
-          {knowledgeSummaryQuery.isPending && !knowledgeSummary ? (
-            <div className="grid grid-cols-2 gap-2 sm:grid-cols-4" role="status" aria-label="正在加载知识健康">
-              {["w-3/5", "w-2/3", "w-1/2", "w-4/5"].map((width) => (
-                <div key={width} className="ui-panel-muted rounded-xl p-3">
-                  <div className={`ui-skeleton h-3 ${width}`} />
-                  <div className="ui-skeleton mt-3 h-5 w-1/3" />
-                </div>
-              ))}
-            </div>
-          ) : knowledgeSummary?.total === 0 ? (
-            <div className="ui-panel-muted rounded-xl border-dashed px-3 py-4 text-center text-xs text-[var(--ui-text-subtle)]">
-              还没有知识卡片；从今日记录或复盘中提取第一张卡片吧。
-            </div>
-          ) : knowledgeSummary && knowledgeQualityIssueCount > 0 ? (
-            <>
-              <div className="grid gap-2 sm:grid-cols-2">
-                {knowledgeQualityOptions.map(({ key, label, hint, icon: Icon, tone }) => {
-                  const count = knowledgeSummary[key];
-                  const toneClass = {
-                    accent: "ui-status-accent",
-                    green: "ui-status-success",
-                    amber: "ui-status-warning",
-                    gray: "ui-status-muted",
-                    rose: "ui-status-danger",
-                    sky: "ui-status-info",
-                  }[tone];
-                  return (
-                    <button
-                      key={key}
-                      type="button"
-                      onClick={() => onOpenKnowledgeQuality(key)}
-                      className="ui-panel card-interactive group flex min-w-0 items-center gap-3 p-3 text-left"
-                    >
-                      <span className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-xl ${toneClass}`}><Icon size={16} /></span>
-                      <span className="min-w-0 flex-1">
-                        <span className="flex items-center justify-between gap-2 text-xs font-semibold text-[var(--ui-text)]">
-                          <span className="truncate">{label}</span>
-                          <span className="font-mono text-sm text-[var(--ui-text)]">{count}</span>
-                        </span>
-                        <span className="mt-1 block truncate text-[11px] text-[var(--ui-text-subtle)]">{hint}</span>
-                      </span>
-                      <ChevronRight size={14} className="shrink-0 text-[var(--ui-text-disabled)] transition-transform group-hover:translate-x-0.5 group-hover:text-[var(--ui-accent-text)]" />
-                    </button>
-                  );
-                })}
-              </div>
-              <p className="mt-3 text-[11px] leading-4 text-[var(--ui-text-subtle)]">同一张卡片可能同时命中多个问题；点击后会打开全部状态的对应修复视图。</p>
-            </>
-          ) : (
-            <div className="ui-status-success flex items-center gap-2 rounded-xl px-3 py-3 text-xs">
-              <ShieldCheck size={16} /> 当前卡片字段完整度良好，可以继续专注于复习。
-            </div>
-          )}
-        </section>
-      )}
-
       <div className="space-y-4 md:space-y-6">
         <div className="grid items-start gap-4 xl:grid-cols-[minmax(0,1.55fr)_minmax(360px,0.85fr)]">
-        <section className="min-w-0 h-[min(78dvh,644px)] min-h-[520px] sm:h-[684px] xl:h-[760px]">
+        <section className="min-w-0 h-[clamp(440px,78dvh,644px)] min-h-[440px] sm:h-[684px] sm:min-h-0 xl:h-[760px]">
           <div className="ui-panel flex h-full flex-col overflow-hidden">
             <div className="flex flex-wrap items-center justify-between gap-3 border-b px-3 py-3 sm:px-4 ui-soft-divider">
               <div>
@@ -774,7 +662,7 @@ export default function StatsPage({
           </div>
         </section>
 
-          <section className="ui-panel h-[644px] min-w-0 overflow-y-auto p-3 sm:h-[684px] sm:p-4 xl:h-[760px]">
+          <section className="ui-panel h-auto min-h-0 min-w-0 overflow-visible p-3 sm:h-[684px] sm:overflow-y-auto sm:p-4 xl:h-[760px]">
             <div className="mb-4 flex items-start justify-between gap-3">
               <div>
                 <h3 className="flex items-center gap-2 text-sm font-semibold text-[var(--ui-text)]">
@@ -828,7 +716,7 @@ export default function StatsPage({
                 </h4>
                 <span className="text-[11px] text-[var(--ui-text-subtle)]">记录 / 豁免 / 空缺</span>
               </div>
-              <div className="h-20">
+              <div className="h-24" role="img" aria-label="本月记录、豁免和空缺节奏图">
                 <ResponsiveContainer width="100%" height="100%">
                   <BarChart data={rhythmData} margin={{ top: 4, right: 0, left: 0, bottom: 0 }}>
                     <Tooltip
@@ -838,6 +726,14 @@ export default function StatsPage({
                         const payload = item?.payload as { status?: string } | undefined;
                         return [payload?.status ?? "", "状态"];
                       }}
+                    />
+                    <XAxis
+                      dataKey="date"
+                      interval={6}
+                      tickFormatter={(value) => String(value).slice(-2)}
+                      tick={{ fontSize: 10, fill: "var(--ui-text-subtle)" }}
+                      tickLine={false}
+                      axisLine={false}
                     />
                     <Bar
                       dataKey="value"
@@ -856,9 +752,9 @@ export default function StatsPage({
                 </ResponsiveContainer>
               </div>
                 <div className="mt-2 flex items-center justify-between text-[11px] text-[var(--ui-text-subtle)]">
-                <span>{bounds.first.slice(5)}</span>
+                <span>{formatMonthDay(bounds.first)}</span>
                 <span>最长 {longestDay ? `${longestDay.word_count} 字` : "暂无"}</span>
-                <span>{bounds.last.slice(5)}</span>
+                <span>{formatMonthDay(bounds.last)}</span>
               </div>
             </div>
 
@@ -909,12 +805,7 @@ export default function StatsPage({
             <button
               type="button"
               onClick={() => onEditDate(today)}
-              className={[
-                "ui-button-primary h-10 w-full text-sm",
-                moodEntries.length == 0 ? "mt-16" :
-                moodEntries.length > 0 && moodEntries.length <= 6 ? "mt-11" : 
-                "mt-4",
-              ].join(" ")}
+              className="ui-button-primary mt-4 h-11 w-full text-sm md:h-10"
             >
               <span className="inline-flex items-center justify-center gap-1.5">
                 <PencilLine size={15} /> 编辑今天
@@ -924,18 +815,30 @@ export default function StatsPage({
         </div>
 
           <section className="ui-panel h-full p-4">
-            <h3 className="mb-1 text-sm font-semibold text-[var(--ui-text)]">本周复盘</h3>
-            <p className="mb-3 text-xs text-[var(--ui-text-subtle)]">
-              {weekReview ? `${weekReview.from} 至 ${weekReview.to}` : "加载中"}
-            </p>
+            <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+              <div>
+                <h3 className="text-sm font-semibold text-[var(--ui-text)]">本周复盘</h3>
+                <p className="mt-1 text-xs text-[var(--ui-text-subtle)]">
+                  {formatDateRange(selectedWeekBounds.first, selectedWeekBounds.last)} · {weekReady ? "可查看本周记录" : "正在加载"}
+                </p>
+              </div>
+              <DatePickerPopover
+                value={reviewWeekDate}
+                onChange={setReviewWeekDate}
+                label="选择一周"
+                className="w-full sm:w-[168px]"
+              />
+            </div>
+            {weekReady && weekReview ? (
+              <>
             <div className="space-y-3 text-sm">
-              <InfoRow label="记录 / 豁免" value={`${weekReview?.days_written || 0} / ${weekReview?.exempted_days || 0} 天`} />
+              <InfoRow label="记录 / 豁免" value={`${weekReview.days_written} / ${weekReview.exempted_days} 天`} />
               <InfoRow
                 label="空缺天"
-                value={weekReview?.missing_days.length ? `${weekReview.missing_days.length} 天` : "无"}
+                value={weekReview.missing_days.length ? `${weekReview.missing_days.length} 天` : "无"}
               />
-              <InfoRow label="总字数" value={`${weekReview?.total_words || 0}`} />
-              <InfoRow label="平均字数" value={`${Math.round(weekReview?.avg_words || 0)}`} />
+              <InfoRow label="总字数" value={`${weekReview.total_words}`} />
+              <InfoRow label="平均字数" value={`${Math.round(weekReview.avg_words)}`} />
             </div>
             {weekReview?.longest_article && (
               <button
@@ -948,7 +851,7 @@ export default function StatsPage({
                   {weekReview.longest_article.title || "(无标题)"}
                 </div>
                 <div className="mt-0.5 text-xs text-[var(--ui-text-subtle)]">
-                  {weekReview.longest_article.date} · {weekReview.longest_article.word_count} 字
+                  {formatDateLabel(weekReview.longest_article.date)} · {weekReview.longest_article.word_count} 字
                 </div>
               </button>
             )}
@@ -960,7 +863,7 @@ export default function StatsPage({
                     <button
                       type="button"
                       onClick={() => setExpandedMissingDays((value) => !value)}
-                      className="ui-button-ghost h-7 min-h-7 px-1 text-xs text-[var(--ui-accent-text)]"
+                      className="ui-button-ghost min-h-11 px-1 text-xs text-[var(--ui-accent-text)] sm:h-7 sm:min-h-7"
                     >
                       {expandedMissingDays ? "收起" : `显示全部 ${missingDays.length} 天`}
                     </button>
@@ -973,17 +876,17 @@ export default function StatsPage({
                       type="button"
                       onClick={() => setActiveMissingDay((current) => (current === date ? null : date))}
                       className={[
-                        "ui-filter-button min-h-8 rounded-full px-2.5 py-1 font-mono text-xs",
+                        "ui-filter-button min-h-11 rounded-full px-2.5 py-1 font-mono text-xs sm:min-h-8",
                         activeMissingDay === date ? "ui-filter-button-active" : "",
                       ].join(" ")}
                     >
-                      {date.slice(5)}
+                      {formatMonthDay(date)}
                     </button>
                   ))}
                 </div>
                 {activeMissingDay && (
                   <div className="ui-panel-muted mt-2 flex flex-col gap-2 px-3 py-2 sm:flex-row sm:items-center sm:justify-between">
-                    <span className="font-mono text-xs text-[var(--ui-text-muted)]">{activeMissingDay}</span>
+                    <span className="font-mono text-xs text-[var(--ui-text-muted)]">{formatDateLabel(activeMissingDay)}</span>
                     <div className="grid grid-cols-2 gap-2 sm:flex">
                       <button
                         type="button"
@@ -1035,15 +938,13 @@ export default function StatsPage({
               title="AI 周复盘"
               description="基于所选周的每日记录生成。草稿确认后，会作为月复盘的主要输入。"
               kind="weekly"
-              periodLabel={`${selectedWeekBounds.first} 至 ${selectedWeekBounds.last}`}
-              anchorDate={reviewWeekDate}
-              onAnchorDateChange={setReviewWeekDate}
+              periodLabel={formatDateRange(selectedWeekBounds.first, selectedWeekBounds.last)}
               reviews={weeklyReviews}
               selectedReview={selectedWeeklyReview}
               generating={generatingKind === "weekly"}
               generationDisabled={generatingKind !== null}
               generationStep={generationStep}
-              estimateLabel={`${weekReview?.total_words || 0} 字材料 · 服务端模型`}
+              estimateLabel={`${weekReview.total_words} 字材料 · 服务端模型`}
               onGenerate={() => generateAiReview("weekly")}
               onOpenLibrary={() => onNavigate("reviews")}
             />
@@ -1052,7 +953,7 @@ export default function StatsPage({
               title="AI 月复盘"
               description="优先读取本月已确认周复盘，并补充未被周复盘覆盖的每日记录摘要。"
               kind="monthly"
-              periodLabel={`${bounds.first.slice(0, 7)} 月`}
+              periodLabel={formatMonthLabel(year, month)}
               reviews={monthlyReviews}
               selectedReview={selectedMonthlyReview}
               generating={generatingKind === "monthly"}
@@ -1062,8 +963,239 @@ export default function StatsPage({
               onGenerate={() => generateAiReview("monthly")}
               onOpenLibrary={() => onNavigate("reviews")}
             />
+              </>
+            ) : (
+              <div className="ui-panel-muted flex min-h-24 items-center justify-center gap-2 rounded-xl px-3 py-4 text-center text-xs text-[var(--ui-text-subtle)]" role="status">
+                {loading ? <LoaderCircle size={15} className="animate-spin" /> : null}
+                {loading ? "正在加载本周统计…" : "本周统计暂时不可用，请稍后重试。"}
+              </div>
+            )}
           </section>
         </div>
+
+      {reviewStats && (
+        <details className="ui-panel group mb-4 p-4 md:mb-6">
+          <summary className="flex cursor-pointer list-none items-center justify-between gap-3 rounded-lg focus:outline-hidden focus-visible:ring-2 focus-visible:ring-[var(--ui-focus)]/40 [&::-webkit-details-marker]:hidden">
+            <div>
+              <h3 className="flex items-center gap-2 text-sm font-semibold text-[var(--ui-text)]">
+                <Brain size={16} className="text-[var(--ui-accent-text)]" /> 复习
+              </h3>
+              <p className="mt-0.5 text-xs text-[var(--ui-text-subtle)]">
+                学习中 {reviewStats.learning} 张 · 已掌握 {reviewStats.mature} 张 · 累计确认 {reviewStats.total_confirmed} 张
+              </p>
+            </div>
+            <div className="flex shrink-0 items-center gap-2">
+              {reviewStats.due > 0 && <span className="ui-status-warning rounded-full px-2.5 py-1 text-[11px] font-medium">待复习 {reviewStats.due} 张</span>}
+              <ChevronRight size={16} className="text-[var(--ui-text-subtle)] transition-transform group-open:rotate-90" aria-hidden="true" />
+            </div>
+          </summary>
+          <div className="mt-4">
+            {reviewStats.due > 0 && (
+              <div className="mb-3 flex justify-end">
+                <button
+                  type="button"
+                  onClick={() => onNavigate("review")}
+                  className="ui-button-primary min-h-11 px-3 text-xs sm:min-h-8"
+                >
+                  去复习 {reviewStats.due} 张 →
+                </button>
+              </div>
+            )}
+            <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+              <CompactMetric icon={Repeat} label="累计复习" value={String(reviewStats.total_reviews)} unit="次" tone="accent" />
+              <CompactMetric icon={Flame} label="连续复习" value={String(reviewStats.streak_days)} unit="天" tone="amber" />
+              <CompactMetric icon={CheckCircle2} label="今日已复习" value={String(reviewStats.reviewed_today)} unit="张" tone="green" />
+              <CompactMetric icon={CalendarClock} label="待复习" value={reviewStats.due > 0 ? String(reviewStats.due) : "无"} unit={reviewStats.due > 0 ? "张" : ""} tone={reviewStats.due > 0 ? "rose" : "gray"} />
+            </div>
+            <div className="mt-4">
+              <div className="ui-section-kicker mb-1.5">近 30 天复习趋势</div>
+              {reviewStats.daily.some((d) => d.count > 0) ? (
+                <div className="h-28" role="img" aria-label="近 30 天复习趋势图">
+                  <ResponsiveContainer width="100%" height="100%">
+                    <BarChart data={reviewStats.daily} margin={{ top: 4, right: 0, left: 0, bottom: 0 }}>
+                      <defs>
+                        <linearGradient id="accentGradient" x1="0" y1="0" x2="0" y2="1">
+                          <stop offset="0%" stopColor="var(--ui-accent-solid)" />
+                          <stop offset="100%" stopColor="var(--ui-accent-text)" />
+                        </linearGradient>
+                      </defs>
+                      <Tooltip
+                        cursor={{ fill: "var(--ui-surface-selected)" }}
+                        content={<ChartTooltip />}
+                        formatter={(value) => [`${value} 次`, "复习"]}
+                      />
+                      <XAxis
+                        dataKey="date"
+                        interval={6}
+                        tickFormatter={(value) => String(value).slice(-2)}
+                        tick={{ fontSize: 10, fill: "var(--ui-text-subtle)" }}
+                        tickLine={false}
+                        axisLine={false}
+                      />
+                      <Bar dataKey="count" radius={[4, 4, 0, 0]} fill="url(#accentGradient)" />
+                    </BarChart>
+                  </ResponsiveContainer>
+                </div>
+              ) : (
+                <p className="ui-panel-muted rounded-lg px-3 py-4 text-center text-xs text-[var(--ui-text-subtle)]">
+                  还没有复习记录——确认卡片后到「复习」页开始第一次间隔复习
+                </p>
+              )}
+              {reviewStats.daily.some((d) => d.count > 0) && (
+                <p className="mt-1.5 text-[11px] text-[var(--ui-text-subtle)]">每天复习的卡片数，坚持连续复习比单次量大更重要</p>
+              )}
+            </div>
+            <div className="mt-4">
+              <div className="mb-1.5 flex items-center justify-between">
+                <span className="ui-section-kicker">未来 7 天到期</span>
+                <span className="text-[11px] text-[var(--ui-text-subtle)]">
+                  {reviewStats.upcoming.reduce((sum, day) => sum + day.count, 0)} 张
+                </span>
+              </div>
+              <div className="flex items-end gap-1.5">
+                {reviewStats.upcoming.map((day) => (
+                  <div key={day.date} className="flex flex-1 flex-col items-center gap-1" title={`${formatDateLabel(day.date)} · ${day.count} 张`}>
+                    <span className={`font-mono text-[11px] leading-none ${day.count > 0 ? "text-[var(--ui-accent-text)]" : "text-[var(--ui-text-disabled)]"}`}>
+                      {day.count || ""}
+                    </span>
+                    <div className={`h-2 w-full rounded-full ${day.count > 0 ? "bg-[var(--ui-accent-text)]/50" : "bg-[var(--ui-surface-inset)]"}`} />
+                  </div>
+                ))}
+              </div>
+            </div>
+            {heatmapError ? (
+              <p className="ui-panel-muted mt-4 rounded-lg px-3 py-3 text-xs text-[var(--ui-text-subtle)]" role="status">
+                一年复习热力图暂时不可用。
+              </p>
+            ) : heatmap.length > 0 && (
+              <div className="mt-4">
+                <div className="mb-1.5 flex items-center justify-between">
+                  <span className="ui-section-kicker">一年复习热力图</span>
+                  <span className="flex items-center gap-1 text-[11px] text-[var(--ui-text-subtle)]">
+                    少
+                    {[0, 1, 2, 4, 7].map((level) => (
+                      <span
+                        key={level}
+                        className={`inline-block h-2.5 w-2.5 rounded-[3px] ${level === 0 ? "bg-[var(--ui-surface-inset)]" : level <= 1 ? "ui-accent-fill-20" : level <= 2 ? "ui-accent-fill-40" : level <= 4 ? "ui-accent-fill-70" : "ui-accent-fill"}`}
+                      />
+                    ))}
+                    多
+                  </span>
+                </div>
+                <div className="overflow-x-auto pb-1">
+                  <div className="grid min-w-[560px] grid-flow-col grid-rows-7 gap-[3px]">
+                    {heatmap.map((day) => (
+                      <span
+                        key={day.date}
+                        title={`${formatDateLabel(day.date)} · 复习 ${day.count} 次`}
+                        role="img"
+                        aria-label={`${formatDateLabel(day.date)}，复习 ${day.count} 次`}
+                        className={[
+                          "h-[11px] w-[11px] rounded-[3px]",
+                          day.count === 0
+                            ? "bg-[var(--ui-surface-inset)]"
+                            : day.count === 1
+                              ? "ui-accent-fill-20"
+                              : day.count <= 2
+                                ? "ui-accent-fill-40"
+                                : day.count <= 4
+                                  ? "ui-accent-fill-70"
+                                  : "ui-accent-fill",
+                        ].join(" ")}
+                      />
+                    ))}
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+        </details>
+      )}
+
+      {(knowledgeSummary || knowledgeSummaryQuery.isPending || knowledgeSummaryQuery.isError) && (
+        <details className="ui-panel group mb-4 p-4 md:mb-6">
+          <summary className="flex cursor-pointer list-none items-center justify-between gap-3 rounded-lg focus:outline-hidden focus-visible:ring-2 focus-visible:ring-[var(--ui-focus)]/40 [&::-webkit-details-marker]:hidden">
+            <div>
+              <h3 className="flex items-center gap-2 text-sm font-semibold text-[var(--ui-text)]">
+                <BookMarked size={16} className="text-[var(--ui-accent-text)]" /> 知识健康
+              </h3>
+              <p className="mt-0.5 text-xs text-[var(--ui-text-subtle)]">
+                {knowledgeSummary ? `${knowledgeSummary.total} 张活跃卡片 · ${knowledgeQualityIssueCount} 个待完善项` : knowledgeSummaryQuery.isError ? "知识健康暂时不可用" : "正在检查卡片完整度…"}
+              </p>
+            </div>
+            <ChevronRight size={16} className="shrink-0 text-[var(--ui-text-subtle)] transition-transform group-open:rotate-90" aria-hidden="true" />
+          </summary>
+          <div className="mt-4">
+            <div className="mb-3 flex justify-end">
+              <button type="button" onClick={() => onNavigate("knowledge")} className="ui-button-secondary min-h-11 px-2.5 text-xs sm:min-h-8">
+                打开知识库 <ChevronRight size={13} />
+              </button>
+            </div>
+            {knowledgeSummaryQuery.isError ? (
+              <div className="ui-alert-warn flex flex-col gap-3 rounded-xl px-3 py-3 text-xs sm:flex-row sm:items-center sm:justify-between" role="status">
+                <span>暂时无法检查知识卡片完整度。</span>
+                <button type="button" onClick={() => knowledgeSummaryQuery.refetch()} className="ui-button-secondary min-h-10 px-3 text-xs">
+                  重试
+                </button>
+              </div>
+            ) : knowledgeSummaryQuery.isPending && !knowledgeSummary ? (
+              <div className="grid grid-cols-2 gap-2 sm:grid-cols-4" role="status" aria-label="正在加载知识健康">
+                {["w-3/5", "w-2/3", "w-1/2", "w-4/5"].map((width) => (
+                  <div key={width} className="ui-panel-muted rounded-xl p-3">
+                    <div className={`ui-skeleton h-3 ${width}`} />
+                    <div className="ui-skeleton mt-3 h-5 w-1/3" />
+                  </div>
+                ))}
+              </div>
+            ) : knowledgeSummary?.total === 0 ? (
+              <div className="ui-panel-muted rounded-xl border-dashed px-3 py-4 text-center text-xs text-[var(--ui-text-subtle)]">
+                还没有知识卡片；从今日记录或复盘中提取第一张卡片吧。
+              </div>
+            ) : knowledgeSummary && knowledgeQualityIssueCount > 0 ? (
+              <>
+                <div className="grid gap-2 sm:grid-cols-2">
+                  {knowledgeQualityOptions.map(({ key, label, hint, icon: Icon, tone }) => {
+                    const count = knowledgeSummary[key];
+                    const toneClass = {
+                      accent: "ui-status-accent",
+                      green: "ui-status-success",
+                      amber: "ui-status-warning",
+                      gray: "ui-status-muted",
+                      rose: "ui-status-danger",
+                      sky: "ui-status-info",
+                    }[tone];
+                    return (
+                      <button
+                        key={key}
+                        type="button"
+                        onClick={() => onOpenKnowledgeQuality(key)}
+                        className="ui-panel card-interactive group flex min-w-0 items-center gap-3 p-3 text-left"
+                      >
+                        <span className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-xl ${toneClass}`}><Icon size={16} /></span>
+                        <span className="min-w-0 flex-1">
+                          <span className="flex items-center justify-between gap-2 text-xs font-semibold text-[var(--ui-text)]">
+                            <span className="truncate">{label}</span>
+                            <span className="font-mono text-sm text-[var(--ui-text)]">{count}</span>
+                          </span>
+                          <span className="mt-1 block truncate text-[11px] text-[var(--ui-text-subtle)]">{hint}</span>
+                        </span>
+                        <ChevronRight size={14} className="shrink-0 text-[var(--ui-text-disabled)] transition-transform group-hover:translate-x-0.5 group-hover:text-[var(--ui-accent-text)]" />
+                      </button>
+                    );
+                  })}
+                </div>
+                <p className="mt-3 text-[11px] leading-4 text-[var(--ui-text-subtle)]">同一张卡片可能同时命中多个问题；点击后会打开全部状态的对应修复视图。</p>
+              </>
+            ) : (
+              <div className="ui-status-success flex items-center gap-2 rounded-xl px-3 py-3 text-xs">
+                <ShieldCheck size={16} /> 当前卡片字段完整度良好，可以继续专注于复习。
+              </div>
+            )}
+          </div>
+        </details>
+      )}
+        </>
+      )}
 
       <Dialog.Root
         open={!!dayActionTarget}
@@ -1080,7 +1212,7 @@ export default function StatsPage({
                 <div>
                   <Dialog.Title className="text-base font-semibold text-[var(--ui-text)]">日期操作</Dialog.Title>
                   <Dialog.Description className="mt-1 text-xs leading-5 text-[var(--ui-text-muted)]">
-                    {dayActionTarget.date} · 选择要执行的操作
+                    {formatDateLabel(dayActionTarget.date)} · 选择要执行的操作
                   </Dialog.Description>
                 </div>
                 <Dialog.Close asChild>
@@ -1145,14 +1277,18 @@ export default function StatsPage({
               <div className="mb-3">
                 <Dialog.Title className="text-sm font-semibold text-[var(--ui-text)]">日期状态</Dialog.Title>
                 <Dialog.Description className="mt-0.5 text-xs text-[var(--ui-text-muted)]">
-                  {exemptionTarget.date} · 选择一个状态；这一天不算记录，但不会打断连续覆盖。
+                  {formatDateLabel(exemptionTarget.date)} · 选择一个状态；这一天不算记录，但不会打断连续覆盖。
                 </Dialog.Description>
               </div>
+              <label htmlFor="exemption-note" className="mb-1.5 block text-xs font-medium text-[var(--ui-text-muted)]">
+                状态备注 <span className="font-normal text-[var(--ui-text-subtle)]">（可选）</span>
+              </label>
               <textarea
+                id="exemption-note"
                 value={exemptionNote}
                 onChange={(e) => setExemptionNote(e.target.value)}
                 rows={2}
-                placeholder="备注，可留空"
+                placeholder="补充原因或安排"
                 className="ui-textarea mb-3"
               />
               <div className="grid grid-cols-2 gap-2" role="group" aria-label="日期状态选项">
@@ -1204,6 +1340,57 @@ export default function StatsPage({
   );
 }
 
+function StatsLoadingState({ monthLabel }: { monthLabel: string }) {
+  return (
+    <div className="ui-panel-muted flex min-h-[240px] flex-col items-center justify-center rounded-2xl px-6 py-10 text-center" role="status" aria-live="polite">
+      <span className="ui-status-accent inline-flex h-11 w-11 items-center justify-center rounded-2xl">
+        <LoaderCircle size={21} className="animate-spin" />
+      </span>
+      <h2 className="mt-4 text-sm font-semibold text-[var(--ui-text)]">正在加载统计</h2>
+      <p className="mt-1.5 max-w-sm text-xs leading-5 text-[var(--ui-text-subtle)]">
+        正在同步 {monthLabel} 的记录、月历和本周复盘。
+      </p>
+      <div className="mt-5 grid w-full max-w-md grid-cols-3 gap-2" aria-hidden="true">
+        <span className="ui-skeleton h-2 rounded-full" />
+        <span className="ui-skeleton h-2 rounded-full" />
+        <span className="ui-skeleton h-2 rounded-full" />
+      </div>
+    </div>
+  );
+}
+
+function StatsErrorState({
+  message,
+  onRetry,
+  onOpenSettings,
+}: {
+  message: string;
+  onRetry: () => void;
+  onOpenSettings: () => void;
+}) {
+  return (
+    <div className="ui-alert-bad flex flex-col gap-4 rounded-2xl p-4 sm:p-5" role="alert" aria-live="assertive">
+      <div className="flex items-start gap-3">
+        <span className="ui-status-danger flex h-9 w-9 shrink-0 items-center justify-center rounded-xl" aria-hidden="true">
+          <CircleHelp size={17} />
+        </span>
+        <div className="min-w-0">
+          <h2 className="text-sm font-semibold text-[var(--ui-text)]">统计暂时无法加载</h2>
+          <p className="mt-1 text-xs leading-5 text-[var(--ui-text-muted)]">{message || "请检查连接设置后重试。"}</p>
+        </div>
+      </div>
+      <div className="flex flex-col gap-2 sm:flex-row sm:justify-end">
+        <button type="button" onClick={onRetry} className="ui-button-primary min-h-11 px-4 text-sm sm:min-h-10">
+          重试
+        </button>
+        <button type="button" onClick={onOpenSettings} className="ui-button-secondary min-h-11 px-4 text-sm sm:min-h-10">
+          打开连接设置
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function CalendarDay({
   day,
   isToday,
@@ -1223,15 +1410,16 @@ function CalendarDay({
   const exemptionTone = getExemptionTone(day.exemption?.reason);
   const ExemptionIcon = getExemptionIcon(day.exemption?.reason);
   const openExemption = (e: MouseEvent<HTMLElement>) => {
+    if (!canManageExemption) return;
     e.preventDefault();
     e.stopPropagation();
-    if (canManageExemption) onManageExemption(day);
+    onManageExemption(day);
   };
   return (
     <div
       data-calendar-cell="day"
       onContextMenu={openExemption}
-      title={day.title || day.exemption?.reason || day.date}
+      title={day.title || day.exemption?.reason || formatDateLabel(day.date)}
       className={[
         "ui-calendar-cell group relative box-border h-full min-h-0 overflow-hidden rounded-lg text-left",
         day.has_article
@@ -1283,14 +1471,14 @@ function CalendarDay({
       <button
         type="button"
         onClick={() => onEditDate(day.date)}
-        aria-label={`${day.date}，${day.has_article ? "编辑记录" : day.exemption ? `编辑${day.exemption.reason}状态` : "补写记录"}`}
+        aria-label={`${formatDateLabel(day.date)}，${day.has_article ? "编辑记录" : day.exemption ? `编辑${day.exemption.reason}状态` : "补写记录"}`}
           className="absolute inset-0 z-10 hidden overflow-hidden rounded-lg text-left focus:outline-hidden focus:ring-2 focus:ring-inset focus:ring-[var(--ui-focus)]/40 md:block"
       />
 
       <button
         type="button"
         onClick={() => onOpenDayActions(day)}
-        aria-label={`${day.date}，打开日期操作`}
+        aria-label={`${formatDateLabel(day.date)}，打开日期操作`}
         className="absolute inset-0 z-10 rounded-lg text-left focus:outline-hidden focus:ring-2 focus:ring-inset focus:ring-[var(--ui-focus)]/40 md:hidden"
       />
 
@@ -1298,7 +1486,7 @@ function CalendarDay({
         <button
           type="button"
           onClick={openExemption}
-          aria-label={`${day.date} ${day.exemption ? "编辑" : "设置"}日期状态`}
+          aria-label={`${formatDateLabel(day.date)} ${day.exemption ? "编辑" : "设置"}日期状态`}
           title={`${day.exemption ? "编辑" : "设置"}日期状态`}
           className={[
             "ui-calendar-action absolute right-1 top-1 z-20 hidden h-7 w-7 items-center justify-center rounded-md transition-colors focus:outline-hidden focus:ring-2 focus:ring-[var(--ui-focus)]/50 sm:inline-flex sm:right-1.5 sm:top-1.5 sm:h-6 sm:w-6 sm:opacity-60 sm:hover:opacity-100",
@@ -1390,8 +1578,6 @@ function ReviewPanel({
   description,
   kind,
   periodLabel,
-  anchorDate,
-  onAnchorDateChange,
   reviews,
   selectedReview,
   generating,
@@ -1406,8 +1592,6 @@ function ReviewPanel({
   description: string;
   kind: ReviewKind;
   periodLabel: string;
-  anchorDate?: string;
-  onAnchorDateChange?: (date: string) => void;
   reviews: Review[];
   selectedReview: Review | null;
   generating: boolean;
@@ -1417,8 +1601,7 @@ function ReviewPanel({
   onGenerate: () => void;
   onOpenLibrary: () => void;
 }) {
-  const previewContent = selectedReview ? normalizeReviewContent(selectedReview.kind, selectedReview.title, selectedReview.content) : "";
-  const [datePickerOpen, setDatePickerOpen] = useState(false);
+  const previewContent = selectedReview ? reviewPreview(selectedReview.kind, selectedReview.title, selectedReview.content, 360) : "";
 
   return (
     <section className={`ui-panel p-3 transition-colors sm:p-4 ${className}`}>
@@ -1430,9 +1613,9 @@ function ReviewPanel({
           </h4>
           <p className="mt-1 line-clamp-2 text-xs leading-5 text-[var(--ui-text-muted)]">{description}</p>
         </div>
-        {reviews.length > 0 && (
+        {selectedReview && (
           <span className="ui-status-muted shrink-0 rounded-full px-2.5 py-1 text-[11px] font-medium">
-            v{reviews.length}
+            v{selectedReview.version} · {reviews.length} 版
           </span>
         )}
       </div>
@@ -1445,15 +1628,6 @@ function ReviewPanel({
             </div>
             <div className="mt-0.5 truncate text-xs font-semibold text-[var(--ui-text)]">{periodLabel}</div>
           </div>
-          {kind === "weekly" && anchorDate && onAnchorDateChange && (
-            <DatePickerPopover
-              value={anchorDate}
-              open={datePickerOpen}
-              onOpenChange={setDatePickerOpen}
-              onChange={onAnchorDateChange}
-              label="周内任意一天"
-            />
-          )}
         </div>
       </div>
 
@@ -1464,9 +1638,7 @@ function ReviewPanel({
             <span className="truncate text-xs font-medium text-[var(--ui-text-muted)]">{selectedReview.title}</span>
             <ReviewStatusPill status={selectedReview.status} />
           </div>
-          <p className="line-clamp-4 whitespace-pre-wrap text-xs leading-5 text-[var(--ui-text-muted)]">
-            {previewContent}
-          </p>
+          <p className="line-clamp-4 text-xs leading-5 text-[var(--ui-text-muted)]">{previewContent}</p>
         </div>
       ) : reviews.length > 0 ? (
         <p className="mb-4 text-xs text-[var(--ui-text-subtle)]">进入复盘库查看历史版本</p>
@@ -1496,7 +1668,7 @@ function ReviewPanel({
           type="button"
           onClick={onGenerate}
           disabled={generationDisabled}
-          className="ui-button-primary w-full sm:w-auto"
+          className="ui-button-primary min-h-11 w-full sm:min-h-10 sm:w-auto"
         >
           {generating ? (
             <LoaderCircle size={14} className="animate-spin" />
@@ -1508,7 +1680,7 @@ function ReviewPanel({
         <button
           type="button"
           onClick={onOpenLibrary}
-          className="ui-button-secondary w-full px-3 sm:w-auto"
+          className="ui-button-secondary min-h-11 w-full px-3 sm:min-h-10 sm:w-auto"
           title="打开复盘库"
         >
           <BookOpenText size={15} />

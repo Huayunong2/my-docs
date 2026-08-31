@@ -68,14 +68,14 @@ const mobilePrimaryNav: NavItem[] = [
   { id: "today", label: "今日", icon: NotebookPen, description: "写下今天" },
   { id: "knowledge", label: "知识", icon: BookMarked, description: "整理卡片" },
   { id: "review", label: "复习", icon: Brain, description: "保持记忆" },
-  { id: "stats", label: "统计", icon: BarChart3, description: "回看节奏" },
+  { id: "reviews", label: "复盘", icon: BookOpenText, description: "查看 AI 复盘" },
 ];
 
 const mobileMoreNav: NavItem[] = [
+  { id: "stats", label: "统计", icon: BarChart3, description: "回看节奏和生成周期回顾" },
   { id: "history", label: "历史", icon: CalendarDays, description: "浏览每日记录" },
   { id: "archive", label: "归档", icon: Archive, description: "管理归档内容" },
   { id: "search", label: "搜索", icon: Search, description: "搜索记录和卡片" },
-  { id: "reviews", label: "复盘", icon: BookOpenText, description: "查看 AI 复盘" },
   { id: "settings", label: "设置", icon: Settings, description: "连接与外观" },
 ];
 
@@ -143,7 +143,7 @@ export default function Sidebar({ page, onPrefetch, onOpenPalette, dark, onToggl
       </aside>
 
       <Dialog.Root open={moreOpen} onOpenChange={setMoreOpen}>
-        {/* Mobile bottom navigation: keep primary tasks visible and move maintenance pages into More. */}
+        {/* Mobile bottom navigation: keep the review workflow visible and move statistics/maintenance pages into More. */}
         <nav
           aria-label="主导航"
           className="ui-mobile-nav fixed inset-x-0 bottom-0 z-40 grid grid-cols-5 gap-1 px-2 pt-1.5 backdrop-blur-xl safe-bottom md:hidden"
@@ -181,7 +181,7 @@ export default function Sidebar({ page, onPrefetch, onOpenPalette, dark, onToggl
               <div>
                 <Dialog.Title className="text-base font-semibold text-[var(--ui-text)]">更多入口</Dialog.Title>
                 <Dialog.Description className="mt-1 text-xs leading-5 text-[var(--ui-text-muted)]">
-                  低频页面和外观设置集中在这里，主导航保持清爽。
+                  统计、低频页面和外观设置集中在这里，主导航保持清爽。
                 </Dialog.Description>
               </div>
               <Dialog.Close asChild>

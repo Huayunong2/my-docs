@@ -109,3 +109,63 @@ export function normalizeReviewContent(kind: ReviewKind, title: string, raw: str
     list(items(value, "review_points"), `${weekly ? "本周" : "本月"}没有形成可复习的稳定要点。`),
   ].join("\n\n");
 }
+
+/**
+ * Convert a rendered review into a short, readable list preview.
+ * The full review keeps Markdown formatting; list surfaces should expose the
+ * meaning of that content without making users parse headings and bullets.
+ */
+export function reviewExcerpt(markdown: string, maxLength = 240) {
+  if (maxLength <= 0) return "";
+  const plain = markdown
+    .replace(/```(?:[\w-]+)?\s*\n?([\s\S]*?)```/g, "$1 ")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/!\[([^\]]*)\]\([^)]*\)/g, "$1")
+    .replace(/\[([^\]]+)\]\([^)]*\)/g, "$1")
+    .replace(/^\s{0,3}#{1,6}\s*/gm, "")
+    .replace(/^\s*[-*+]\s+/gm, "")
+    .replace(/^\s*\d+[.)]\s+/gm, "")
+    .replace(/^\s*>\s?/gm, "")
+    .replace(/^\s*\|?[-:| ]+\|?\s*$/gm, " ")
+    .replace(/[|]/g, " ")
+    .replace(/[*_~`]/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+  const characters = Array.from(plain);
+  return characters.length <= maxLength
+    ? plain
+    : `${characters.slice(0, Math.max(0, maxLength - 1)).join("")}…`;
+}
+
+/**
+ * Return the review body without the document-level title. The surrounding
+ * viewer already renders the stored title as its dialog heading, so keeping
+ * the generated `## title` would make the same title appear twice.
+ */
+export function reviewBodyContent(kind: ReviewKind, title: string, raw: string) {
+  return normalizeReviewContent(kind, title, raw)
+    .replace(/^\s*##[ \t]+[^\n]*(?:\n|$)/, "")
+    .replace(/^\s+/, "");
+}
+
+export function reviewPreview(kind: ReviewKind, title: string, raw: string, maxLength = 240) {
+  return reviewExcerpt(reviewBodyContent(kind, title, raw), maxLength);
+}
+
+export function formatReviewTimestamp(value: string) {
+  if (!value) return "未知";
+  const parsed = new Date(value.includes("T") ? value : value.replace(" ", "T"));
+  if (Number.isNaN(parsed.getTime())) return value;
+  return new Intl.DateTimeFormat("zh-CN", {
+    month: "numeric",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(parsed);
+}
+
+export function formatReviewMonth(value: string) {
+  const match = /^(\d{4})-(\d{2})$/.exec(value);
+  if (!match) return value;
+  return `${match[1]} 年 ${Number(match[2])} 月`;
+}

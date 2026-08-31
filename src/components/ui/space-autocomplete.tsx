@@ -169,7 +169,7 @@ export default function SpaceAutocomplete({
               onMouseDown={(event) => event.preventDefault()}
               onClick={() => selectSpace(space.name)}
               className={cn(
-                "flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-xs transition-colors",
+                "flex min-h-11 w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-xs transition-colors",
                 index === highlightedIndex ? "bg-[var(--ui-surface-selected)] text-[var(--ui-accent-text)]" : "text-[var(--ui-text)] hover:bg-[var(--ui-surface-hover)]",
               )}
             >
@@ -179,7 +179,7 @@ export default function SpaceAutocomplete({
               <span className="min-w-0 flex-1">
                 <span className="block truncate font-medium">{space.name}</span>
                 <span className="mt-0.5 block truncate text-[10px] text-[var(--ui-text-subtle)]">
-                  {space.kind === "project" ? "项目" : "主题"} · {space.count} 张卡片
+                  {space.kind === "project" ? "项目" : "主题"} · {space.count} 个知识条目
                 </span>
               </span>
               {index === highlightedIndex && <Check size={14} className="shrink-0" />}

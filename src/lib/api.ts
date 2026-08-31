@@ -950,6 +950,18 @@ export interface Review {
   updated_at: string;
 }
 
+export interface ReviewListPage {
+  reviews: Review[];
+  total: number;
+  draft_count: number;
+  confirmed_count: number;
+  current_month_weekly_drafts: number;
+  latest_generated_at: string | null;
+  page: number;
+  page_size: number;
+  has_more: boolean;
+}
+
 function mapReview(review: Review): Review {
   return {
     ...review,
@@ -967,6 +979,26 @@ export function listReviews(kind: ReviewKind, periodStart: string, periodEnd: st
 export function listAllReviews(kind?: ReviewKind) {
   const query = kind ? `?kind=${encodeURIComponent(kind)}` : "";
   return httpRequest<Review[]>(`/reviews${query}`).then((items) => items.map(mapReview));
+}
+
+export function queryReviews(filters: {
+  kind?: ReviewKind;
+  status?: ReviewStatus;
+  q?: string;
+  page?: number;
+  page_size?: number;
+} = {}, options?: ReadRequestOptions) {
+  const params = new URLSearchParams();
+  if (filters.kind) params.set("kind", filters.kind);
+  if (filters.status) params.set("status", filters.status);
+  if (filters.q) params.set("q", filters.q);
+  if (filters.page) params.set("page", String(filters.page));
+  if (filters.page_size) params.set("page_size", String(filters.page_size));
+  const query = params.toString();
+  return httpRequest<ReviewListPage>(`/reviews/query${query ? `?${query}` : ""}`, options).then((result) => ({
+    ...result,
+    reviews: result.reviews.map(mapReview),
+  }));
 }
 
 export function getReview(id: string) {

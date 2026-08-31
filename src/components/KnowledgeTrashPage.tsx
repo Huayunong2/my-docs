@@ -63,7 +63,7 @@ export default function KnowledgeTrashPage() {
       const result = await api.restoreKnowledgeCards(ids);
       setCards((current) => current.filter((card) => !ids.includes(card.id)));
       setSelectedIds((current) => current.filter((id) => !ids.includes(id)));
-      toast.success(`已恢复 ${result.updated} 张卡片。`);
+      toast.success(`已恢复 ${result.updated} 个知识条目。`);
     } catch (e) {
       const message = api.getErrorMessage(e);
       setError(message);
@@ -82,12 +82,12 @@ export default function KnowledgeTrashPage() {
       <PageHeader
         icon={Trash2}
         title="回收站"
-        description="已删除的卡片会暂时保留在这里。恢复后，正文、标签、项目关系和复习进度都会回到原来的状态。"
+        description="已删除的知识条目会暂时保留在这里。恢复后，正文、标签、空间关系和复习进度都会回到原来的状态。"
         className="mb-0"
         actions={
           <PageHeaderActions
             primary={
-              <Link to="/knowledge" search={{} as never} className="ui-button-primary h-9 px-3 text-xs">
+              <Link to="/knowledge" search={{} as never} className="ui-button-primary h-11 min-h-11 px-3 text-xs md:h-9 md:min-h-9">
                 <ArrowLeft size={14} />
                 返回知识
               </Link>
@@ -97,7 +97,7 @@ export default function KnowledgeTrashPage() {
                 type="button"
                 onClick={() => void loadCards()}
                 disabled={loading || saving}
-                className="ui-button-secondary h-9 px-3 text-xs"
+                className="ui-button-secondary h-11 min-h-11 px-3 text-xs md:h-9 md:min-h-9"
                 aria-label="刷新回收站"
               >
                 <RefreshCw size={14} className={loading ? "animate-spin" : ""} />
@@ -113,19 +113,19 @@ export default function KnowledgeTrashPage() {
       <section className="ui-panel overflow-hidden">
         <div className="ui-soft-divider flex flex-wrap items-center justify-between gap-3 border-b px-4 py-3 sm:px-5">
           <div className="flex items-center gap-3">
-            <label className="inline-flex min-h-9 items-center gap-2 rounded-lg px-1 text-xs font-medium text-[var(--ui-text-muted)]">
+            <label className="inline-flex min-h-11 min-w-11 items-center gap-2 rounded-lg px-1 text-xs font-medium text-[var(--ui-text-muted)] md:min-h-9 md:min-w-0">
               <input
                 type="checkbox"
                 checked={allSelected}
                 onChange={toggleAll}
                 disabled={cards.length === 0 || saving}
                 className="h-4 w-4 rounded border-[var(--ui-border-strong)] accent-[var(--ui-accent-solid)] focus:ring-2 focus:ring-[var(--ui-focus)]/30"
-                aria-label={allSelected ? "取消选择全部回收站卡片" : "选择全部回收站卡片"}
+                aria-label={allSelected ? "取消选择全部回收站知识条目" : "选择全部回收站知识条目"}
               />
               {allSelected ? "取消全选" : "全选"}
             </label>
             <span className="text-xs text-[var(--ui-text-subtle)]">
-              {cards.length} 张卡片{selectedCount > 0 ? ` · 已选 ${selectedCount} 张` : ""}
+              {cards.length} 个知识条目{selectedCount > 0 ? ` · 已选 ${selectedCount} 个` : ""}
             </span>
           </div>
           {selectedCount > 0 && (
@@ -134,7 +134,7 @@ export default function KnowledgeTrashPage() {
                 type="button"
                 onClick={() => void restore(selectedIds)}
                 disabled={saving}
-                className="ui-button-primary h-9 px-3 text-xs"
+                className="ui-button-primary h-11 min-h-11 px-3 text-xs md:h-9 md:min-h-9"
               >
                 <RotateCcw size={14} />
                 恢复选中
@@ -152,7 +152,7 @@ export default function KnowledgeTrashPage() {
             </span>
             <h2 className="mt-4 text-sm font-semibold text-[var(--ui-text)]">回收站是空的</h2>
             <p className="mt-1 max-w-sm text-xs leading-5 text-[var(--ui-text-muted)]">
-              暂时没有需要恢复的知识卡片。
+              暂时没有需要恢复的知识条目。
             </p>
           </div>
         ) : (
@@ -161,17 +161,19 @@ export default function KnowledgeTrashPage() {
               const selected = selectedIds.includes(card.id);
               return (
                 <div key={card.id} data-state={selected ? "selected" : "idle"} className={["knowledge-card-row relative flex items-center gap-3 px-4 py-3 sm:px-5", selected ? "" : "hover:bg-[var(--ui-surface-hover)]"].join(" ")}>
-                  <input
-                    type="checkbox"
-                    checked={selected}
-                    onChange={() => toggleSelected(card.id)}
-                    disabled={saving}
-                    className="h-4 w-4 shrink-0 rounded border-[var(--ui-border-strong)] accent-[var(--ui-accent-solid)] focus:ring-2 focus:ring-[var(--ui-focus)]/30"
-                    aria-label={`选择回收站卡片：${card.title}`}
-                  />
+                  <label className="flex h-11 w-11 shrink-0 cursor-pointer items-center justify-center rounded-lg hover:bg-[var(--ui-surface-hover)] md:h-9 md:w-9">
+                    <input
+                      type="checkbox"
+                      checked={selected}
+                      onChange={() => toggleSelected(card.id)}
+                      disabled={saving}
+                      className="h-5 w-5 rounded border-[var(--ui-border-strong)] accent-[var(--ui-accent-solid)] focus:ring-2 focus:ring-[var(--ui-focus)]/30 md:h-4 md:w-4"
+                      aria-label={`选择回收站知识条目：${card.title}`}
+                    />
+                  </label>
                   <div className="min-w-0 flex-1">
                     <div className="flex flex-wrap items-center gap-2">
-                      <h2 className="min-w-0 truncate text-sm font-semibold text-[var(--ui-text)]">{card.title || "无标题卡片"}</h2>
+                      <h2 className="min-w-0 truncate text-sm font-semibold text-[var(--ui-text)]">{card.title || "无标题知识条目"}</h2>
                       <span className={["rounded-md px-1.5 py-0.5 text-[10px] font-medium", card.status === "confirmed" ? "ui-status-success" : card.status === "outdated" ? "ui-status-warning" : "ui-status-muted"].join(" ")}>{card.status === "confirmed" ? "已确认" : card.status === "outdated" ? "已过时" : "待确认"}</span>
                     </div>
                     <p className="mt-1 truncate text-xs text-[var(--ui-text-muted)]">{card.content || "无正文"}</p>
@@ -185,8 +187,8 @@ export default function KnowledgeTrashPage() {
                     type="button"
                     onClick={() => void restore([card.id])}
                     disabled={saving}
-                    className="ui-button-secondary h-9 shrink-0 px-2.5 text-xs"
-                    aria-label={`恢复卡片：${card.title}`}
+                    className="ui-button-secondary h-11 min-h-11 shrink-0 px-2.5 text-xs md:h-9 md:min-h-9"
+                    aria-label={`恢复知识条目：${card.title}`}
                   >
                     <RotateCcw size={14} />
                     <span className="hidden sm:inline">恢复</span>
@@ -199,7 +201,7 @@ export default function KnowledgeTrashPage() {
       </section>
 
       <div className="ui-panel-muted px-4 py-3 text-xs leading-5 text-[var(--ui-text-muted)] sm:px-5">
-        回收站只提供可恢复的软删除。卡片正文、空间关系和复习进度会一直保留，恢复后可继续使用；空间本身的永久删除在“空间管理”中完成。
+        回收站只提供可恢复的软删除。知识条目正文、空间关系和复习进度会一直保留，恢复后可继续使用；空间本身的永久删除在“空间管理”中完成。
       </div>
     </motion.div>
   );

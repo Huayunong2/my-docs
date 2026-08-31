@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { Review } from "./api";
-import { generateReviewVersion, upsertReviewVersion } from "./reviewGeneration";
+import { generateReviewVersion, selectLatestReview, upsertReviewVersion } from "./reviewGeneration";
 
 const generated: Review = {
   id: "review-2",
@@ -37,6 +37,11 @@ describe("review generation workflow", () => {
     expect(upsertReviewVersion([old], generated)).toEqual([generated, old]);
     expect(upsertReviewVersion([old, generated], { ...generated, title: "更新" }))
       .toEqual([{ ...generated, title: "更新" }, old]);
+  });
+
+  it("selects the newest version instead of preferring an older confirmed version", () => {
+    const confirmed = { ...generated, id: "review-1", version: 1, status: "confirmed" as const };
+    expect(selectLatestReview([confirmed, generated])).toEqual(generated);
   });
 
   it("does not apply a result after the page becomes inactive", async () => {

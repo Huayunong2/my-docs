@@ -64,7 +64,8 @@ function titleForPath(pathname: string) {
 export interface AppShellContextValue {
   navigate: (page: Page) => void;
   updateSearch: (patch: Record<string, unknown>) => void;
-  openRecordDate: (date: string) => void;
+  openRecordDate: (date: string, returnTo?: string) => void;
+  openReviewLibrary: (returnTo?: string) => void;
   openSearchTerm: (query: string) => void;
   openKnowledgeCard: (cardId: string) => void;
   openKnowledgeQuality: (quality: api.KnowledgeCardQuality) => void;
@@ -171,12 +172,34 @@ export function AppShell() {
 
   const updateSearch = useCallback((patch: Record<string, unknown>) => {
     void routerNavigate({
-      search: (previous) => ({ ...previous, ...patch }) as never,
+      search: (previous) => {
+        const next = { ...previous, ...patch };
+        const previousSearch = previous as unknown as Record<string, unknown>;
+        const nextSearch = next as Record<string, unknown>;
+        const changed = Object.keys(patch).some((key) => previousSearch[key] !== nextSearch[key]);
+        return (changed ? next : previous) as never;
+      },
     });
   }, [routerNavigate]);
 
-  const openRecordDate = useCallback((date: string) => {
-    go("/today", { date });
+  const openRecordDate = useCallback((date: string, returnTo?: string) => {
+    go("/today", returnTo ? { date, returnTo } : { date });
+  }, [go]);
+
+  const openReviewLibrary = useCallback((returnTo?: string) => {
+    const search: Record<string, unknown> = {};
+    if (returnTo && returnTo.startsWith("/") && typeof window !== "undefined") {
+      try {
+        const url = new URL(returnTo, window.location.origin);
+        for (const key of ["q", "reviewKind", "reviewStatus"]) {
+          const value = url.searchParams.get(key);
+          if (value) search[key] = value;
+        }
+      } catch {
+        // Ignore malformed return targets and open the default library view.
+      }
+    }
+    go("/reviews", search);
   }, [go]);
 
   const openSearchTerm = useCallback((query: string) => {
@@ -268,7 +291,7 @@ export function AppShell() {
     try {
       const url = new URL(target, window.location.origin);
       const search: Record<string, unknown> = {};
-      const searchKeys = ["q", "date", "page", "scope", "project", "tag", "status", "type", "sort", "usage", "quality", "view"];
+      const searchKeys = ["q", "date", "returnTo", "page", "scope", "project", "tag", "status", "type", "sort", "usage", "quality", "view"];
       for (const key of searchKeys) {
         const value = url.searchParams.get(key);
         if (!value) continue;
@@ -293,6 +316,7 @@ export function AppShell() {
     navigate,
     updateSearch,
     openRecordDate,
+    openReviewLibrary,
     openSearchTerm,
     openKnowledgeCard,
     openKnowledgeQuality,

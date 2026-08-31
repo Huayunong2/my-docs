@@ -1,6 +1,6 @@
 use crate::db::{
     ArticleChanges, ArticleDraft, Database, GradeUpdate, KnowledgeCardDraft, KnowledgePageQuery,
-    ReviewDraft, ReviewItemDraft,
+    ReviewDraft, ReviewItemDraft, ReviewPageQuery,
 };
 use crate::models::{Article, KnowledgeCard, Review};
 use serde_json::json;
@@ -337,6 +337,86 @@ fn review_versions_are_allocated_when_the_review_is_persisted() {
     let first = db.reviews().save(draft()).expect("first review");
     let second = db.reviews().save(draft()).expect("second review");
     assert_eq!((first.version, second.version), (1, 2));
+}
+
+#[test]
+fn review_query_returns_filtered_pages_and_library_counts() {
+    let mut db = Database::new_in_memory().expect("in-memory database");
+    let save = |db: &mut Database, start: &str, end: &str, title: &str| {
+        db.reviews()
+            .save(ReviewDraft {
+                kind: "weekly".into(),
+                period_start: start.into(),
+                period_end: end.into(),
+                title: title.into(),
+                content: format!("{title} 内容"),
+                source_article_ids: vec![],
+                source_review_ids: vec![],
+                model: "mock".into(),
+            })
+            .expect("save review")
+    };
+
+    let first = save(&mut db, "2026-07-13", "2026-07-19", "第一份复盘");
+    let second = save(&mut db, "2026-08-03", "2026-08-09", "第二份复盘");
+    let cross_month = save(&mut db, "2026-07-30", "2026-08-05", "跨月复盘");
+    db.reviews()
+        .update(&second.id, &second.title, &second.content, "confirmed")
+        .expect("confirm review");
+
+    let result = db
+        .reviews()
+        .query_page(ReviewPageQuery {
+            query: "",
+            kind: None,
+            status: None,
+            current_month: "2026-07",
+            page: 1,
+            page_size: 1,
+        })
+        .expect("query first page");
+    assert_eq!(result.total, 3);
+    assert_eq!(result.draft_count, 2);
+    assert_eq!(result.confirmed_count, 1);
+    assert_eq!(result.current_month_weekly_drafts, 1);
+    assert_eq!(result.reviews.len(), 1);
+    assert_eq!(result.reviews[0].id, second.id);
+    assert!(result.latest_generated_at.is_some());
+
+    let result = db
+        .reviews()
+        .query_page(ReviewPageQuery {
+            query: "",
+            kind: None,
+            status: None,
+            current_month: "2026-08",
+            page: 1,
+            page_size: 24,
+        })
+        .expect("query cross-month review summary");
+    assert_eq!(result.current_month_weekly_drafts, 1);
+    assert!(result
+        .reviews
+        .iter()
+        .any(|review| review.id == cross_month.id));
+
+    let result = db
+        .reviews()
+        .query_page(ReviewPageQuery {
+            query: "第二份",
+            kind: Some("weekly"),
+            status: Some("confirmed"),
+            current_month: "2026-08",
+            page: 1,
+            page_size: 24,
+        })
+        .expect("query filtered reviews");
+    assert_eq!(result.total, 1);
+    assert_eq!(result.draft_count, 0);
+    assert_eq!(result.confirmed_count, 1);
+    assert_eq!(result.reviews.len(), 1);
+    assert_eq!(result.reviews[0].id, second.id);
+    assert_eq!(first.status, "draft");
 }
 
 #[test]
@@ -1010,6 +1090,30 @@ fn confirmed_card_enters_due_queue_with_default_fields() {
 #[test]
 fn batch_confirmation_requires_source_and_creates_default_review_items() {
     let mut db = Database::new_in_memory().expect("in-memory database");
+
+    let mut date_only = card_draft("draft");
+    date_only.source_excerpt.clear();
+    let date_only = db
+        .knowledge()
+        .save(date_only)
+        .expect("save date-only source draft");
+    assert!(matches!(
+        db.knowledge()
+            .batch_update(std::slice::from_ref(&date_only.id), "confirm", &[]),
+        Err(rusqlite::Error::InvalidQuery)
+    ));
+
+    let mut excerpt_only = card_draft("draft");
+    excerpt_only.source_date.clear();
+    let excerpt_only = db
+        .knowledge()
+        .save(excerpt_only)
+        .expect("save excerpt-only source draft");
+    assert!(matches!(
+        db.knowledge()
+            .batch_update(std::slice::from_ref(&excerpt_only.id), "confirm", &[]),
+        Err(rusqlite::Error::InvalidQuery)
+    ));
 
     let mut missing_source_for_confirm = card_draft("draft");
     missing_source_for_confirm.source_date.clear();

@@ -231,6 +231,19 @@ pub(crate) struct KnowledgeCardsPage {
     pub(crate) has_more: bool,
 }
 
+#[derive(Debug, Serialize)]
+pub(crate) struct ReviewListPage {
+    pub(crate) reviews: Vec<Review>,
+    pub(crate) total: i64,
+    pub(crate) draft_count: i64,
+    pub(crate) confirmed_count: i64,
+    pub(crate) current_month_weekly_drafts: i64,
+    pub(crate) latest_generated_at: Option<String>,
+    pub(crate) page: i64,
+    pub(crate) page_size: i64,
+    pub(crate) has_more: bool,
+}
+
 #[derive(Debug, Serialize, Default)]
 pub(crate) struct KnowledgeSummary {
     pub(crate) total: i64,
@@ -576,6 +589,10 @@ pub(crate) struct ReviewListQuery {
     pub(crate) kind: Option<String>,
     pub(crate) period_start: Option<String>,
     pub(crate) period_end: Option<String>,
+    pub(crate) status: Option<String>,
+    pub(crate) q: Option<String>,
+    pub(crate) page: Option<i64>,
+    pub(crate) page_size: Option<i64>,
 }
 
 #[derive(Debug, Deserialize)]

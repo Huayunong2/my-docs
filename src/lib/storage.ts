@@ -3,6 +3,9 @@ type BrowserStorageKind = "local" | "session";
 /** 当连接设置从业务页面打开时，用于保存成功后返回原任务。 */
 export const connectionReturnStorageKey = "daily-summary-connection-return";
 
+/** 从来源核对跳到每日记录时，保存复盘库的筛选、展开和滚动上下文。 */
+export const reviewLibraryReturnStorageKey = "daily-summary-review-library-return";
+
 function getStorage(kind: BrowserStorageKind): Storage | null {
   try {
     return kind === "local" ? globalThis.localStorage : globalThis.sessionStorage;

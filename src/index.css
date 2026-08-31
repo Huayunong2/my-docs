@@ -124,6 +124,15 @@
   --ui-text-muted: #566176;
   --ui-text-subtle: #627086;
   --ui-text-disabled: #a0adbb;
+  --ui-code-surface: #f6f8fb;
+  --ui-code-text: #1f2937;
+  --ui-code-comment: #64748b;
+  --ui-code-keyword: #7c3aed;
+  --ui-code-string: #0f766e;
+  --ui-code-number: #b45309;
+  --ui-code-title: #1d4ed8;
+  --ui-code-built-in: #0369a1;
+  --ui-code-meta: #9f1239;
   --ui-overlay: rgba(15, 23, 42, 0.45);
   --ui-shadow-panel: 0 1px 2px rgba(15, 23, 42, 0.05), 0 8px 24px rgba(15, 23, 42, 0.06);
   --ui-shadow-hover: 0 1px 2px rgba(15, 23, 42, 0.07), 0 10px 28px rgba(15, 23, 42, 0.1);
@@ -172,6 +181,15 @@
   --ui-text-muted: #a5adba;
   --ui-text-subtle: #8e99a8;
   --ui-text-disabled: #626c7a;
+  --ui-code-surface: #121820;
+  --ui-code-text: #e5edf7;
+  --ui-code-comment: #8290a3;
+  --ui-code-keyword: #c4b5fd;
+  --ui-code-string: #86efac;
+  --ui-code-number: #fcd34d;
+  --ui-code-title: #93c5fd;
+  --ui-code-built-in: #67e8f9;
+  --ui-code-meta: #fda4af;
   --ui-overlay: rgba(0, 0, 0, 0.52);
   --ui-shadow-panel: 0 1px 2px rgba(0, 0, 0, 0.28), 0 10px 28px rgba(0, 0, 0, 0.18);
   --ui-shadow-hover: 0 1px 2px rgba(0, 0, 0, 0.35), 0 12px 32px rgba(0, 0, 0, 0.26);
@@ -1154,6 +1172,7 @@
 
 .app-content {
   background: transparent;
+  scrollbar-gutter: stable;
 }
 
 /* Page headers adapt to their own available width. This matters when a page
@@ -1174,6 +1193,42 @@
 
 .page-header-action-set {
   max-width: 100%;
+}
+
+/* Review library: keep the filter surface quiet, then give the timeline a
+ * slightly stronger separation so period cards read as one navigable history. */
+.reviews-filter-panel {
+  background: linear-gradient(135deg, var(--ui-surface) 0%, color-mix(in srgb, var(--ui-surface-selected) 42%, var(--ui-surface)) 100%);
+}
+
+.page-surface-reviews input[type="search"]::-webkit-search-cancel-button,
+.page-surface-reviews input[type="search"]::-webkit-search-decoration {
+  -webkit-appearance: none;
+  appearance: none;
+}
+
+.reviews-period-card {
+  box-shadow: var(--ui-shadow-panel);
+}
+
+.reviews-period-card:hover {
+  box-shadow: var(--ui-shadow-hover);
+}
+
+.reviews-baseline-note {
+  border: 1px solid var(--ui-warning-border);
+  background: var(--ui-warning-surface);
+  color: var(--ui-warning-text);
+}
+
+@media (max-width: 767px) {
+  .page-surface-reviews .reviews-filter-panel {
+    border-radius: 1.125rem;
+  }
+
+  .page-surface-reviews .reviews-period-card {
+    border-radius: 1.125rem;
+  }
 }
 
 /* Knowledge list uses a dedicated mobile command area. Keeping the page
@@ -1255,25 +1310,112 @@
   }
 }
 
+.markdown-code-block {
+  color: var(--ui-code-text);
+}
+
+.markdown-code-block pre {
+  margin: 0;
+  tab-size: 2;
+}
+
+.markdown-code-block .hljs-comment,
+.markdown-code-block .hljs-quote {
+  color: var(--ui-code-comment);
+  font-style: italic;
+}
+
+.markdown-code-block .hljs-keyword,
+.markdown-code-block .hljs-selector-tag,
+.markdown-code-block .hljs-literal,
+.markdown-code-block .hljs-type,
+.markdown-code-block .hljs-variable.language_ {
+  color: var(--ui-code-keyword);
+}
+
+.markdown-code-block .hljs-string,
+.markdown-code-block .hljs-doctag,
+.markdown-code-block .hljs-regexp,
+.markdown-code-block .hljs-addition {
+  color: var(--ui-code-string);
+}
+
+.markdown-code-block .hljs-number,
+.markdown-code-block .hljs-symbol,
+.markdown-code-block .hljs-bullet {
+  color: var(--ui-code-number);
+}
+
+.markdown-code-block .hljs-title,
+.markdown-code-block .hljs-title.class_,
+.markdown-code-block .hljs-title.function_ {
+  color: var(--ui-code-title);
+}
+
+.markdown-code-block .hljs-built_in,
+.markdown-code-block .hljs-name,
+.markdown-code-block .hljs-attribute {
+  color: var(--ui-code-built-in);
+}
+
+.markdown-code-block .hljs-meta,
+.markdown-code-block .hljs-meta .hljs-keyword {
+  color: var(--ui-code-meta);
+}
+
+.mermaid-diagram {
+  max-width: 100%;
+  scrollbar-gutter: stable;
+}
+
 .mermaid-diagram svg {
   display: inline-block;
   height: auto !important;
+  max-width: 100%;
   vertical-align: top;
 }
 
 .mermaid-diagram--compact svg {
   width: min(760px, 100%) !important;
-  max-width: 100% !important;
 }
 
 .mermaid-diagram--fit svg {
+  display: block;
   width: 100% !important;
-  max-width: 100% !important;
 }
 
 .mermaid-diagram--original svg {
   width: auto !important;
   max-width: none !important;
+}
+
+.mermaid-diagram--expanded {
+  min-height: min(60svh, 640px);
+  max-height: 75dvh;
+  overflow: auto;
+  overscroll-behavior: contain;
+  touch-action: none;
+}
+
+.mermaid-diagram--expanded svg {
+  max-width: none !important;
+  touch-action: none;
+}
+
+.mermaid-diagram--expanded.mermaid-diagram--fit svg {
+  width: max(100%, 960px) !important;
+}
+
+.mermaid-diagram--expanded.mermaid-diagram--compact svg {
+  width: max(100%, 760px) !important;
+}
+
+.mermaid-zoom-range {
+  accent-color: var(--ui-accent-solid);
+}
+
+.mermaid-diagram--expanded .mermaid-control {
+  touch-action: manipulation;
 }
 
 .mermaid-diagram .nodeLabel,
@@ -1373,6 +1515,7 @@
   border: 0;
   background: var(--knowledge-editor);
   padding: 1.5rem 1.75rem 2rem;
+  container: knowledge-editor / inline-size;
 }
 
 .knowledge-page-header {
@@ -1397,6 +1540,7 @@
 
 .knowledge-reading-grid {
   order: 2;
+  grid-template-columns: minmax(0, 1fr);
 }
 
 .knowledge-review-stack {
@@ -1409,89 +1553,6 @@
 
 .knowledge-inspector-header h3 {
   letter-spacing: -0.02em;
-}
-
-.knowledge-verification-rail {
-  display: flex;
-  align-items: center;
-  gap: 0.625rem;
-  min-height: 4.25rem;
-  padding: 0.75rem 0.875rem;
-  border: 1px solid var(--ui-border);
-  border-radius: 14px;
-  background: var(--knowledge-paper);
-}
-
-.knowledge-verification-step {
-  display: flex;
-  min-width: 0;
-  align-items: center;
-  gap: 0.5rem;
-  color: var(--ui-text-subtle);
-}
-
-.knowledge-verification-icon {
-  display: inline-flex;
-  height: 2rem;
-  width: 2rem;
-  flex: 0 0 auto;
-  align-items: center;
-  justify-content: center;
-  border: 1px solid var(--ui-border);
-  border-radius: 9px;
-  background: var(--ui-surface-inset);
-  color: var(--ui-text-subtle);
-  transition: color 180ms ease-out, background-color 180ms ease-out, border-color 180ms ease-out;
-}
-
-.knowledge-verification-copy {
-  display: grid;
-  min-width: 0;
-  gap: 0.125rem;
-  line-height: 1.2;
-}
-
-.knowledge-verification-copy strong {
-  color: var(--ui-text-muted);
-  font-size: 0.75rem;
-  font-weight: 700;
-}
-
-.knowledge-verification-copy small {
-  color: var(--ui-text-subtle);
-  font-size: 0.6875rem;
-  white-space: nowrap;
-}
-
-.knowledge-verification-step[data-active="true"] .knowledge-verification-icon,
-.knowledge-verification-step[data-complete="true"] .knowledge-verification-icon {
-  border-color: var(--ui-selected-border);
-  background: var(--ui-surface-selected);
-  color: var(--ui-accent-text);
-}
-
-.knowledge-verification-step[data-active="true"] .knowledge-verification-copy strong {
-  color: var(--ui-text);
-}
-
-.knowledge-verification-step[data-complete="true"] .knowledge-verification-copy strong {
-  color: var(--ui-success-text);
-}
-
-.knowledge-verification-connector {
-  height: 1px;
-  min-width: 1rem;
-  flex: 1 1 1.5rem;
-  background: var(--ui-border);
-}
-
-.knowledge-verification-caption {
-  margin-left: auto;
-  max-width: 12rem;
-  color: var(--ui-text-subtle);
-  font-size: 0.6875rem;
-  line-height: 1.35;
-  text-align: right;
 }
 
 .knowledge-field-label {
@@ -1572,16 +1633,25 @@
   white-space: nowrap;
 }
 
-.knowledge-source-state[data-state="linked"] {
+.knowledge-source-state[data-state="verified"] {
   border-color: var(--ui-success-border);
   background: var(--ui-success-surface);
   color: var(--ui-success-text);
 }
 
+.knowledge-source-state[data-state="mismatch"],
 .knowledge-source-state[data-state="error"] {
   border-color: var(--ui-danger-border);
   background: var(--ui-danger-surface);
   color: var(--ui-danger-text);
+}
+
+.knowledge-source-state[data-state="locator"],
+.knowledge-source-state[data-state="loading"],
+.knowledge-source-state[data-state="ready"] {
+  border-color: var(--ui-warning-border);
+  background: var(--ui-warning-surface);
+  color: var(--ui-warning-text);
 }
 
 .knowledge-source-panel.ui-editor-surface {
@@ -1591,12 +1661,19 @@
   box-shadow: none;
 }
 
-.knowledge-source-panel[data-source-state="linked"] {
+.knowledge-source-panel[data-source-state="verified"] {
   border-color: var(--ui-success-border);
 }
 
+.knowledge-source-panel[data-source-state="mismatch"],
 .knowledge-source-panel[data-source-state="error"] {
   border-color: var(--ui-danger-border);
+}
+
+.knowledge-source-panel[data-source-state="locator"],
+.knowledge-source-panel[data-source-state="loading"],
+.knowledge-source-panel[data-source-state="ready"] {
+  border-color: var(--ui-warning-border);
 }
 
 .knowledge-source-titlebar {
@@ -1620,10 +1697,11 @@
   line-height: 1.65;
 }
 
-.knowledge-source-panel[data-source-state="linked"] .knowledge-source-excerpt textarea {
+.knowledge-source-panel[data-source-state="verified"] .knowledge-source-excerpt textarea {
   border-color: var(--ui-success-border);
 }
 
+.knowledge-source-panel[data-source-state="mismatch"] .knowledge-source-excerpt textarea,
 .knowledge-source-panel[data-source-state="error"] .knowledge-source-excerpt textarea {
   border-color: var(--ui-danger-border);
 }
@@ -1642,9 +1720,17 @@
   .knowledge-inspector.ui-panel {
     padding: 1.25rem 1.25rem 2rem;
   }
+}
 
-  .knowledge-verification-caption {
-    max-width: 10rem;
+/* The editor must earn a second column from its own usable width. The
+ * project rail and card list consume different amounts of space at different
+ * viewport sizes, so a viewport-only 2xl breakpoint can leave the preview
+ * with a one-word column. Keep the readable stacked default and opt into the
+ * side-by-side comparison only when this pane can actually hold both regions.
+ */
+@container knowledge-editor (min-width: 840px) {
+  .knowledge-reading-grid {
+    grid-template-columns: minmax(0, 1fr) minmax(360px, 400px);
   }
 }
 
@@ -1656,33 +1742,11 @@
   .knowledge-inspector.ui-panel {
     padding: 1rem;
   }
-
-  .knowledge-verification-rail {
-    flex-wrap: wrap;
-    gap: 0.5rem;
-  }
-
-  .knowledge-verification-caption {
-    flex-basis: 100%;
-    margin-left: 0;
-    max-width: none;
-    text-align: left;
-  }
-}
-
-@media (max-width: 480px) {
-  .knowledge-verification-copy small {
-    display: none;
-  }
-
-  .knowledge-verification-connector {
-    min-width: 0.5rem;
-  }
 }
 
 @media (forced-colors: active) {
   .knowledge-workspace,
-  .knowledge-verification-rail,
+  .markdown-code-block,
   .knowledge-body-editor.ui-editor-surface,
   .knowledge-preview-panel.ui-panel-muted,
   .knowledge-source-panel.ui-editor-surface {
@@ -1691,12 +1755,12 @@
     box-shadow: none;
   }
 
-  .knowledge-verification-connector {
-    background: ButtonText;
-  }
-
   .knowledge-source-excerpt textarea {
     border-color: ButtonText;
     background: Canvas;
+  }
+
+  .markdown-code-block {
+    color: CanvasText;
   }
 }

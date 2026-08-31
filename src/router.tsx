@@ -1,4 +1,4 @@
-import { lazy } from "react";
+import { lazy, useCallback } from "react";
 import {
   Navigate,
   createRootRoute,
@@ -24,6 +24,7 @@ const SettingsPage = lazy(() => import("./components/SettingsPage"));
 export type AppSearch = {
   q?: string;
   date?: string;
+  returnTo?: string;
   page?: number;
   scope?: string;
   project?: string;
@@ -34,6 +35,8 @@ export type AppSearch = {
   usage?: string;
   quality?: string;
   view?: "list" | "detail";
+  reviewKind?: "weekly" | "monthly";
+  reviewStatus?: "draft" | "confirmed";
 };
 
 function stringValue(value: unknown) {
@@ -50,6 +53,7 @@ function validateAppSearch(search: Record<string, unknown>): AppSearch {
   return {
     q: stringValue(search.q),
     date: stringValue(search.date),
+    returnTo: stringValue(search.returnTo),
     page: positiveInteger(search.page),
     scope: stringValue(search.scope),
     project: stringValue(search.project),
@@ -60,6 +64,8 @@ function validateAppSearch(search: Record<string, unknown>): AppSearch {
     usage: stringValue(search.usage),
     quality: stringValue(search.quality),
     view: view === "detail" ? "detail" : view === "list" ? "list" : undefined,
+    reviewKind: validReviewKind(stringValue(search.reviewKind)),
+    reviewStatus: validReviewStatus(stringValue(search.reviewStatus)),
   };
 }
 
@@ -94,6 +100,14 @@ function validQuality(value?: string): "missing_source" | "missing_project" | "m
 
 function validSearchScope(value?: string): "articles" | "cards" | undefined {
   return value === "articles" || value === "cards" ? value : undefined;
+}
+
+function validReviewKind(value?: string): "weekly" | "monthly" | undefined {
+  return value === "weekly" || value === "monthly" ? value : undefined;
+}
+
+function validReviewStatus(value?: string): "draft" | "confirmed" | undefined {
+  return value === "draft" || value === "confirmed" ? value : undefined;
 }
 
 const rootRoute = createRootRoute({
@@ -203,11 +217,16 @@ function useRootSearch() {
 function TodayRoute() {
   const search = useRootSearch();
   const shell = useAppShell();
+  const returnFromToday = useCallback(() => {
+    if (search.returnTo) shell.openReviewLibrary(search.returnTo);
+  }, [search.returnTo, shell.openReviewLibrary]);
   return (
     <TodayPage
       targetDate={search.date}
       targetNonce={stringNonce(search.date)}
       onDateChange={shell.openRecordDate}
+      returnTo={search.returnTo}
+      onReturn={search.returnTo ? returnFromToday : undefined}
       onNavigate={shell.navigate}
       zen={shell.zen}
       onToggleZen={shell.onToggleZen}
@@ -261,7 +280,29 @@ function StatsRoute() {
 }
 
 function ReviewsRoute() {
-  return <ReviewsPage />;
+  const search = useRootSearch();
+  const shell = useAppShell();
+  const handleQueryChange = useCallback((query: string) => {
+    shell.updateSearch({ q: query || undefined });
+  }, [shell.updateSearch]);
+  const handleKindChange = useCallback((kind: "all" | "weekly" | "monthly") => {
+    shell.updateSearch({ reviewKind: kind === "all" ? undefined : kind });
+  }, [shell.updateSearch]);
+  const handleStatusChange = useCallback((status: "all" | "draft" | "confirmed") => {
+    shell.updateSearch({ reviewStatus: status === "all" ? undefined : status });
+  }, [shell.updateSearch]);
+  return (
+    <ReviewsPage
+      onNavigate={shell.navigate}
+      onEditDate={shell.openRecordDate}
+      initialQuery={search.q}
+      initialKind={search.reviewKind}
+      initialStatus={search.reviewStatus}
+      onQueryChange={handleQueryChange}
+      onKindChange={handleKindChange}
+      onStatusChange={handleStatusChange}
+    />
+  );
 }
 
 function ReviewRoute() {

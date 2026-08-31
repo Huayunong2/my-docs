@@ -1,10 +1,11 @@
 use crate::ai_client::{complete_with_retry, record_ai_failure, record_ai_success, HttpAiAdapter};
-use crate::db::{Database, ReviewDraft};
+use crate::db::{Database, ReviewDraft, ReviewPageQuery};
 use crate::helpers::*;
 use crate::models::*;
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::Json;
+use chrono::Local;
 use serde_json::Value;
 use std::sync::{Arc, Mutex, OnceLock};
 use tokio::sync::Semaphore;
@@ -392,6 +393,51 @@ pub(crate) async fn list_reviews(
         .map(Json)
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))
 }
+
+pub(crate) async fn query_reviews(
+    State(db): State<AppState>,
+    Query(q): Query<ReviewListQuery>,
+) -> Result<Json<ReviewListPage>, (StatusCode, String)> {
+    if let Some(kind) = q.kind.as_deref() {
+        if !kind.is_empty() && !valid_review_kind(kind) {
+            return Err((StatusCode::BAD_REQUEST, "Invalid review kind".into()));
+        }
+    }
+    if let Some(status) = q.status.as_deref() {
+        if !status.is_empty() && status != "all" && !valid_review_status(status) {
+            return Err((StatusCode::BAD_REQUEST, "Invalid review status".into()));
+        }
+    }
+    let page = q.page.unwrap_or(1).max(1);
+    let page_size = q.page_size.unwrap_or(24).clamp(1, 100);
+    let current_month = Local::now().format("%Y-%m").to_string();
+    let mut db = db
+        .lock()
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let result = db
+        .reviews()
+        .query_page(ReviewPageQuery {
+            query: q.q.as_deref().unwrap_or_default(),
+            kind: q.kind.as_deref(),
+            status: q.status.as_deref(),
+            current_month: &current_month,
+            page,
+            page_size,
+        })
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    Ok(Json(ReviewListPage {
+        reviews: result.reviews,
+        total: result.total,
+        draft_count: result.draft_count,
+        confirmed_count: result.confirmed_count,
+        current_month_weekly_drafts: result.current_month_weekly_drafts,
+        latest_generated_at: result.latest_generated_at,
+        page,
+        page_size,
+        has_more: page.saturating_mul(page_size) < result.total,
+    }))
+}
+
 pub(crate) async fn get_review(
     State(db): State<AppState>,
     Path(id): Path<String>,

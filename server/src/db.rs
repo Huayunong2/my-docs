@@ -117,6 +117,25 @@ pub(crate) struct KnowledgePageQuery<'a> {
 }
 
 #[derive(Debug, Clone, Copy)]
+pub(crate) struct ReviewPageQuery<'a> {
+    pub(crate) query: &'a str,
+    pub(crate) kind: Option<&'a str>,
+    pub(crate) status: Option<&'a str>,
+    pub(crate) current_month: &'a str,
+    pub(crate) page: i64,
+    pub(crate) page_size: i64,
+}
+
+pub(crate) struct ReviewPageResult {
+    pub(crate) reviews: Vec<Review>,
+    pub(crate) total: i64,
+    pub(crate) draft_count: i64,
+    pub(crate) confirmed_count: i64,
+    pub(crate) current_month_weekly_drafts: i64,
+    pub(crate) latest_generated_at: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy)]
 pub(crate) struct GradeUpdate<'a> {
     pub(crate) id: &'a str,
     pub(crate) grade: &'a str,
@@ -2344,6 +2363,104 @@ impl ReviewPersistence<'_> {
         Ok(rows)
     }
 
+    /// 复盘库的分页查询入口。旧的 list() 保留给生成、关联和兼容旧客户端等需要完整集合的内部流程。
+    pub(crate) fn query_page(&mut self, request: ReviewPageQuery<'_>) -> Result<ReviewPageResult> {
+        let page = request.page.max(1);
+        let page_size = request.page_size.clamp(1, 100);
+        let mut conditions = Vec::<String>::new();
+        let mut values = Vec::<SqlValue>::new();
+
+        if let Some(kind) = request.kind.filter(|value| !value.is_empty()) {
+            conditions.push("kind=?".into());
+            values.push(SqlValue::Text(kind.to_string()));
+        }
+        if let Some(status) = request
+            .status
+            .filter(|value| !value.is_empty() && *value != "all")
+        {
+            conditions.push("status=?".into());
+            values.push(SqlValue::Text(status.to_string()));
+        }
+        let query = request.query.replace('\0', " ").trim().to_string();
+        if !query.is_empty() {
+            let like_query = format!("%{query}%");
+            conditions.push(
+                "(title LIKE ? COLLATE NOCASE OR content LIKE ? COLLATE NOCASE
+                  OR model LIKE ? COLLATE NOCASE OR period_start LIKE ?
+                  OR period_end LIKE ? OR kind LIKE ? COLLATE NOCASE)"
+                    .into(),
+            );
+            values.extend([
+                SqlValue::Text(like_query.clone()),
+                SqlValue::Text(like_query.clone()),
+                SqlValue::Text(like_query.clone()),
+                SqlValue::Text(like_query.clone()),
+                SqlValue::Text(like_query.clone()),
+                SqlValue::Text(like_query),
+            ]);
+        }
+
+        let where_clause = if conditions.is_empty() {
+            "1=1".to_string()
+        } else {
+            conditions.join(" AND ")
+        };
+        let total = self.conn.query_row(
+            &format!("SELECT COUNT(*) FROM reviews WHERE {where_clause}"),
+            params_from_iter(values.iter()),
+            |row| row.get(0),
+        )?;
+        let draft_count = self.conn.query_row(
+            &format!("SELECT COUNT(*) FROM reviews WHERE {where_clause} AND status='draft'"),
+            params_from_iter(values.iter()),
+            |row| row.get(0),
+        )?;
+        let confirmed_count = self.conn.query_row(
+            &format!("SELECT COUNT(*) FROM reviews WHERE {where_clause} AND status='confirmed'"),
+            params_from_iter(values.iter()),
+            |row| row.get(0),
+        )?;
+        let current_month_weekly_drafts = self.conn.query_row(
+            &format!(
+                "SELECT COUNT(*) FROM reviews WHERE {where_clause}
+                 AND kind='weekly' AND status='draft'
+                 AND strftime('%Y-%m', date(period_start, '+3 days'))=?"
+            ),
+            params_from_iter(values.iter().cloned().chain(std::iter::once(SqlValue::Text(
+                request.current_month.to_string(),
+            )))),
+            |row| row.get(0),
+        )?;
+        let latest_generated_at = self.conn.query_row(
+            &format!("SELECT MAX(generated_at) FROM reviews WHERE {where_clause}"),
+            params_from_iter(values.iter()),
+            |row| row.get(0),
+        )?;
+
+        let offset = (page - 1).saturating_mul(page_size);
+        let mut page_values = values;
+        page_values.push(SqlValue::Integer(page_size));
+        page_values.push(SqlValue::Integer(offset));
+        let mut statement = self.conn.prepare(&format!(
+            "SELECT id, kind, period_start, period_end, version, status, title, content,
+                    source_article_ids, source_review_ids, model, generated_at, updated_at
+             FROM reviews WHERE {where_clause}
+             ORDER BY period_start DESC, period_end DESC, kind ASC, version DESC, updated_at DESC
+             LIMIT ? OFFSET ?"
+        ))?;
+        let rows = statement
+            .query_map(params_from_iter(page_values.iter()), row_to_review)?
+            .collect::<Result<Vec<_>>>()?;
+        Ok(ReviewPageResult {
+            reviews: rows,
+            total,
+            draft_count,
+            confirmed_count,
+            current_month_weekly_drafts,
+            latest_generated_at,
+        })
+    }
+
     pub(crate) fn confirmed_weekly_overlapping(
         &mut self,
         from: &str,
@@ -2711,8 +2828,9 @@ impl KnowledgePersistence<'_> {
         let mut summary = self.conn.query_row(
             &format!(
                 "SELECT COUNT(*),
-                        COALESCE(SUM(CASE WHEN trim(c.source_date)='' AND trim(c.source_article_id)=''
-                                          AND trim(c.source_review_id)='' AND trim(c.source_excerpt)='' THEN 1 ELSE 0 END), 0),
+                        COALESCE(SUM(CASE WHEN trim(c.source_excerpt)='' OR (
+                                          trim(c.source_date)='' AND trim(c.source_article_id)=''
+                                          AND trim(c.source_review_id)='') THEN 1 ELSE 0 END), 0),
                         COALESCE(SUM(CASE WHEN NOT EXISTS (
                             SELECT 1 FROM knowledge_card_projects AS cp WHERE cp.card_id=c.id
                         ) THEN 1 ELSE 0 END), 0),
@@ -2881,7 +2999,7 @@ impl KnowledgePersistence<'_> {
         }
         match quality.filter(|value| !value.is_empty()) {
             Some("missing_source") => conditions.push(
-                "trim(c.source_date)='' AND trim(c.source_article_id)='' AND trim(c.source_review_id)='' AND trim(c.source_excerpt)=''".into(),
+                "(trim(c.source_excerpt)='' OR (trim(c.source_date)='' AND trim(c.source_article_id)='' AND trim(c.source_review_id)=''))".into(),
             ),
             Some("missing_project") => conditions.push(
                 "NOT EXISTS (
@@ -3759,10 +3877,10 @@ impl KnowledgePersistence<'_> {
                     "SELECT EXISTS(
                         SELECT 1 FROM knowledge_cards
                         WHERE id=?1 AND deleted_at=''
+                          AND trim(source_excerpt)!=''
                           AND (trim(source_article_id)!=''
                                OR trim(source_review_id)!=''
-                               OR trim(source_date)!=''
-                               OR trim(source_excerpt)!='')
+                               OR trim(source_date)!='')
                     )",
                     params![id],
                     |row| Ok(row.get::<_, i64>(0)? != 0),
