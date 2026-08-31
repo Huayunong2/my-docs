@@ -2690,10 +2690,6 @@ impl KnowledgePersistence<'_> {
         }))
     }
 
-    pub(crate) fn summary(&mut self) -> Result<KnowledgeSummary> {
-        self.summary_for_project(None)
-    }
-
     pub(crate) fn summary_for_project(
         &mut self,
         project: Option<&str>,
@@ -4809,7 +4805,10 @@ mod migration_tests {
         assert_eq!(cpp.confirmed, 1);
         assert_eq!(cpp.draft, 0);
 
-        let all = db.knowledge().summary().expect("summarize all spaces");
+        let all = db
+            .knowledge()
+            .summary_for_project(None)
+            .expect("summarize all spaces");
         assert_eq!(all.total, 2);
         assert_eq!(all.confirmed, 1);
         assert_eq!(all.draft, 1);

@@ -101,8 +101,10 @@
  * 参考 Radix Colors 的语义别名思路：页面只消费“画布/表面/边框/文字”等
  * 角色，主题切换时只替换角色值，避免每个组件各自拼出一套灰色。 */
 :root {
-  color-scheme: light;
+  /* Keep automatic browser darkening from rewriting the app's own palette. */
+  color-scheme: light only;
   --ui-mobile-nav-height: 56px;
+  --ui-mobile-nav-total-height: calc(var(--ui-mobile-nav-height) + env(safe-area-inset-bottom, 0px));
   --ui-canvas: #eef2f6;
   --ui-surface: rgba(255, 255, 255, 0.98);
   --ui-surface-subtle: #f8fafc;
@@ -207,6 +209,12 @@
 
   * { margin: 0; padding: 0; box-sizing: border-box; }
 
+  html {
+    height: 100%;
+    min-width: 320px;
+    background: var(--ui-canvas);
+  }
+
   body {
     @apply font-sans;
     background: var(--ui-canvas);
@@ -215,7 +223,9 @@
     text-rendering: optimizeLegibility;
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
-    overflow: hidden; overflow-x: hidden; height: 100vh; min-height: 100dvh; min-width: 0;
+    overflow: hidden; overflow-x: hidden; height: 100%; min-height: 100%; min-width: 0;
+    -webkit-text-size-adjust: 100%;
+    text-size-adjust: 100%;
     -webkit-tap-highlight-color: transparent;
   }
 
@@ -223,9 +233,9 @@
     font: inherit;
   }
 
-  .dark { color-scheme: dark; }
+  .dark { color-scheme: dark only; }
 
-  #root { width: 100%; height: 100vh; min-height: 100dvh; display: flex; overflow: hidden; min-width: 0; }
+  #root { width: 100%; height: 100%; min-height: 100%; display: flex; overflow: hidden; min-width: 0; }
 
   /* ── Scrollbar ── */
   ::-webkit-scrollbar { width: 5px; height: 5px; }
@@ -575,7 +585,7 @@
   }
 
   .ui-mobile-nav {
-    min-height: var(--ui-mobile-nav-height);
+    min-height: var(--ui-mobile-nav-total-height);
     padding-left: max(0.5rem, env(safe-area-inset-left, 0px));
     padding-right: max(0.5rem, env(safe-area-inset-right, 0px));
     border-top: 1px solid var(--ui-border);
@@ -624,7 +634,7 @@
   }
 
   .ui-mobile-fixed-toolbar {
-    bottom: calc(var(--ui-mobile-nav-height) + 0.75rem + env(safe-area-inset-bottom, 0px));
+    bottom: calc(var(--ui-mobile-nav-total-height) + 0.75rem);
   }
 
   .ui-metric-grid > :not(:first-child) {
@@ -1134,6 +1144,8 @@
 .app-shell {
   background: var(--ui-canvas);
   min-width: 0;
+  height: 100%;
+  min-height: 100%;
 }
 
 .dark .app-shell {
@@ -1164,6 +1176,46 @@
   max-width: 100%;
 }
 
+/* Knowledge list uses a dedicated mobile command area. Keeping the page
+ * header identity compact prevents actions from being stranded under a long
+ * description, while the list still exposes the same actions below it. */
+@media (max-width: 1279px) {
+  .knowledge-page-header {
+    margin-bottom: 0.75rem;
+    gap: 0.5rem;
+  }
+
+  .knowledge-page-header .page-header-tools {
+    display: none;
+  }
+
+  .knowledge-page-header .page-header-identity {
+    gap: 0.625rem;
+  }
+
+  .knowledge-page-header .page-header-mark {
+    height: 2.5rem;
+    width: 2.5rem;
+  }
+
+  .knowledge-page-header .page-header-identity > div > p {
+    max-width: 38rem;
+    line-height: 1.5;
+  }
+
+  .knowledge-mobile-toolbar {
+    max-width: 38rem;
+  }
+
+  .knowledge-card-index {
+    min-width: 0;
+  }
+
+  .knowledge-card-row {
+    min-height: 4.25rem;
+  }
+}
+
 @container page-header (max-width: 620px) {
   .page-header-tools {
     width: 100%;
@@ -1189,7 +1241,7 @@
 
 /* Mobile bottom safe area */
 .safe-bottom {
-  padding-bottom: env(safe-area-inset-bottom, 8px);
+  padding-bottom: env(safe-area-inset-bottom, 0px);
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -1237,20 +1289,414 @@
 
 /* Mobile: main content gets bottom padding for tab bar */
 @media (max-width: 767px) {
-  body { overflow: auto; overflow-x: hidden; }
-  #root { flex-direction: column; }
+  html { height: auto; min-height: 100%; }
+  body { height: auto; min-height: 100svh; overflow-y: auto; overflow-x: hidden; }
+  #root { height: auto; min-height: 100svh; flex-direction: column; }
   .app-shell {
+    height: auto;
+    min-height: 100svh;
     padding-top: env(safe-area-inset-top, 0px);
     padding-left: env(safe-area-inset-left, 0px);
     padding-right: env(safe-area-inset-right, 0px);
   }
   main {
-    padding-bottom: calc(var(--ui-mobile-nav-height) + env(safe-area-inset-bottom, 0px));
-    scroll-padding-bottom: calc(var(--ui-mobile-nav-height) + 1rem + env(safe-area-inset-bottom, 0px));
+    padding-bottom: var(--ui-mobile-nav-total-height);
+    scroll-padding-bottom: calc(var(--ui-mobile-nav-total-height) + 1rem);
     min-width: 0;
   }
 
   .ui-toast {
-    bottom: calc(var(--ui-mobile-nav-height) + 0.75rem + env(safe-area-inset-bottom, 0px)) !important;
+    bottom: calc(var(--ui-mobile-nav-total-height) + 0.75rem) !important;
+  }
+}
+
+/* Prefer the dynamic viewport when available, while keeping the small
+ * viewport as the lower bound so expanded browser chrome cannot cover the
+ * app's scrollable area. */
+@supports (height: 100dvh) {
+  @media (max-width: 767px) {
+    #root,
+    .app-shell {
+      height: 100dvh;
+      min-height: 100svh;
+    }
+  }
+}
+
+/* ── Knowledge workspace: a verification desk, not three floating cards ──
+ * The page's central task is to compare a claim with its evidence. The outer
+ * shell therefore owns the depth, while the three regions read as quiet
+ * panes. This keeps the list available without making every region compete
+ * as a separate rounded panel. */
+.knowledge-workspace {
+  --knowledge-shell: var(--ui-surface-inset);
+  --knowledge-rail: var(--ui-surface-soft);
+  --knowledge-index: var(--ui-surface);
+  --knowledge-editor: var(--ui-canvas);
+  --knowledge-paper: var(--ui-surface-raised);
+  --knowledge-source: var(--ui-warning-surface);
+  gap: 0 !important;
+  border: 1px solid var(--ui-border-strong);
+  border-radius: 18px;
+  background: var(--knowledge-shell);
+  box-shadow: var(--ui-shadow-panel);
+  isolation: isolate;
+}
+
+.dark .knowledge-workspace {
+  --knowledge-shell: #0a0d11;
+  --knowledge-rail: #101419;
+  --knowledge-index: #12171d;
+  --knowledge-editor: #0f1318;
+  --knowledge-paper: #1a2028;
+  --knowledge-source: rgba(245, 158, 11, 0.055);
+}
+
+.knowledge-workspace > .knowledge-project-index.ui-panel,
+.knowledge-workspace > .knowledge-card-index.ui-panel,
+.knowledge-workspace > .knowledge-inspector.ui-panel {
+  border-radius: 0;
+  box-shadow: none;
+}
+
+.knowledge-project-index.ui-panel {
+  border-width: 0 1px 0 0;
+  background: var(--knowledge-rail);
+}
+
+.knowledge-card-index.ui-panel {
+  border-width: 0 1px 0 0;
+  background: var(--knowledge-index);
+}
+
+.knowledge-inspector.ui-panel {
+  border: 0;
+  background: var(--knowledge-editor);
+  padding: 1.5rem 1.75rem 2rem;
+}
+
+.knowledge-page-header {
+  border-bottom: 1px solid var(--ui-border);
+  padding-bottom: 0.875rem;
+}
+
+.knowledge-page-header .page-header-mark {
+  border: 1px solid var(--ui-selected-border);
+  background: var(--ui-surface-selected);
+  box-shadow: none;
+}
+
+.knowledge-inspector-header {
+  border-bottom: 1px solid var(--ui-border);
+  padding-bottom: 1rem;
+}
+
+.knowledge-editor-fields {
+  order: 1;
+}
+
+.knowledge-reading-grid {
+  order: 2;
+}
+
+.knowledge-review-stack {
+  order: 3;
+}
+
+.knowledge-inspector .ui-mobile-editor-actions {
+  order: 4;
+}
+
+.knowledge-inspector-header h3 {
+  letter-spacing: -0.02em;
+}
+
+.knowledge-verification-rail {
+  display: flex;
+  align-items: center;
+  gap: 0.625rem;
+  min-height: 4.25rem;
+  padding: 0.75rem 0.875rem;
+  border: 1px solid var(--ui-border);
+  border-radius: 14px;
+  background: var(--knowledge-paper);
+}
+
+.knowledge-verification-step {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 0.5rem;
+  color: var(--ui-text-subtle);
+}
+
+.knowledge-verification-icon {
+  display: inline-flex;
+  height: 2rem;
+  width: 2rem;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--ui-border);
+  border-radius: 9px;
+  background: var(--ui-surface-inset);
+  color: var(--ui-text-subtle);
+  transition: color 180ms ease-out, background-color 180ms ease-out, border-color 180ms ease-out;
+}
+
+.knowledge-verification-copy {
+  display: grid;
+  min-width: 0;
+  gap: 0.125rem;
+  line-height: 1.2;
+}
+
+.knowledge-verification-copy strong {
+  color: var(--ui-text-muted);
+  font-size: 0.75rem;
+  font-weight: 700;
+}
+
+.knowledge-verification-copy small {
+  color: var(--ui-text-subtle);
+  font-size: 0.6875rem;
+  white-space: nowrap;
+}
+
+.knowledge-verification-step[data-active="true"] .knowledge-verification-icon,
+.knowledge-verification-step[data-complete="true"] .knowledge-verification-icon {
+  border-color: var(--ui-selected-border);
+  background: var(--ui-surface-selected);
+  color: var(--ui-accent-text);
+}
+
+.knowledge-verification-step[data-active="true"] .knowledge-verification-copy strong {
+  color: var(--ui-text);
+}
+
+.knowledge-verification-step[data-complete="true"] .knowledge-verification-copy strong {
+  color: var(--ui-success-text);
+}
+
+.knowledge-verification-connector {
+  height: 1px;
+  min-width: 1rem;
+  flex: 1 1 1.5rem;
+  background: var(--ui-border);
+}
+
+.knowledge-verification-caption {
+  margin-left: auto;
+  max-width: 12rem;
+  color: var(--ui-text-subtle);
+  font-size: 0.6875rem;
+  line-height: 1.35;
+  text-align: right;
+}
+
+.knowledge-field-label {
+  color: var(--ui-text-muted);
+  font-size: 0.6875rem;
+  font-weight: 700;
+  letter-spacing: 0.045em;
+  line-height: 1rem;
+}
+
+.knowledge-title-field.ui-field {
+  border-width: 0 0 1px;
+  border-radius: 0;
+  background: transparent;
+  padding-inline: 0;
+  font-size: 1.25rem;
+  font-weight: 650;
+  letter-spacing: -0.02em;
+  box-shadow: none;
+}
+
+.knowledge-title-field.ui-field:focus {
+  border-color: var(--ui-focus);
+  box-shadow: 0 2px 0 color-mix(in srgb, var(--ui-focus) 42%, transparent);
+}
+
+.knowledge-body-editor.ui-editor-surface {
+  border-color: var(--ui-border-strong);
+  border-radius: 14px;
+  background: var(--knowledge-paper);
+  box-shadow: inset 0 1px 0 color-mix(in srgb, #fff 5%, transparent), var(--ui-shadow-panel);
+}
+
+.knowledge-body-editor .cm-editor,
+.knowledge-body-editor .cm-scroller {
+  background: transparent;
+}
+
+.knowledge-body-editor .cm-content {
+  min-height: 220px;
+  padding: 1rem 1.125rem;
+  font-size: 0.9375rem;
+  line-height: 1.75;
+}
+
+.knowledge-body-editor .cm-line {
+  max-width: 72ch;
+}
+
+.knowledge-inspector .ui-panel-muted {
+  border-color: var(--ui-border);
+  background: var(--knowledge-shell);
+  box-shadow: none;
+}
+
+.knowledge-preview-panel.ui-panel-muted {
+  border-color: var(--ui-border-strong);
+  border-radius: 14px;
+  background: var(--knowledge-paper);
+  box-shadow: none;
+}
+
+.knowledge-source-heading {
+  min-height: 2rem;
+}
+
+.knowledge-source-state {
+  display: inline-flex;
+  min-height: 1.5rem;
+  align-items: center;
+  border: 1px solid var(--ui-border);
+  border-radius: 999px;
+  padding: 0 0.5rem;
+  color: var(--ui-text-subtle);
+  font-size: 0.625rem;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  white-space: nowrap;
+}
+
+.knowledge-source-state[data-state="linked"] {
+  border-color: var(--ui-success-border);
+  background: var(--ui-success-surface);
+  color: var(--ui-success-text);
+}
+
+.knowledge-source-state[data-state="error"] {
+  border-color: var(--ui-danger-border);
+  background: var(--ui-danger-surface);
+  color: var(--ui-danger-text);
+}
+
+.knowledge-source-panel.ui-editor-surface {
+  border-color: var(--ui-border-strong);
+  border-radius: 14px;
+  background: var(--knowledge-source);
+  box-shadow: none;
+}
+
+.knowledge-source-panel[data-source-state="linked"] {
+  border-color: var(--ui-success-border);
+}
+
+.knowledge-source-panel[data-source-state="error"] {
+  border-color: var(--ui-danger-border);
+}
+
+.knowledge-source-titlebar {
+  background: color-mix(in srgb, var(--knowledge-source) 62%, var(--ui-surface-raised));
+}
+
+.knowledge-source-excerpt {
+  display: flex;
+  min-height: 0;
+  flex: 1 1 auto;
+  flex-direction: column;
+}
+
+.knowledge-source-excerpt textarea {
+  min-height: 8.5rem;
+  flex: 1 1 auto;
+  border: 1px dashed var(--ui-warning-border);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--knowledge-source) 62%, var(--ui-surface-raised));
+  padding: 0.75rem;
+  line-height: 1.65;
+}
+
+.knowledge-source-panel[data-source-state="linked"] .knowledge-source-excerpt textarea {
+  border-color: var(--ui-success-border);
+}
+
+.knowledge-source-panel[data-source-state="error"] .knowledge-source-excerpt textarea {
+  border-color: var(--ui-danger-border);
+}
+
+.knowledge-card-row[data-state="active"] {
+  border-color: var(--ui-selected-border);
+  background: color-mix(in srgb, var(--ui-surface-selected) 72%, var(--knowledge-index));
+  box-shadow: 0 8px 22px color-mix(in srgb, var(--color-accent) 10%, transparent);
+}
+
+.knowledge-card-row[data-state="active"] .knowledge-source-line {
+  color: var(--ui-accent-text);
+}
+
+@media (max-width: 1535px) {
+  .knowledge-inspector.ui-panel {
+    padding: 1.25rem 1.25rem 2rem;
+  }
+
+  .knowledge-verification-caption {
+    max-width: 10rem;
+  }
+}
+
+@media (max-width: 767px) {
+  .knowledge-workspace {
+    border-radius: 14px;
+  }
+
+  .knowledge-inspector.ui-panel {
+    padding: 1rem;
+  }
+
+  .knowledge-verification-rail {
+    flex-wrap: wrap;
+    gap: 0.5rem;
+  }
+
+  .knowledge-verification-caption {
+    flex-basis: 100%;
+    margin-left: 0;
+    max-width: none;
+    text-align: left;
+  }
+}
+
+@media (max-width: 480px) {
+  .knowledge-verification-copy small {
+    display: none;
+  }
+
+  .knowledge-verification-connector {
+    min-width: 0.5rem;
+  }
+}
+
+@media (forced-colors: active) {
+  .knowledge-workspace,
+  .knowledge-verification-rail,
+  .knowledge-body-editor.ui-editor-surface,
+  .knowledge-preview-panel.ui-panel-muted,
+  .knowledge-source-panel.ui-editor-surface {
+    border-color: ButtonText;
+    background: Canvas;
+    box-shadow: none;
+  }
+
+  .knowledge-verification-connector {
+    background: ButtonText;
+  }
+
+  .knowledge-source-excerpt textarea {
+    border-color: ButtonText;
+    background: Canvas;
   }
 }

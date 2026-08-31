@@ -706,7 +706,10 @@ monitor() {
     failures+=("server token is unavailable for detailed health monitoring")
     response=""
   else
-    response="$(curl -fsS --max-time 5 -H "Authorization: Bearer $token" "$(detailed_health_url)" 2>/dev/null || true)"
+    response="$(
+      printf 'Authorization: Bearer %s\n' "$token" |
+        curl -fsS --max-time 5 -H @- "$(detailed_health_url)" 2>/dev/null || true
+    )"
   fi
   if [ -z "$response" ]; then
     failures+=("health endpoint is unreachable")

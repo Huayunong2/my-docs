@@ -1,5 +1,8 @@
 type BrowserStorageKind = "local" | "session";
 
+/** 当连接设置从业务页面打开时，用于保存成功后返回原任务。 */
+export const connectionReturnStorageKey = "daily-summary-connection-return";
+
 function getStorage(kind: BrowserStorageKind): Storage | null {
   try {
     return kind === "local" ? globalThis.localStorage : globalThis.sessionStorage;

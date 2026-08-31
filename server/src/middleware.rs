@@ -6,10 +6,92 @@ use axum::{
 };
 use tower_http::cors::{AllowOrigin, CorsLayer};
 
+pub(crate) const DEFAULT_BIND_ADDRESS: &str = "0.0.0.0:8080";
+
 pub(crate) fn env_enabled(name: &str) -> bool {
     matches!(
         std::env::var(name).ok().as_deref(),
         Some("1") | Some("true") | Some("TRUE") | Some("yes") | Some("YES")
+    )
+}
+
+pub(crate) fn bind_is_loopback(bind: &str) -> bool {
+    let bind = bind.trim();
+    if let Ok(address) = bind.parse::<std::net::SocketAddr>() {
+        return address.ip().is_loopback();
+    }
+
+    let Some((host, port)) = bind.rsplit_once(':') else {
+        return false;
+    };
+    if port.parse::<u16>().is_err() {
+        return false;
+    }
+
+    let host = host
+        .strip_prefix('[')
+        .and_then(|value| value.strip_suffix(']'))
+        .unwrap_or(host);
+    host == "localhost"
+}
+
+pub(crate) fn no_token_mode_is_allowed(bind: &str, allow_no_token: bool) -> bool {
+    !allow_no_token || bind_is_loopback(bind)
+}
+
+pub(crate) fn validate_security_configuration(bind: &str) -> Result<(), String> {
+    let allow_no_token = env_enabled("DAILY_SUMMARY_ALLOW_NO_TOKEN");
+    let token_configured = matches!(
+        std::env::var("DAILY_SUMMARY_TOKEN").ok(),
+        Some(token) if !token.trim().is_empty()
+    );
+    validate_security_configuration_for(bind, token_configured, allow_no_token)
+}
+
+fn authorize_request(
+    expected: Option<&str>,
+    allow_no_token: bool,
+    bind: &str,
+    provided: Option<&str>,
+) -> Result<(), (StatusCode, String)> {
+    match expected.filter(|token| !token.trim().is_empty()) {
+        Some(expected) => match provided {
+            Some(token) if constant_time_eq(token.as_bytes(), expected.as_bytes()) => Ok(()),
+            _ => Err((StatusCode::UNAUTHORIZED, "Unauthorized".into())),
+        },
+        None if allow_no_token => validate_no_token_bind_for(allow_no_token, bind)
+            .map_err(|error| (StatusCode::INTERNAL_SERVER_ERROR, error)),
+        None => Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "Server token is not configured".into(),
+        )),
+    }
+}
+
+fn validate_no_token_bind_for(allow_no_token: bool, bind: &str) -> Result<(), String> {
+    if no_token_mode_is_allowed(bind, allow_no_token) {
+        return Ok(());
+    }
+
+    Err(
+        "DAILY_SUMMARY_ALLOW_NO_TOKEN=1 requires DAILY_SUMMARY_BIND to use a loopback address"
+            .into(),
+    )
+}
+
+fn validate_security_configuration_for(
+    bind: &str,
+    token_configured: bool,
+    allow_no_token: bool,
+) -> Result<(), String> {
+    validate_no_token_bind_for(allow_no_token, bind)?;
+    if token_configured || allow_no_token {
+        return Ok(());
+    }
+
+    Err(
+        "DAILY_SUMMARY_TOKEN must be configured unless explicit loopback no-token mode is enabled"
+            .into(),
     )
 }
 
@@ -21,17 +103,6 @@ pub(crate) async fn require_api_token(
         return Ok(next.run(req).await);
     }
 
-    let expected = match std::env::var("DAILY_SUMMARY_TOKEN") {
-        Ok(token) if !token.trim().is_empty() => token,
-        _ if env_enabled("DAILY_SUMMARY_ALLOW_NO_TOKEN") => return Ok(next.run(req).await),
-        _ => {
-            return Err((
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "Server token is not configured".into(),
-            ))
-        }
-    };
-
     let provided = req
         .headers()
         .get("Authorization")
@@ -39,12 +110,16 @@ pub(crate) async fn require_api_token(
         .and_then(|v| v.strip_prefix("Bearer "))
         .map(str::trim);
 
-    match provided {
-        Some(token) if constant_time_eq(token.as_bytes(), expected.as_bytes()) => {
-            Ok(next.run(req).await)
-        }
-        _ => Err((StatusCode::UNAUTHORIZED, "Unauthorized".into())),
-    }
+    let expected = std::env::var("DAILY_SUMMARY_TOKEN").ok();
+    let bind =
+        std::env::var("DAILY_SUMMARY_BIND").unwrap_or_else(|_| DEFAULT_BIND_ADDRESS.to_string());
+    authorize_request(
+        expected.as_deref(),
+        env_enabled("DAILY_SUMMARY_ALLOW_NO_TOKEN"),
+        &bind,
+        provided,
+    )?;
+    Ok(next.run(req).await)
 }
 
 fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
@@ -137,7 +212,85 @@ fn is_allowed_local_origin(origin: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::is_allowed_local_origin;
+    use axum::http::StatusCode;
+
+    use super::{
+        authorize_request, bind_is_loopback, is_allowed_local_origin, no_token_mode_is_allowed,
+        validate_security_configuration_for,
+    };
+
+    #[test]
+    fn authorization_requires_a_matching_token_when_configured() {
+        assert!(authorize_request(Some("secret"), false, "0.0.0.0:8080", Some("secret")).is_ok());
+        assert_eq!(
+            authorize_request(Some("secret"), false, "0.0.0.0:8080", None)
+                .expect_err("missing token must be rejected")
+                .0,
+            StatusCode::UNAUTHORIZED
+        );
+        assert_eq!(
+            authorize_request(Some("secret"), false, "0.0.0.0:8080", Some("wrong"))
+                .expect_err("wrong token must be rejected")
+                .0,
+            StatusCode::UNAUTHORIZED
+        );
+    }
+
+    #[test]
+    fn authorization_rejects_missing_configuration_unless_safe_no_token_mode_is_enabled() {
+        assert_eq!(
+            authorize_request(None, false, "0.0.0.0:8080", None)
+                .expect_err("missing server token must fail closed")
+                .0,
+            StatusCode::INTERNAL_SERVER_ERROR
+        );
+        assert!(authorize_request(None, true, "127.0.0.1:8080", None).is_ok());
+        assert_eq!(
+            authorize_request(None, true, "0.0.0.0:8080", None)
+                .expect_err("no-token mode must not expose a public bind")
+                .0,
+            StatusCode::INTERNAL_SERVER_ERROR
+        );
+    }
+
+    #[test]
+    fn startup_security_configuration_fails_closed_without_token() {
+        assert!(validate_security_configuration_for("127.0.0.1:8080", true, false).is_ok());
+        assert!(validate_security_configuration_for("127.0.0.1:8080", false, true).is_ok());
+        assert!(validate_security_configuration_for("0.0.0.0:8080", true, false).is_ok());
+        assert_eq!(
+            validate_security_configuration_for("127.0.0.1:8080", false, false)
+                .expect_err("missing token must prevent startup")
+                .as_str(),
+            "DAILY_SUMMARY_TOKEN must be configured unless explicit loopback no-token mode is enabled"
+        );
+        assert_eq!(
+            validate_security_configuration_for("0.0.0.0:8080", false, true)
+                .expect_err("public no-token mode must prevent startup")
+                .as_str(),
+            "DAILY_SUMMARY_ALLOW_NO_TOKEN=1 requires DAILY_SUMMARY_BIND to use a loopback address"
+        );
+    }
+
+    #[test]
+    fn no_token_mode_is_only_allowed_on_loopback() {
+        assert!(no_token_mode_is_allowed("127.0.0.1:8080", true));
+        assert!(no_token_mode_is_allowed("[::1]:8080", true));
+        assert!(no_token_mode_is_allowed("localhost:8080", true));
+        assert!(!no_token_mode_is_allowed("0.0.0.0:8080", true));
+        assert!(!no_token_mode_is_allowed("192.0.2.10:8080", true));
+        assert!(no_token_mode_is_allowed("0.0.0.0:8080", false));
+    }
+
+    #[test]
+    fn loopback_bind_detection_rejects_public_and_malformed_addresses() {
+        assert!(bind_is_loopback("127.0.0.1:8080"));
+        assert!(bind_is_loopback("[::1]:8080"));
+        assert!(bind_is_loopback("localhost:8080"));
+        assert!(!bind_is_loopback("0.0.0.0:8080"));
+        assert!(!bind_is_loopback("localhost:not-a-port"));
+        assert!(!bind_is_loopback("not-an-address"));
+    }
 
     #[test]
     fn local_cors_origins_require_a_known_host() {

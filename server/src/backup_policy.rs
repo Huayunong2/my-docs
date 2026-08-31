@@ -554,10 +554,12 @@ mod tests {
         .unwrap();
         fs::write(bin_dir.join("systemctl"), "#!/bin/sh\nexit 0\n").unwrap();
         let health_marker = dir.join("health-request-authenticated");
+        let argv_leak_marker = dir.join("health-token-argv-leak");
         fs::write(
             bin_dir.join("curl"),
             format!(
-                "#!/bin/sh\ncase \"$*\" in *'Authorization: Bearer monitor-test-token'*'/api/health'*) touch \"{}\" ;; esac\nprintf '%s\\n' '{{\"monitoring\":{{\"last_backup_unix\":{now},\"ai_consecutive_failures\":0}}}}'\n",
+                "#!/bin/sh\ncase \"$*\" in *'monitor-test-token'*) touch \"{}\" ;; esac\nheaders=\"$(cat)\"\ncase \"$headers $*\" in *'Authorization: Bearer monitor-test-token'*'/api/health'*) touch \"{}\" ;; esac\nprintf '%s\\n' '{{\"monitoring\":{{\"last_backup_unix\":{now},\"ai_consecutive_failures\":0}}}}'\n",
+                argv_leak_marker.display(),
                 health_marker.display()
             ),
         )
@@ -585,6 +587,10 @@ mod tests {
             String::from_utf8_lossy(&output.stderr)
         );
         assert!(health_marker.exists());
+        assert!(
+            !argv_leak_marker.exists(),
+            "token must not be passed in argv"
+        );
         fs::remove_dir_all(dir).unwrap();
     }
 

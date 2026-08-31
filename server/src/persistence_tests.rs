@@ -608,7 +608,7 @@ fn knowledge_summary_counts_active_statuses_and_excludes_trash() {
         .batch_update(std::slice::from_ref(&confirmed.id), "delete", &[])
         .expect("delete card");
 
-    let summary = db.knowledge().summary().expect("summary");
+    let summary = db.knowledge().summary_for_project(None).expect("summary");
     assert_eq!(summary.total, 2);
     assert_eq!(summary.draft, 1);
     assert_eq!(summary.confirmed, 0);

@@ -9,7 +9,10 @@ use crate::db::{ArchiveImportError, ArticleDraft, Database};
 use crate::exports;
 use crate::helpers::{app_data_dir, backups_dir};
 use crate::knowledge;
-use crate::middleware::{add_security_headers, configured_cors, require_api_token};
+use crate::middleware::{
+    add_security_headers, configured_cors, require_api_token, validate_security_configuration,
+    DEFAULT_BIND_ADDRESS,
+};
 use crate::models::*;
 use crate::review;
 use crate::stats;
@@ -415,13 +418,15 @@ fn bind_address(configured: Option<String>) -> String {
     configured
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty())
-        .unwrap_or_else(|| "0.0.0.0:8080".into())
+        .unwrap_or_else(|| DEFAULT_BIND_ADDRESS.into())
 }
 
 pub async fn run() {
+    let bind = bind_address(std::env::var("DAILY_SUMMARY_BIND").ok());
+    validate_security_configuration(&bind)
+        .unwrap_or_else(|error| panic!("Invalid security configuration: {error}"));
     let db = Database::new().expect("Failed to initialize database");
     let router = build_router(db);
-    let bind = bind_address(std::env::var("DAILY_SUMMARY_BIND").ok());
     let listener = tokio::net::TcpListener::bind(&bind)
         .await
         .unwrap_or_else(|error| panic!("Failed to bind {bind}: {error}"));
@@ -430,9 +435,10 @@ pub async fn run() {
 }
 
 pub(crate) async fn check_startup() -> Result<(), String> {
+    let bind = bind_address(std::env::var("DAILY_SUMMARY_BIND").ok());
+    validate_security_configuration(&bind)?;
     let db = Database::new().map_err(|error| error.to_string())?;
     let _router = build_router(db);
-    let bind = bind_address(std::env::var("DAILY_SUMMARY_BIND").ok());
     let listener = tokio::net::TcpListener::bind(&bind)
         .await
         .map_err(|error| format!("Failed to bind {bind}: {error}"))?;
@@ -446,7 +452,7 @@ mod tests {
 
     #[test]
     fn configured_bind_address_preserves_legacy_default_and_accepts_loopback() {
-        assert_eq!(bind_address(None), "0.0.0.0:8080");
+        assert_eq!(bind_address(None), DEFAULT_BIND_ADDRESS);
         assert_eq!(
             bind_address(Some("127.0.0.1:8080".into())),
             "127.0.0.1:8080"

@@ -6,8 +6,8 @@ import { Toaster } from "sonner";
 import Sidebar from "./components/Sidebar";
 import CommandPalette from "./components/CommandPalette";
 import * as api from "./lib/api";
-import { readLocalStorage, writeLocalStorage } from "./lib/storage";
-import { nextExplicitThemeMode, resolveDarkTheme, themeColorForMode, type ThemeMode } from "./lib/theme";
+import { connectionReturnStorageKey, readLocalStorage, readSessionStorage, removeSessionStorage, writeLocalStorage } from "./lib/storage";
+import { colorSchemeForMode, nextExplicitThemeMode, resolveDarkTheme, themeColorForMode, type ThemeMode } from "./lib/theme";
 
 export type Page = "today" | "history" | "archive" | "search" | "stats" | "reviews" | "review" | "knowledge" | "settings";
 export type { ThemeMode } from "./lib/theme";
@@ -70,6 +70,7 @@ export interface AppShellContextValue {
   openKnowledgeQuality: (quality: api.KnowledgeCardQuality) => void;
   openNewKnowledgeCard: () => void;
   backToKnowledge: () => void;
+  returnFromConnectionSettings: () => void;
   zen: boolean;
   onToggleZen: () => void;
   dark: boolean;
@@ -135,7 +136,9 @@ export function AppShell() {
   useEffect(() => {
     const root = document.documentElement;
     root.classList.toggle("dark", dark);
-    root.style.colorScheme = dark ? "dark" : "light";
+    const colorScheme = colorSchemeForMode(dark);
+    root.style.colorScheme = colorScheme;
+    document.querySelector('meta[name="color-scheme"]')?.setAttribute("content", colorScheme);
     document.querySelector('meta[name="theme-color"]')?.setAttribute("content", themeColorForMode(dark));
   }, [dark]);
 
@@ -256,6 +259,30 @@ export function AppShell() {
     });
   }, [routerNavigate]);
 
+  const returnFromConnectionSettings = useCallback(() => {
+    const target = readSessionStorage(connectionReturnStorageKey);
+    removeSessionStorage(connectionReturnStorageKey);
+    if (!target || !target.startsWith("/")) {
+      return;
+    }
+    try {
+      const url = new URL(target, window.location.origin);
+      const search: Record<string, unknown> = {};
+      const searchKeys = ["q", "date", "page", "scope", "project", "tag", "status", "type", "sort", "usage", "quality", "view"];
+      for (const key of searchKeys) {
+        const value = url.searchParams.get(key);
+        if (!value) continue;
+        search[key] = key === "page" ? Number(value) : value;
+      }
+      void routerNavigate({
+        to: url.pathname as never,
+        search: search as never,
+      });
+    } catch {
+      go("/knowledge");
+    }
+  }, [go, routerNavigate]);
+
   const currentPage = useMemo(() => pageFromPath(location.pathname), [location.pathname]);
 
   useEffect(() => {
@@ -271,6 +298,7 @@ export function AppShell() {
     openKnowledgeQuality,
     openNewKnowledgeCard,
     backToKnowledge,
+    returnFromConnectionSettings,
     zen,
     onToggleZen: toggleZen,
     dark,
@@ -284,7 +312,7 @@ export function AppShell() {
     <MotionConfig reducedMotion="user">
       <AppShellContext.Provider value={contextValue}>
         <div className={dark ? "dark" : ""} style={{ display: "contents" }}>
-          <div className="app-shell flex h-dvh w-full min-w-0 transition-colors duration-300">
+          <div className="app-shell flex h-full w-full min-w-0 transition-colors duration-300">
             <a
               href="#main-content"
               className="sr-only fixed left-3 top-3 z-[100] rounded-lg bg-[var(--ui-accent-solid)] px-3 py-2 text-sm font-semibold text-white shadow-lg focus:not-sr-only"
