@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Bar, BarChart, Cell, ResponsiveContainer, Tooltip, XAxis } from "recharts";
+import { Bar, BarChart, Cell, ResponsiveContainer, Tooltip } from "recharts";
 import type { MouseEvent } from "react";
 import { motion } from "framer-motion";
 import * as Dialog from "@radix-ui/react-dialog";
@@ -727,14 +727,6 @@ export default function StatsPage({
                         return [payload?.status ?? "", "状态"];
                       }}
                     />
-                    <XAxis
-                      dataKey="date"
-                      interval={6}
-                      tickFormatter={(value) => String(value).slice(-2)}
-                      tick={{ fontSize: 10, fill: "var(--ui-text-subtle)" }}
-                      tickLine={false}
-                      axisLine={false}
-                    />
                     <Bar
                       dataKey="value"
                       radius={[4, 4, 0, 0]}
@@ -1010,32 +1002,30 @@ export default function StatsPage({
             <div className="mt-4">
               <div className="ui-section-kicker mb-1.5">近 30 天复习趋势</div>
               {reviewStats.daily.some((d) => d.count > 0) ? (
-                <div className="h-28" role="img" aria-label="近 30 天复习趋势图">
-                  <ResponsiveContainer width="100%" height="100%">
-                    <BarChart data={reviewStats.daily} margin={{ top: 4, right: 0, left: 0, bottom: 0 }}>
-                      <defs>
-                        <linearGradient id="accentGradient" x1="0" y1="0" x2="0" y2="1">
-                          <stop offset="0%" stopColor="var(--ui-accent-solid)" />
-                          <stop offset="100%" stopColor="var(--ui-accent-text)" />
-                        </linearGradient>
-                      </defs>
-                      <Tooltip
-                        cursor={{ fill: "var(--ui-surface-selected)" }}
-                        content={<ChartTooltip />}
-                        formatter={(value) => [`${value} 次`, "复习"]}
-                      />
-                      <XAxis
-                        dataKey="date"
-                        interval={6}
-                        tickFormatter={(value) => String(value).slice(-2)}
-                        tick={{ fontSize: 10, fill: "var(--ui-text-subtle)" }}
-                        tickLine={false}
-                        axisLine={false}
-                      />
-                      <Bar dataKey="count" radius={[4, 4, 0, 0]} fill="url(#accentGradient)" />
-                    </BarChart>
-                  </ResponsiveContainer>
-                </div>
+                <>
+                  <div className="h-28" role="img" aria-label="近 30 天复习趋势图">
+                    <ResponsiveContainer width="100%" height="100%">
+                      <BarChart data={reviewStats.daily} margin={{ top: 4, right: 0, left: 0, bottom: 0 }}>
+                        <defs>
+                          <linearGradient id="accentGradient" x1="0" y1="0" x2="0" y2="1">
+                            <stop offset="0%" stopColor="var(--ui-accent-solid)" />
+                            <stop offset="100%" stopColor="var(--ui-accent-text)" />
+                          </linearGradient>
+                        </defs>
+                        <Tooltip
+                          cursor={{ fill: "var(--ui-surface-selected)" }}
+                          content={<ChartTooltip />}
+                          formatter={(value) => [`${value} 次`, "复习"]}
+                        />
+                        <Bar dataKey="count" radius={[4, 4, 0, 0]} fill="url(#accentGradient)" />
+                      </BarChart>
+                    </ResponsiveContainer>
+                  </div>
+                  <div className="mt-1 flex justify-between text-[10px] text-[var(--ui-text-subtle)]">
+                    <span>{formatMonthDay(reviewStats.daily[0]?.date || "")}</span>
+                    <span>{formatMonthDay(reviewStats.daily[reviewStats.daily.length - 1]?.date || "")}</span>
+                  </div>
+                </>
               ) : (
                 <p className="ui-panel-muted rounded-lg px-3 py-4 text-center text-xs text-[var(--ui-text-subtle)]">
                   还没有复习记录——确认卡片后到「复习」页开始第一次间隔复习
