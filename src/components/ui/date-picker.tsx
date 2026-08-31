@@ -59,7 +59,7 @@ export default function DatePickerPopover({
         <PopoverTrigger asChild>
           <button
             type="button"
-            className="ui-field relative flex h-9 w-full items-center justify-center rounded-lg px-3 py-0 font-mono text-xs font-semibold"
+            className="ui-field relative flex h-11 w-full items-center justify-center rounded-lg px-3 py-0 font-mono text-xs font-semibold sm:h-9"
             aria-label={label || "选择日期"}
           >
             <span className="truncate text-center">{value.replace(/-/g, "/")}</span>
@@ -71,7 +71,7 @@ export default function DatePickerPopover({
             <button
               type="button"
               onClick={() => setViewDate(new Date(year, month - 1, 1))}
-              className="ui-icon-button h-8 w-8"
+              className="ui-icon-button h-10 w-10 sm:h-8 sm:w-8"
               aria-label="上个月"
             >
               <ChevronLeft size={16} />
@@ -80,7 +80,7 @@ export default function DatePickerPopover({
             <button
               type="button"
               onClick={() => setViewDate(new Date(year, month + 1, 1))}
-              className="ui-icon-button h-8 w-8"
+              className="ui-icon-button h-10 w-10 sm:h-8 sm:w-8"
               aria-label="下个月"
             >
               <ChevronRight size={16} />
@@ -100,7 +100,7 @@ export default function DatePickerPopover({
                     setOpen(false);
                   }}
                   className={[
-                    "inline-flex h-8 w-8 items-center justify-center rounded-lg text-xs font-medium transition-colors",
+                    "inline-flex h-10 w-10 items-center justify-center rounded-lg text-xs font-medium transition-colors sm:h-8 sm:w-8",
                     cell === value
                       ? "ui-button-primary ui-date-picker-day-selected px-0 text-xs"
                       : "text-[var(--ui-text-muted)] hover:bg-[var(--ui-surface-hover)] hover:text-[var(--ui-text)]",
@@ -109,7 +109,7 @@ export default function DatePickerPopover({
                   {Number(cell.slice(-2))}
                 </button>
               ) : (
-                <div key={`blank-${index}`} className="h-8 w-8" aria-hidden="true" />
+                <div key={`blank-${index}`} className="h-10 w-10 sm:h-8 sm:w-8" aria-hidden="true" />
               )
             ))}
           </div>

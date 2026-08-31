@@ -123,7 +123,7 @@ export default function SpaceManagerDialog({
   const archive = async (space: api.KnowledgeProject) => {
     const accepted = await confirm({
       title: `归档${kindLabel(space.kind)}「${space.name}」？`,
-      message: "归档会将它从活跃空间目录和筛选中移除，但不会删除日报、知识卡片、来源关系或复习进度。之后可以在空间管理中恢复。",
+      message: "归档会将它从活跃空间目录和筛选中移除，但不会删除每日记录、知识条目、来源关系或复习进度。之后可以在空间管理中恢复。",
       confirmText: "归档空间",
       cancelText: "保留空间",
     });
@@ -168,7 +168,7 @@ export default function SpaceManagerDialog({
     const articleCount = space.article_count || 0;
     const accepted = await confirm({
       title: `永久删除${kindLabel(space.kind)}「${space.name}」？`,
-      message: `此操作不可恢复，只会删除空间和归属关系，不会删除其中的 ${cardCount} 张知识卡片或 ${articleCount} 篇每日记录。若以后需要重新组织内容，可以重新创建同名空间。`,
+      message: `此操作不可恢复，只会删除空间和归属关系，不会删除其中的 ${cardCount} 个知识条目或 ${articleCount} 篇每日记录。若以后需要重新组织内容，可以重新创建同名空间。`,
       confirmText: "永久删除空间",
       cancelText: "保留空间",
       danger: true,
@@ -214,7 +214,7 @@ export default function SpaceManagerDialog({
               </div>
             </div>
             <Dialog.Close asChild>
-              <button type="button" className="ui-icon-button h-9 w-9" aria-label="关闭空间管理">
+              <button type="button" className="ui-icon-button h-11 w-11 md:h-9 md:w-9" aria-label="关闭空间管理">
                 <X size={17} />
               </button>
             </Dialog.Close>
@@ -231,7 +231,7 @@ export default function SpaceManagerDialog({
                     {activeSpaces.length} 个活跃 · {archivedSpaces.length} 个已归档
                   </p>
                 </div>
-                <button type="button" onClick={startCreate} disabled={loading || saving} className="ui-button-secondary h-9 px-2.5 text-xs">
+                <button type="button" onClick={startCreate} disabled={loading || saving} className="ui-button-secondary h-11 min-h-11 px-2.5 text-xs md:h-9 md:min-h-9">
                   <Plus size={14} /> 新建空间
                 </button>
               </div>
@@ -244,7 +244,7 @@ export default function SpaceManagerDialog({
                     <span className="ui-status-muted flex h-10 w-10 items-center justify-center rounded-xl"><Folder size={18} /></span>
                     <p className="mt-3 text-xs font-medium text-[var(--ui-text)]">还没有空间</p>
                     <p className="mt-1 text-xs leading-5 text-[var(--ui-text-subtle)]">为长期领域或具体目标建立一个清晰的入口。</p>
-                    <button type="button" onClick={startCreate} className="ui-button-primary mt-4 h-9 px-3 text-xs"><Plus size={14} /> 创建第一个空间</button>
+                    <button type="button" onClick={startCreate} className="ui-button-primary mt-4 h-11 min-h-11 px-3 text-xs md:h-9 md:min-h-9"><Plus size={14} /> 创建第一个空间</button>
                   </div>
                 ) : (
                   <div className="divide-y divide-[var(--ui-border)]">
@@ -265,24 +265,24 @@ export default function SpaceManagerDialog({
                               {space.description || "暂无说明"}
                             </p>
                             <p className="mt-1.5 text-xs leading-4 text-[var(--ui-text-subtle)]">
-                              {space.count} 张卡片 · {space.article_count || 0} 篇记录
+                              {space.count} 个知识条目 · {space.article_count || 0} 篇记录
                             </p>
                           </div>
                           <div className="flex shrink-0 items-center gap-1">
-                            <button type="button" onClick={() => startEdit(space)} disabled={saving} className="ui-icon-button h-8 w-8" aria-label={`编辑空间：${space.name}`} title="编辑">
+                            <button type="button" onClick={() => startEdit(space)} disabled={saving} className="ui-icon-button h-11 w-11 md:h-9 md:w-9" aria-label={`编辑空间：${space.name}`} title="编辑">
                               <Pencil size={14} />
                             </button>
                             {archived ? (
                               <>
-                                <button type="button" onClick={() => void restore(space)} disabled={saving} className="ui-icon-button h-8 w-8 text-[var(--ui-accent-text)]" aria-label={`恢复空间：${space.name}`} title="恢复">
+                                <button type="button" onClick={() => void restore(space)} disabled={saving} className="ui-icon-button h-11 w-11 text-[var(--ui-accent-text)] md:h-9 md:w-9" aria-label={`恢复空间：${space.name}`} title="恢复">
                                   <RotateCcw size={14} />
                                 </button>
-                                <button type="button" onClick={() => void deletePermanently(space)} disabled={saving} className="ui-icon-button h-8 w-8 text-[var(--ui-danger-text)] hover:bg-[var(--ui-danger-surface)]" aria-label={`永久删除空间：${space.name}`} title="永久删除">
+                                <button type="button" onClick={() => void deletePermanently(space)} disabled={saving} className="ui-icon-button h-11 w-11 text-[var(--ui-danger-text)] hover:bg-[var(--ui-danger-surface)] md:h-9 md:w-9" aria-label={`永久删除空间：${space.name}`} title="永久删除">
                                   <Trash2 size={14} />
                                 </button>
                               </>
                             ) : (
-                              <button type="button" onClick={() => void archive(space)} disabled={saving} className="ui-icon-button h-8 w-8 hover:bg-[var(--ui-warning-surface)] hover:text-[var(--ui-warning-text)]" aria-label={`归档空间：${space.name}`} title="归档">
+                              <button type="button" onClick={() => void archive(space)} disabled={saving} className="ui-icon-button h-11 w-11 hover:bg-[var(--ui-warning-surface)] hover:text-[var(--ui-warning-text)] md:h-9 md:w-9" aria-label={`归档空间：${space.name}`} title="归档">
                                 <Archive size={14} />
                               </button>
                             )}
@@ -336,7 +336,7 @@ export default function SpaceManagerDialog({
                   />
                 </label>
                 <div className="mt-auto flex items-center justify-end gap-2 pt-4">
-                  <button type="submit" disabled={saving || !form.name.trim()} className="ui-button-primary h-9 px-3 text-xs">
+                  <button type="submit" disabled={saving || !form.name.trim()} className="ui-button-primary h-11 min-h-11 px-3 text-xs md:h-9 md:min-h-9">
                     {saving ? "保存中..." : <><Check size={14} /> {editingName ? "保存修改" : "创建空间"}</>}
                   </button>
                 </div>
@@ -346,7 +346,7 @@ export default function SpaceManagerDialog({
 
           <div className="ui-status-accent mt-4 flex items-start gap-2 p-3 text-xs leading-5">
             <Archive size={14} className="mt-0.5 shrink-0" />
-            <p>空间归档不会进入知识卡片回收站；永久删除空间只解除归属，不删除卡片或每日记录。卡片删除后会进入回收站，那里可以恢复。</p>
+            <p>空间归档不会进入知识条目回收站；永久删除空间只解除归属，不删除知识条目或每日记录。知识条目删除后会进入回收站，那里可以恢复。</p>
           </div>
         </Dialog.Content>
       </Dialog.Portal>

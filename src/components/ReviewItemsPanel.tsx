@@ -202,7 +202,7 @@ export default function ReviewItemsPanel({
             知识正文负责完整记录，复习题负责主动回忆。一条知识可以拆成多道短题；正文修改后，相关题目会标记为过时。
           </p>
         </div>
-        <button type="button" onClick={startCreate} className="ui-button-secondary h-8 shrink-0 px-2.5 text-xs">
+        <button type="button" onClick={startCreate} className="ui-button-secondary h-11 min-h-11 shrink-0 px-2.5 text-xs md:h-9 md:min-h-9">
           <Plus size={13} /> 添加复习题
         </button>
       </div>
@@ -245,19 +245,19 @@ export default function ReviewItemsPanel({
                   )}
                 </div>
                 <div className="flex shrink-0 items-center gap-1">
-                  <button type="button" onClick={() => startEdit(item)} className="ui-icon-button h-8 w-8" title="编辑复习题" aria-label="编辑复习题">
+                  <button type="button" onClick={() => startEdit(item)} className="ui-icon-button h-11 w-11 md:h-9 md:w-9" title="编辑复习题" aria-label="编辑复习题">
                     <Edit3 size={13} />
                   </button>
                   <button
                     type="button"
                     onClick={() => void toggleStatus(item)}
-                    className="ui-icon-button h-8 w-8"
+                    className="ui-icon-button h-11 w-11 md:h-9 md:w-9"
                     title={item.status === "active" ? "暂停复习题" : "恢复复习题"}
                     aria-label={item.status === "active" ? "暂停复习题" : "恢复复习题"}
                   >
                     {item.status === "active" ? <PauseCircle size={14} /> : <PlayCircle size={14} />}
                   </button>
-                  <button type="button" onClick={() => void archive(item)} className="ui-icon-button h-8 w-8 text-[var(--ui-danger-text)]" title="归档复习题" aria-label="归档复习题">
+                  <button type="button" onClick={() => void archive(item)} className="ui-icon-button h-11 w-11 text-[var(--ui-danger-text)] md:h-9 md:w-9" title="归档复习题" aria-label="归档复习题">
                     <Trash2 size={13} />
                   </button>
                 </div>
@@ -274,7 +274,7 @@ export default function ReviewItemsPanel({
               <div className="text-xs font-bold text-[var(--ui-text)]">{editingId ? "编辑复习题" : "添加复习题"}</div>
               <p className="mt-1 text-[11px] text-[var(--ui-text-subtle)]">问题和答案分别是主动回忆的两面，不要把整篇正文复制进答案。</p>
             </div>
-            <button type="button" onClick={cancelEdit} className="ui-icon-button h-8 w-8" title="取消" aria-label="取消编辑复习题">
+            <button type="button" onClick={cancelEdit} className="ui-icon-button h-11 w-11 md:h-9 md:w-9" title="取消" aria-label="取消编辑复习题">
               <X size={14} />
             </button>
           </div>
@@ -283,7 +283,7 @@ export default function ReviewItemsPanel({
               <label className="grid gap-1 text-[11px] font-medium text-[var(--ui-text-subtle)]">
                 类型
                 <Select value={form.item_type} onValueChange={(value) => setForm((current) => ({ ...current, item_type: value as ReviewItemType }))}>
-                  <SelectTrigger className="h-9 text-xs" aria-label="复习题类型"><SelectValue /></SelectTrigger>
+                  <SelectTrigger className="h-11 min-h-11 text-xs md:h-9 md:min-h-9" aria-label="复习题类型"><SelectValue /></SelectTrigger>
                   <SelectContent>
                     {Object.entries(itemTypeLabels).map(([value, label]) => <SelectItem key={value} value={value}>{label}</SelectItem>)}
                   </SelectContent>
@@ -292,7 +292,7 @@ export default function ReviewItemsPanel({
               <label className="grid gap-1 text-[11px] font-medium text-[var(--ui-text-subtle)]">
                 状态
                 <Select value={form.status} onValueChange={(value) => setForm((current) => ({ ...current, status: value as ReviewItemStatus }))}>
-                  <SelectTrigger className="h-9 text-xs" aria-label="复习题状态"><SelectValue /></SelectTrigger>
+                  <SelectTrigger className="h-11 min-h-11 text-xs md:h-9 md:min-h-9" aria-label="复习题状态"><SelectValue /></SelectTrigger>
                   <SelectContent>
                     {Object.entries(itemStatusLabels).map(([value, label]) => <SelectItem key={value} value={value}>{label}</SelectItem>)}
                   </SelectContent>
@@ -302,12 +302,12 @@ export default function ReviewItemsPanel({
             </div>
             <textarea value={form.prompt} onChange={(event) => setForm((current) => ({ ...current, prompt: event.target.value }))} placeholder="问题：例如“C++ 中 vector 扩容时迭代器何时失效？”" className="ui-textarea min-h-[76px] text-sm leading-5" />
             <textarea value={form.answer} onChange={(event) => setForm((current) => ({ ...current, answer: event.target.value }))} placeholder="答案：只写回答这个问题所需的最小充分内容，可使用 Markdown。" className="ui-textarea min-h-[120px] text-sm leading-5" />
-            <input value={form.hint} onChange={(event) => setForm((current) => ({ ...current, hint: event.target.value }))} placeholder="提示（可选）" className="ui-field h-9 text-xs" />
+            <input value={form.hint} onChange={(event) => setForm((current) => ({ ...current, hint: event.target.value }))} placeholder="提示（可选）" className="ui-field h-11 min-h-11 text-xs md:h-9 md:min-h-9" />
           </div>
           {error && <div className="ui-alert-bad mt-3 px-3 py-2 text-xs">{error}</div>}
           <div className="mt-3 flex justify-end gap-2">
-            <button type="button" onClick={cancelEdit} disabled={saving} className="ui-button-secondary h-8 px-2.5 text-xs">取消</button>
-            <button type="button" onClick={() => void save()} disabled={saving} className="ui-button-primary h-8 px-2.5 text-xs">
+            <button type="button" onClick={cancelEdit} disabled={saving} className="ui-button-secondary h-11 min-h-11 px-2.5 text-xs md:h-9 md:min-h-9">取消</button>
+            <button type="button" onClick={() => void save()} disabled={saving} className="ui-button-primary h-11 min-h-11 px-2.5 text-xs md:h-9 md:min-h-9">
               {saving ? <LoaderCircle size={13} className="animate-spin" /> : <Check size={13} />}
               {saving ? "保存中…" : "保存复习题"}
             </button>

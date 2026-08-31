@@ -193,6 +193,8 @@ export default function TodayPage({
   targetNonce,
   onDateChange,
   onNavigate,
+  returnTo,
+  onReturn,
   zen,
   onToggleZen,
   dark,
@@ -202,6 +204,8 @@ export default function TodayPage({
   targetNonce?: number;
   onDateChange?: (date: string) => void;
   onNavigate?: (page: "knowledge") => void;
+  returnTo?: string;
+  onReturn?: () => void;
   zen?: boolean;
   onToggleZen?: () => void;
   dark?: boolean;
@@ -442,6 +446,29 @@ export default function TodayPage({
     setSelectedDate(nextDate);
     onDateChange?.(nextDate);
   }, [confirm, content, date, dirty, doSave, mood, onDateChange, spaces, tags, title]);
+
+  const requestReturn = useCallback(async () => {
+    if (!onReturn) return;
+    if (dirty || saveTimer.current) {
+      const shouldSave = await confirm({
+        title: "离开当天记录",
+        message: "当前记录有未保存内容。返回复盘库前先保存吗？",
+        confirmText: "先保存",
+      });
+      if (shouldSave) {
+        const saved = await doSave(title, content, mood, tags, spaces);
+        if (!saved) return;
+      } else if (!(await confirm({
+        title: "放弃未保存内容",
+        message: "确定放弃未保存内容并返回复盘库？",
+        confirmText: "放弃并返回",
+        danger: true,
+      }))) {
+        return;
+      }
+    }
+    onReturn();
+  }, [confirm, content, dirty, doSave, mood, onReturn, spaces, tags, title]);
 
   useEffect(() => {
     if (targetDate && targetNonce !== externalNonceRef.current) {
@@ -804,6 +831,16 @@ export default function TodayPage({
           </div>
 
           <div className="ui-soft-divider mt-2 grid grid-cols-2 gap-2 border-t pt-2 md:flex md:flex-wrap md:items-center xl:border-t-0 xl:pt-0">
+            {returnTo && onReturn && (
+              <button
+                type="button"
+                onClick={() => void requestReturn()}
+                className="ui-button-secondary col-span-2 w-full md:col-span-1 md:w-auto"
+                title="返回刚才的复盘库位置"
+              >
+                <ChevronLeft size={14} /> 返回复盘库
+              </button>
+            )}
             <motion.button
               whileTap={{ scale: 0.95 }}
               onClick={handleManualSave}
@@ -1213,7 +1250,7 @@ export default function TodayPage({
           </div>
           <div className="ui-editor-surface h-[56dvh] min-h-0 overflow-y-auto p-4 md:h-auto md:flex-1 md:p-5">
             <div className="mx-auto max-w-[760px]">
-              <MarkdownPreview content={content} onWikiLink={onWikiLink} />
+              <MarkdownPreview content={content} onWikiLink={onWikiLink} onRepairContent={handleContentChange} />
             </div>
           </div>
           <div className="h-24 md:hidden" />
@@ -1224,6 +1261,6 @@ export default function TodayPage({
   );
 }
 
-function MarkdownPreview({ content, onWikiLink }: { content: string; onWikiLink?: (title: string) => void }) {
-  return <MarkdownContent content={content} onWikiLink={onWikiLink} />;
+function MarkdownPreview({ content, onWikiLink, onRepairContent }: { content: string; onWikiLink?: (title: string) => void; onRepairContent?: (fixedContent: string) => void }) {
+  return <MarkdownContent content={content} onWikiLink={onWikiLink} onRepairContent={onRepairContent} />;
 }

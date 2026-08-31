@@ -1,8 +1,9 @@
-import { useRef, useState } from "react";
+import { useRef, useState, type RefObject } from "react";
 import * as Dialog from "@radix-ui/react-dialog";
 import { CalendarDays, Check, Copy, Edit3, Folder, Trash2, X } from "lucide-react";
 import type { Article } from "../lib/api";
 import MarkdownContent from "./MarkdownContent";
+import SourceExcerptMatch from "./SourceExcerptMatch";
 
 export default function ArticleDetail({
   article,
@@ -11,6 +12,7 @@ export default function ArticleDetail({
   onEdit,
   onDelete,
   highlight = "",
+  returnFocusRef,
 }: {
   article: Article;
   mode?: "modal" | "panel";
@@ -18,10 +20,12 @@ export default function ArticleDetail({
   onEdit: (date: string) => void;
   onDelete?: (article: Article) => void;
   highlight?: string;
+  returnFocusRef?: RefObject<HTMLElement | null>;
 }) {
   const [copied, setCopied] = useState(false);
   const tags = article.tags;
   const spaces = article.spaces || [];
+  const sourceHeadingRef = useRef<HTMLHeadingElement>(null);
 
   const copyContent = async () => {
     try {
@@ -57,7 +61,11 @@ export default function ArticleDetail({
           </div>
           {mode === "modal" ? (
             <Dialog.Title asChild>
-              <h2 className="mt-2 break-words text-xl font-bold leading-7 text-[var(--ui-text)]">
+              <h2
+                ref={sourceHeadingRef}
+                tabIndex={-1}
+                className="mt-2 break-words text-xl font-bold leading-7 text-[var(--ui-text)]"
+              >
                 {article.title || "(无标题)"}
               </h2>
             </Dialog.Title>
@@ -91,19 +99,19 @@ export default function ArticleDetail({
           )}
         </div>
         <div className="flex shrink-0 items-center gap-1.5">
-          <button type="button" onClick={copyContent} className="ui-button-secondary inline-flex h-9 w-9 justify-center px-0 sm:h-auto sm:w-auto sm:px-3" aria-label={copied ? "已复制记录内容" : "复制记录内容"}>
+            <button type="button" onClick={copyContent} className="ui-button-secondary inline-flex h-11 min-h-11 w-11 justify-center px-0 md:h-auto md:min-h-0 md:w-auto md:px-3" aria-label={copied ? "已复制记录内容" : "复制记录内容"}>
             {copied ? <Check size={14} /> : <Copy size={14} />}
             <span className="hidden sm:inline">{copied ? "已复制" : "复制"}</span>
           </button>
-          <button type="button" onClick={() => onEdit(article.date)} className="ui-button-primary inline-flex h-9 w-9 justify-center px-0 sm:h-auto sm:w-auto sm:px-3" aria-label="编辑记录">
+            <button type="button" onClick={() => onEdit(article.date)} className={`${highlight.trim() ? "ui-button-secondary" : "ui-button-primary"} inline-flex h-11 min-h-11 w-11 justify-center px-0 md:h-auto md:min-h-0 md:w-auto md:px-3`} aria-label="编辑记录">
             <Edit3 size={14} /> <span className="hidden sm:inline">编辑</span>
           </button>
           {onDelete && (
-            <button type="button" onClick={() => onDelete(article)} className="ui-button-danger inline-flex h-9 w-9 justify-center px-0 sm:h-auto sm:w-auto sm:px-3" aria-label="删除记录">
+            <button type="button" onClick={() => onDelete(article)} className="ui-button-danger inline-flex h-11 min-h-11 w-11 justify-center px-0 md:h-auto md:min-h-0 md:w-auto md:px-3" aria-label="删除记录">
               <Trash2 size={14} /> <span className="hidden sm:inline">删除</span>
             </button>
           )}
-          <button type="button" onClick={onClose} className="ui-icon-button h-9 w-9" title="关闭" aria-label="关闭详情">
+          <button type="button" onClick={onClose} className="ui-icon-button h-11 w-11 md:h-9 md:w-9" title="关闭" aria-label="关闭详情">
             <X size={16} />
           </button>
           </div>
@@ -111,12 +119,7 @@ export default function ArticleDetail({
       </div>
       <div className="flex-1 overflow-y-auto px-4 py-5 md:px-6">
         <div className="ui-reader">
-          {highlight.trim() && (
-            <figure className="ui-status-accent mb-5 rounded-xl p-3" aria-label="当前卡片引用的来源片段">
-              <figcaption className="mb-1 text-xs font-semibold">当前卡片引用的片段</figcaption>
-              <blockquote className="whitespace-pre-wrap break-words text-sm leading-6">{highlight}</blockquote>
-            </figure>
-          )}
+          <SourceExcerptMatch source={article.content} excerpt={highlight} />
           <MarkdownContent content={article.content} />
         </div>
       </div>
@@ -127,8 +130,8 @@ export default function ArticleDetail({
             <span className="truncate">更新于 {article.updated_at}</span>
           </div>
           {highlight.trim() && (
-            <button type="button" onClick={onClose} className="ui-button-primary shrink-0 self-end text-xs sm:self-auto">
-              返回卡片
+            <button type="button" onClick={onClose} className="ui-button-primary min-h-11 shrink-0 self-end text-xs md:min-h-0 md:self-auto">
+              返回知识条目
             </button>
           )}
         </div>
@@ -151,7 +154,20 @@ export default function ArticleDetail({
     <Dialog.Root open onOpenChange={(open) => { if (!open) onClose(); }}>
       <Dialog.Portal>
         <Dialog.Overlay className="ui-overlay fixed inset-0 z-50 data-[state=open]:animate-fade-in" />
-        <Dialog.Content asChild>
+        <Dialog.Content
+          asChild
+          onOpenAutoFocus={(event) => {
+            if (!returnFocusRef && !highlight.trim()) return;
+            if (!sourceHeadingRef.current) return;
+            event.preventDefault();
+            sourceHeadingRef.current.focus();
+          }}
+          onCloseAutoFocus={(event) => {
+            if (!returnFocusRef?.current) return;
+            event.preventDefault();
+            returnFocusRef.current.focus();
+          }}
+        >
           <div
             onClick={(event) => { if (event.target === event.currentTarget) onClose(); }}
             onTouchStart={onTouchStart}

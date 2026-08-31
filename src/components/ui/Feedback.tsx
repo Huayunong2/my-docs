@@ -5,7 +5,7 @@ import type { LucideIcon } from "lucide-react";
 
 type Tone = "neutral" | "good" | "warn" | "bad";
 
-export function InlineError({ message, onRetry }: { message: string; onRetry?: () => void }) {
+export function InlineError({ message, onRetry, retrying = false }: { message: string; onRetry?: () => void; retrying?: boolean }) {
   if (!message) return null;
   return (
     <div role="alert" aria-live="assertive" className="ui-alert-bad flex items-start gap-2">
@@ -13,8 +13,8 @@ export function InlineError({ message, onRetry }: { message: string; onRetry?: (
       <div className="flex min-w-0 flex-1 items-center justify-between gap-3">
         <span className="min-w-0">{message}</span>
         {onRetry && (
-          <button type="button" onClick={onRetry} className="inline-flex shrink-0 items-center gap-1 font-semibold underline underline-offset-2 hover:opacity-80">
-            <RotateCw size={13} /> 重试
+          <button type="button" onClick={onRetry} disabled={retrying} aria-busy={retrying} className="inline-flex shrink-0 items-center gap-1 font-semibold underline underline-offset-2 hover:opacity-80 disabled:cursor-wait disabled:opacity-70">
+            <RotateCw size={13} className={retrying ? "animate-spin" : ""} /> {retrying ? "重试中…" : "重试"}
           </button>
         )}
       </div>

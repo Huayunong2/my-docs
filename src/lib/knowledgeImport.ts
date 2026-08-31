@@ -75,18 +75,18 @@ function markdownBlocks(raw: string) {
   return blocks;
 }
 
-/** 解析适合手动编写的卡片 Markdown：每个 Markdown 标题代表一张卡片。 */
+/** 解析适合手动编写的知识条目 Markdown：每个 Markdown 标题代表一个知识条目。 */
 export function parseKnowledgeCardMarkdownImport(raw: string): KnowledgeCardImportParseResult {
-  if (!raw.trim()) return { rows: [], error: "请先粘贴卡片 Markdown。" };
+  if (!raw.trim()) return { rows: [], error: "请先粘贴知识条目 Markdown。" };
   const blocks = markdownBlocks(raw);
   if (!blocks.some((block) => block.some((line) => /^\s*#{1,6}\s+\S/.test(line)))) {
-    return { rows: [], error: "没有发现 Markdown 标题。请用“## 卡片标题”分隔每张卡片。" };
+    return { rows: [], error: "没有发现 Markdown 标题。请用“## 知识条目标题”分隔每个条目。" };
   }
-  if (blocks.length > 100) return { rows: [], error: "单次最多导入 100 张卡片，请分批处理。" };
+  if (blocks.length > 100) return { rows: [], error: "单次最多导入 100 个知识条目，请分批处理。" };
 
   const rows = blocks.map((block, index): KnowledgeCardImportRow => {
     const headingIndex = block.findIndex((line) => /^\s*#{1,6}\s+\S/.test(line));
-    if (headingIndex < 0) return { index, error: "每张卡片都需要一个 Markdown 标题。" };
+    if (headingIndex < 0) return { index, error: "每个知识条目都需要一个 Markdown 标题。" };
     const title = block[headingIndex].replace(/^\s*#{1,6}\s+/, "").trim();
     const body: string[] = [];
     let tags: string[] = [];
@@ -136,12 +136,12 @@ export function parseKnowledgeCardMarkdownImport(raw: string): KnowledgeCardImpo
   return { rows };
 }
 
-/** 直接粘贴纯文本时，明确按一张卡片处理，避免系统擅自拆分用户内容。 */
+/** 直接粘贴纯文本时，明确按一个知识条目处理，避免系统擅自拆分用户内容。 */
 export function parseKnowledgeCardTextImport(raw: string, title: string): KnowledgeCardImportParseResult {
   const content = raw.trim();
   const normalizedTitle = title.trim();
-  if (!content) return { rows: [], error: "请先粘贴卡片正文。" };
-  if (!normalizedTitle) return { rows: [], error: "请填写这张卡片的标题。" };
+  if (!content) return { rows: [], error: "请先粘贴知识条目正文。" };
+  if (!normalizedTitle) return { rows: [], error: "请填写这个知识条目的标题。" };
   if (charCount(normalizedTitle) > 160) return { rows: [], error: "标题不能超过 160 个字符。" };
   if (charCount(content) > 20000) return { rows: [], error: "正文不能超过 20000 个字符。" };
   return {
@@ -240,9 +240,9 @@ export function parseKnowledgeCardImport(raw: string): KnowledgeCardImportParseR
       ? parsed.cards
       : null;
   if (!items) {
-    return { rows: [], error: "顶层格式应是卡片数组，或包含 cards 数组的对象。" };
+    return { rows: [], error: "顶层格式应是知识条目数组，或包含 cards 数组的对象。" };
   }
-  if (items.length === 0) return { rows: [], error: "没有找到可导入的卡片。" };
-  if (items.length > 100) return { rows: [], error: "单次最多导入 100 张卡片，请分批处理。" };
+  if (items.length === 0) return { rows: [], error: "没有找到可导入的知识条目。" };
+  if (items.length > 100) return { rows: [], error: "单次最多导入 100 个知识条目，请分批处理。" };
   return { rows: items.map(normalizeRow) };
 }

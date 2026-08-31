@@ -108,9 +108,10 @@ fn valid_review_item_status(value: &str) -> bool {
 }
 
 fn has_card_source(article_id: &str, review_id: &str, date: &str, excerpt: &str) -> bool {
-    [article_id, review_id, date, excerpt]
+    let has_locator = [article_id, review_id, date]
         .iter()
-        .any(|value| !value.trim().is_empty())
+        .any(|value| !value.trim().is_empty());
+    has_locator && !excerpt.trim().is_empty()
 }
 
 fn validate_card_text(title: &str, content: &str) -> Result<(), (StatusCode, String)> {
@@ -160,6 +161,89 @@ fn evidence_matches_source(source: &str, excerpt: &str) -> bool {
     let source = compact(source);
     let excerpt = compact(excerpt);
     !excerpt.is_empty() && source.contains(&excerpt)
+}
+
+fn collect_review_text(value: &Value, output: &mut Vec<String>) {
+    match value {
+        Value::String(text) if !text.trim().is_empty() => output.push(text.clone()),
+        Value::Array(items) => items
+            .iter()
+            .for_each(|item| collect_review_text(item, output)),
+        Value::Object(fields) => fields
+            .values()
+            .for_each(|item| collect_review_text(item, output)),
+        _ => {}
+    }
+}
+
+/// 复盘在客户端会从 JSON/旧格式转换为 Markdown；服务端校验既接受原始内容中的
+/// 连续片段，也接受所有文本叶子按原顺序拼接后的内容，覆盖两种可见来源形态。
+fn evidence_matches_review(review: &Review, excerpt: &str) -> bool {
+    if evidence_matches_source(&review.content, excerpt) {
+        return true;
+    }
+    let Ok(value) = serde_json::from_str::<Value>(&review.content) else {
+        return false;
+    };
+    let mut text = Vec::new();
+    collect_review_text(&value, &mut text);
+    evidence_matches_source(&text.join("\n"), excerpt)
+}
+
+fn source_matches_card(
+    db: &mut Database,
+    article_id: &str,
+    review_id: &str,
+    date: &str,
+    excerpt: &str,
+) -> Result<Option<bool>, rusqlite::Error> {
+    if !article_id.trim().is_empty() {
+        return db
+            .articles()
+            .find_by_id(article_id)
+            .map(|article| article.map(|value| evidence_matches_source(&value.content, excerpt)));
+    }
+    if !review_id.trim().is_empty() {
+        return db
+            .reviews()
+            .find(review_id)
+            .map(|review| review.map(|value| evidence_matches_review(&value, excerpt)));
+    }
+    if !date.trim().is_empty() {
+        return db
+            .articles()
+            .find_by_date(date)
+            .map(|article| article.map(|value| evidence_matches_source(&value.content, excerpt)));
+    }
+    Ok(None)
+}
+
+fn validate_card_source(
+    db: &mut Database,
+    article_id: &str,
+    review_id: &str,
+    date: &str,
+    excerpt: &str,
+) -> Result<(), (StatusCode, String)> {
+    if !has_card_source(article_id, review_id, date, excerpt) {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "确认卡片前请补充来源定位和连续原文片段".into(),
+        ));
+    }
+    let matched = source_matches_card(db, article_id, review_id, date, excerpt)
+        .map_err(|error| (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()))?;
+    match matched {
+        Some(true) => Ok(()),
+        Some(false) => Err((
+            StatusCode::BAD_REQUEST,
+            "来源片段与当前来源不匹配，请从原文重新复制".into(),
+        )),
+        None => Err((
+            StatusCode::BAD_REQUEST,
+            "找不到来源记录，无法确认卡片".into(),
+        )),
+    }
 }
 
 fn parse_ai_cards(raw: &str) -> Result<Vec<Value>, (StatusCode, String)> {
@@ -616,10 +700,10 @@ pub(crate) async fn list_cards(
         if !quality_filter.is_empty() {
             let matches = match quality_filter.as_str() {
                 "missing_source" => {
-                    card.source_date.trim().is_empty()
-                        && card.source_article_id.trim().is_empty()
-                        && card.source_review_id.trim().is_empty()
-                        && card.source_excerpt.trim().is_empty()
+                    card.source_excerpt.trim().is_empty()
+                        || (card.source_date.trim().is_empty()
+                            && card.source_article_id.trim().is_empty()
+                            && card.source_review_id.trim().is_empty())
                 }
                 "missing_project" => card.projects.is_empty(),
                 "missing_tags" => card.tags.is_empty(),
@@ -1657,23 +1741,18 @@ pub(crate) async fn create_card(
         .unwrap_or_default()
         .trim()
         .to_string();
-    if status == "confirmed"
-        && !has_card_source(
+    let mut db = db
+        .lock()
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    if status == "confirmed" {
+        validate_card_source(
+            &mut db,
             &source_article_id,
             &source_review_id,
             &source_date,
             &source_excerpt,
-        )
-    {
-        return Err((
-            StatusCode::BAD_REQUEST,
-            "确认卡片前请补充来源日期、来源 ID 或原文片段".into(),
-        ));
+        )?;
     }
-
-    let mut db = db
-        .lock()
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     db.knowledge()
         .save(KnowledgeCardDraft {
             card_type: card_type.into(),
@@ -1710,7 +1789,8 @@ pub(crate) async fn update_card(
     if !valid_card_type(&card_type) {
         return Err((StatusCode::BAD_REQUEST, "Invalid card type".into()));
     }
-    let status = payload.status.unwrap_or(existing.status);
+    let existing_status = existing.status.clone();
+    let status = payload.status.unwrap_or(existing_status.clone());
     if !valid_card_status(&status) {
         return Err((StatusCode::BAD_REQUEST, "Invalid card status".into()));
     }
@@ -1724,36 +1804,36 @@ pub(crate) async fn update_card(
     let tags = payload.tags.unwrap_or(existing.tags);
     let source_article_id = payload
         .source_article_id
-        .unwrap_or(existing.source_article_id)
+        .unwrap_or_else(|| existing.source_article_id.clone())
         .trim()
         .to_string();
     let source_review_id = payload
         .source_review_id
-        .unwrap_or(existing.source_review_id)
+        .unwrap_or_else(|| existing.source_review_id.clone())
         .trim()
         .to_string();
     let source_date = payload
         .source_date
-        .unwrap_or(existing.source_date)
+        .unwrap_or_else(|| existing.source_date.clone())
         .trim()
         .to_string();
     let source_excerpt = payload
         .source_excerpt
-        .unwrap_or(existing.source_excerpt)
+        .unwrap_or_else(|| existing.source_excerpt.clone())
         .trim()
         .to_string();
-    if status == "confirmed"
-        && !has_card_source(
+    let source_changed = source_article_id != existing.source_article_id
+        || source_review_id != existing.source_review_id
+        || source_date != existing.source_date
+        || source_excerpt != existing.source_excerpt;
+    if status == "confirmed" && (existing_status != "confirmed" || source_changed) {
+        validate_card_source(
+            &mut db,
             &source_article_id,
             &source_review_id,
             &source_date,
             &source_excerpt,
-        )
-    {
-        return Err((
-            StatusCode::BAD_REQUEST,
-            "确认卡片前请补充来源日期、来源 ID 或原文片段".into(),
-        ));
+        )?;
     }
     // `related_ids` in the response also contains synthesized incoming edges;
     // only reuse the persisted declaration when an older client omits the field.
@@ -1856,13 +1936,35 @@ pub(crate) async fn batch_cards(
     let mut db = db
         .lock()
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    if confirms_cards {
+        for id in &payload.ids {
+            let card = db
+                .knowledge()
+                .find(id)
+                .map_err(|error| (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()))?;
+            let Some(card) = card else {
+                continue;
+            };
+            // 已有的历史 confirmed 卡片可能没有可恢复的来源；只有真正发生
+            // “进入已沉淀”转换时，才要求当前来源可读取且片段精确匹配。
+            if card.status != "confirmed" {
+                validate_card_source(
+                    &mut db,
+                    &card.source_article_id,
+                    &card.source_review_id,
+                    &card.source_date,
+                    &card.source_excerpt,
+                )?;
+            }
+        }
+    }
     let updated = db
         .knowledge()
         .batch_update(&payload.ids, action, &payload.values)
         .map_err(|e| match e {
             rusqlite::Error::InvalidQuery if confirms_cards => (
                 StatusCode::BAD_REQUEST,
-                "确认卡片前请补充来源日期、来源 ID 或原文片段".into(),
+                "确认卡片前请补充来源定位和连续原文片段".into(),
             ),
             rusqlite::Error::InvalidQuery => {
                 (StatusCode::BAD_REQUEST, "批量操作参数或卡片数据无效".into())
@@ -1874,7 +1976,12 @@ pub(crate) async fn batch_cards(
 
 #[cfg(test)]
 mod similarity_tests {
-    use super::{cards_similar, drafts_from_ai_items, split_source_into_chunks, text_similarity};
+    use super::{
+        cards_similar, drafts_from_ai_items, split_source_into_chunks, text_similarity,
+        validate_card_source,
+    };
+    use crate::db::{ArticleDraft, Database};
+    use axum::http::StatusCode;
     use serde_json::json;
 
     #[test]
@@ -1969,5 +2076,32 @@ mod similarity_tests {
             drafts[0].source_excerpt,
             "所有写入成功后再提交，失败时整体回滚。"
         );
+    }
+
+    #[test]
+    fn api_source_validation_requires_a_real_matching_article() {
+        let mut db = Database::new_in_memory().expect("in-memory database");
+        let article = db
+            .articles()
+            .save(ArticleDraft {
+                date: "2026-08-31".into(),
+                title: "来源记录".into(),
+                content: "事务失败时整体回滚，避免留下半完成状态。".into(),
+                mood: String::new(),
+                tags: vec![],
+                spaces: vec![],
+            })
+            .expect("save article");
+
+        assert!(
+            validate_card_source(&mut db, &article.id, "", "", "整体回滚，避免留下半完成状态")
+                .is_ok()
+        );
+
+        let mismatch = validate_card_source(&mut db, &article.id, "", "", "不存在的证据");
+        assert_eq!(mismatch.unwrap_err().0, StatusCode::BAD_REQUEST);
+
+        let missing = validate_card_source(&mut db, "missing-article", "", "", "任意片段");
+        assert_eq!(missing.unwrap_err().0, StatusCode::BAD_REQUEST);
     }
 }

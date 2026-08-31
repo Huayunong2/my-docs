@@ -267,6 +267,7 @@ fn build_router(db: Database) -> Router {
             axum::routing::get(backups::download_backup),
         )
         .route("/reviews", axum::routing::get(ai::list_reviews))
+        .route("/reviews/query", axum::routing::get(ai::query_reviews))
         .route(
             "/reviews/generate",
             axum::routing::post(ai::generate_review),
