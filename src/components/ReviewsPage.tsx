@@ -513,14 +513,14 @@ export default function ReviewsPage({
     <motion.div
       initial={{ opacity: 0, y: 10 }}
       animate={{ opacity: 1, y: 0 }}
-      className="page-surface page-surface-reviews min-h-full px-3 pb-24 pt-4 sm:px-4 md:px-8 md:py-6"
+      className="page-surface page-surface-reviews min-w-0 min-h-full px-3 pb-24 pt-4 sm:px-4 md:px-8 md:py-6"
     >
       <PageHeader
         icon={BookOpenText}
         title="复盘库"
         description="按年月和周期管理 AI 周复盘、月复盘及历史版本"
         actions={onNavigate && (
-          <button type="button" onClick={() => onNavigate("stats")} className="ui-button-secondary">
+          <button type="button" onClick={() => onNavigate("stats")} className="ui-button-secondary min-h-11 sm:min-h-9">
             <Sparkles size={14} /> 去统计生成
           </button>
         )}
@@ -562,13 +562,13 @@ export default function ReviewsPage({
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             placeholder="搜索标题、正文或周期"
-            className={`ui-field h-11 pl-9 ${query ? "pr-20" : "pr-11"} md:h-10`}
+            className={`ui-field h-11 pl-9 ${query ? "pr-24 sm:pr-20" : "pr-12 sm:pr-11"} md:h-10`}
           />
           {query && (
             <button
               type="button"
               onClick={() => setQuery("")}
-              className="ui-icon-button absolute right-10 top-1/2 h-8 w-8 -translate-y-1/2"
+              className="ui-icon-button absolute right-12 top-1/2 h-11 w-11 -translate-y-1/2 sm:right-10 sm:h-8 sm:w-8"
               aria-label="清除复盘搜索"
               title="清除搜索"
             >
@@ -579,7 +579,7 @@ export default function ReviewsPage({
             type="button"
             onClick={() => void loadReviews({ showLoading: false })}
             disabled={loading || refreshing}
-            className="ui-icon-button absolute right-1 top-1/2 h-8 w-8 -translate-y-1/2 disabled:cursor-wait"
+            className="ui-icon-button absolute right-1 top-1/2 h-11 w-11 -translate-y-1/2 disabled:cursor-wait sm:h-8 sm:w-8"
             aria-label="刷新复盘列表"
             title={refreshing ? "正在刷新复盘列表" : "刷新复盘列表"}
             aria-busy={refreshing}
@@ -593,7 +593,7 @@ export default function ReviewsPage({
             <Tabs value={kindFilter} onValueChange={changeKind} aria-label="复盘类型" className="block">
               <TabsList className="w-full">
               {(["all","weekly","monthly"] as const).map((k) => (
-                <TabsTrigger key={k} value={k} className="h-8 min-w-0 flex-1 px-2.5">
+                <TabsTrigger key={k} value={k} className="h-auto min-h-11 min-w-0 flex-1 px-2.5 sm:h-8 sm:min-h-8">
                   {{all:"全部",weekly:"周复盘",monthly:"月复盘"}[k]}
                 </TabsTrigger>
               ))}
@@ -605,7 +605,7 @@ export default function ReviewsPage({
             <Tabs value={statusFilter} onValueChange={changeStatus} aria-label="复盘状态" className="block">
               <TabsList className="w-full">
               {(["all","draft","confirmed"] as const).map((s) => (
-                <TabsTrigger key={s} value={s} className="h-8 min-w-0 flex-1 px-2.5">
+                <TabsTrigger key={s} value={s} className="h-auto min-h-11 min-w-0 flex-1 px-2.5 sm:h-8 sm:min-h-8">
                   {{all:"全部",draft:"草稿",confirmed:"已确认"}[s]}
                 </TabsTrigger>
               ))}
@@ -630,7 +630,7 @@ export default function ReviewsPage({
         </div>
       )}
 
-      <div className="reviews-content-stage min-h-[320px]">
+      <div className="reviews-content-stage min-w-0 min-h-[320px]">
         {loading ? (
           <LoadingState label="加载复盘..." rows={3} />
         ) : monthGroups.length === 0 ? (
@@ -832,7 +832,7 @@ function PeriodCard({
     : latest.source_review_ids.length;
   const versionsId = `review-versions-${period.key.replace(/[^a-zA-Z0-9_-]/g, "-")}`;
   return (
-    <article className="ui-panel-muted reviews-period-card relative p-3 pl-7 transition-colors hover:border-[var(--ui-selected-border)] sm:p-4 sm:pl-8">
+    <article className="ui-panel-muted reviews-period-card relative min-w-0 p-3 pl-7 transition-colors hover:border-[var(--ui-selected-border)] sm:p-4 sm:pl-8">
       <div className="absolute bottom-3 left-3 top-3 w-px bg-[var(--ui-border)]" />
       <div
         className={[
@@ -886,8 +886,8 @@ function PeriodCard({
               <p><strong>最新生成 v{latest.version} 仍是草稿。</strong> 已确认基线是 v{confirmedVersion.version}，确认最新版本后才会更新。</p>
             </div>
           )}
-          <h4 className="break-words text-sm font-semibold text-[var(--ui-text)]">{latest.title || "（无标题）"}</h4>
-          <p className="mt-1 line-clamp-2 text-xs leading-5 text-[var(--ui-text-muted)]">
+          <h4 className="mt-3 break-words text-sm font-semibold text-[var(--ui-text)]">{latest.title || "（无标题）"}</h4>
+          <p className="mt-1 line-clamp-2 break-words text-xs leading-5 text-[var(--ui-text-muted)]">
             {previewContent}
           </p>
           <div className="mt-2 text-[11px] text-[var(--ui-text-subtle)]">
@@ -900,7 +900,7 @@ function PeriodCard({
             onClick={(event) => onOpen(latest, event)}
             disabled={!!actionInFlight}
             aria-busy={actionInFlight?.id === latest.id}
-            className="ui-button-primary w-full disabled:cursor-wait"
+            className="ui-button-primary min-h-11 w-full disabled:cursor-wait sm:min-h-9"
           >
             查看最新生成
           </button>
@@ -908,7 +908,7 @@ function PeriodCard({
             type="button"
             onClick={onToggle}
             disabled={!!actionInFlight}
-            className="ui-button-secondary w-full disabled:cursor-wait"
+            className="ui-button-secondary min-h-11 w-full disabled:cursor-wait sm:min-h-9"
             aria-expanded={expanded}
             aria-controls={versionsId}
           >
@@ -920,7 +920,7 @@ function PeriodCard({
               type="button"
               onClick={onCompare}
               disabled={!!actionInFlight}
-              className="ui-button-ghost w-full disabled:cursor-wait"
+              className="ui-button-ghost min-h-11 w-full disabled:cursor-wait sm:min-h-9"
             >
               <GitCompareArrows size={14} />
               版本对比
@@ -957,7 +957,7 @@ function PeriodCard({
                       type="button"
                       onClick={(event) => onOpen(review, event)}
                       disabled={!!actionInFlight}
-                      className="ui-button-secondary h-8 min-h-10 w-full disabled:cursor-wait sm:min-h-8 sm:w-auto"
+                      className="ui-button-secondary h-8 min-h-11 w-full disabled:cursor-wait sm:min-h-8 sm:w-auto"
                     >
                       查看/编辑
                     </button>
@@ -967,7 +967,7 @@ function PeriodCard({
                         onClick={() => void onConfirm(review)}
                         disabled={!!actionInFlight}
                         aria-busy={itemAction === "confirm"}
-                        className="ui-button-success h-8 min-h-10 w-full px-3 text-xs disabled:cursor-wait sm:min-h-8 sm:w-auto"
+                        className="ui-button-success h-8 min-h-11 w-full px-3 text-xs disabled:cursor-wait sm:min-h-8 sm:w-auto"
                       >
                         {itemAction === "confirm" ? <LoaderCircle size={13} className="animate-spin" /> : <CheckCircle2 size={13} />}
                         {itemAction === "confirm" ? "确认中…" : "确认版本"}
@@ -978,7 +978,7 @@ function PeriodCard({
                       onClick={() => void onDelete(review)}
                       disabled={!!actionInFlight}
                       aria-busy={itemAction === "delete"}
-                      className="ui-button-danger h-8 min-h-10 w-full disabled:cursor-wait sm:min-h-8 sm:w-auto"
+                      className="ui-button-danger h-8 min-h-11 w-full disabled:cursor-wait sm:min-h-8 sm:w-auto"
                     >
                       {itemAction === "delete" ? <LoaderCircle size={13} className="animate-spin" /> : <Trash2 size={13} />}
                       {itemAction === "delete" ? "删除中…" : "删除"}
@@ -1039,24 +1039,24 @@ function ReviewCompareModal({
       <Dialog.Portal>
         <Dialog.Overlay className="ui-overlay fixed inset-0 z-50 data-[state=open]:animate-fade-in" />
         <Dialog.Content
-          className="ui-modal-surface fixed inset-x-3 bottom-3 z-50 flex max-h-[min(92dvh,860px)] max-w-6xl flex-col overflow-hidden outline-hidden sm:left-1/2 sm:right-auto sm:top-1/2 sm:bottom-auto sm:w-[calc(100%-1.5rem)] sm:-translate-x-1/2 sm:-translate-y-1/2"
+          className="ui-modal-surface fixed inset-x-3 bottom-3 z-50 flex min-w-0 max-h-[min(92dvh,860px)] max-w-6xl flex-col overflow-hidden outline-hidden sm:left-1/2 sm:right-auto sm:top-1/2 sm:bottom-auto sm:w-[calc(100%-1.5rem)] sm:-translate-x-1/2 sm:-translate-y-1/2"
           onCloseAutoFocus={(event) => {
             event.preventDefault();
             onRestoreFocus();
           }}
         >
           <div className="ui-soft-divider flex items-start justify-between gap-3 border-b px-4 py-3 sm:px-5">
-            <div>
+            <div className="min-w-0 flex-1">
               <div className="flex items-center gap-2">
                 <GitCompareArrows size={17} className="text-[var(--ui-accent-text)]" />
                 <Dialog.Title className="text-base font-bold text-[var(--ui-text)]">版本对比</Dialog.Title>
               </div>
-              <Dialog.Description className="mt-1 text-xs text-[var(--ui-text-subtle)]">
+              <Dialog.Description className="mt-1 break-words text-xs leading-5 text-[var(--ui-text-subtle)]">
                 {currentReview.period_start} 至 {currentReview.period_end} · v{currentReview.version} 对比 v{previousReview.version}
               </Dialog.Description>
             </div>
             <Dialog.Close asChild>
-              <button type="button" className="ui-icon-button h-9 w-9" aria-label="关闭版本对比">
+              <button type="button" className="ui-icon-button h-11 w-11 sm:h-9 sm:w-9" aria-label="关闭版本对比">
                 <X size={16} />
               </button>
             </Dialog.Close>
@@ -1100,7 +1100,7 @@ function ReviewCompareModal({
               </p>
             </div>
           )}
-          <div className="grid min-h-0 flex-1 overflow-y-auto md:grid-cols-2">
+          <div className="grid min-h-0 min-w-0 flex-1 overflow-x-hidden overflow-y-auto md:grid-cols-2">
             <ComparePane label="主版本" review={currentReview} accent />
             <ComparePane label="对比版本" review={previousReview} />
           </div>
@@ -1112,7 +1112,7 @@ function ReviewCompareModal({
 
 function ComparePane({ label, review, accent = false }: { label: string; review: Review; accent?: boolean }) {
   return (
-    <section className={["ui-soft-divider min-h-[280px] border-t p-4 sm:min-h-[360px] md:border-l md:border-t-0", accent ? "border-t-0 md:border-l-0" : ""].join(" ")}>
+    <section className={["ui-soft-divider min-w-0 min-h-[280px] border-t p-4 sm:min-h-[360px] md:border-l md:border-t-0", accent ? "border-t-0 md:border-l-0" : ""].join(" ")}>
       <div className="mb-3 flex flex-wrap items-center gap-2">
         <span
           className={[
@@ -1127,8 +1127,8 @@ function ComparePane({ label, review, accent = false }: { label: string; review:
         <ReviewStatusPill status={review.status} />
         <span className="text-xs text-[var(--ui-text-subtle)]">v{review.version}</span>
       </div>
-      <h4 className="mb-3 text-sm font-semibold text-[var(--ui-text)]">{review.title || "（无标题）"}</h4>
-      <div className="ui-panel-muted max-w-none p-3">
+      <h4 className="mb-3 break-words text-sm font-semibold text-[var(--ui-text)]">{review.title || "（无标题）"}</h4>
+      <div className="ui-panel-muted min-w-0 max-w-none p-3">
         <MarkdownContent content={reviewBodyContent(review.kind, review.title, review.content)} />
       </div>
     </section>
@@ -1160,7 +1160,7 @@ function ReviewSourcesModal({
       <Dialog.Portal>
         <Dialog.Overlay className="ui-overlay fixed inset-0 z-50 data-[state=open]:animate-fade-in" />
         <Dialog.Content
-          className="ui-modal-surface fixed inset-x-3 bottom-3 z-50 flex max-h-[min(92dvh,760px)] max-w-2xl flex-col overflow-hidden outline-hidden sm:left-1/2 sm:right-auto sm:top-1/2 sm:bottom-auto sm:w-[calc(100%-1.5rem)] sm:-translate-x-1/2 sm:-translate-y-1/2"
+          className="ui-modal-surface fixed inset-x-3 bottom-3 z-50 flex min-w-0 max-h-[min(92dvh,760px)] max-w-2xl flex-col overflow-hidden outline-hidden sm:left-1/2 sm:right-auto sm:top-1/2 sm:bottom-auto sm:w-[calc(100%-1.5rem)] sm:-translate-x-1/2 sm:-translate-y-1/2"
           onOpenAutoFocus={(event) => {
             if (!headingRef.current) return;
             event.preventDefault();
@@ -1172,11 +1172,11 @@ function ReviewSourcesModal({
           }}
         >
           <div className="ui-soft-divider flex items-start justify-between gap-3 border-b px-4 py-4 sm:px-5">
-            <div className="min-w-0">
+            <div className="min-w-0 flex-1">
               <Dialog.Title asChild>
                 <h2 ref={headingRef} tabIndex={-1} className="text-base font-bold text-[var(--ui-text)]">查看来源</h2>
               </Dialog.Title>
-              <Dialog.Description className="mt-1 text-xs text-[var(--ui-text-subtle)]">
+              <Dialog.Description className="mt-1 break-words text-xs leading-5 text-[var(--ui-text-subtle)]">
                 {isWeekly ? "周复盘" : "月复盘"} · {state.review.period_start} 至 {state.review.period_end} · 共 {sourceCount} {isWeekly ? "篇今日记录" : "个周期回顾"}
               </Dialog.Description>
             </div>
@@ -1187,7 +1187,7 @@ function ReviewSourcesModal({
             </Dialog.Close>
           </div>
 
-          <div className="min-h-0 flex-1 overflow-y-auto px-4 py-4 sm:px-5">
+          <div className="min-h-0 min-w-0 flex-1 overflow-x-hidden overflow-y-auto px-4 py-4 sm:px-5">
             {state.loading ? (
               <div className="ui-panel-muted flex min-h-32 items-center justify-center gap-2 text-sm text-[var(--ui-text-muted)]" role="status" aria-live="polite">
                 <LoaderCircle size={16} className="animate-spin text-[var(--ui-accent-text)]" /> 正在加载来源…
@@ -1211,9 +1211,9 @@ function ReviewSourcesModal({
                         <div className="min-w-0">
                           <div className="flex flex-wrap items-center gap-2">
                             <span className="ui-chip h-6 gap-1 px-2 py-0 text-[11px]"><CalendarDays size={12} /> {article.date}</span>
-                            <span className="text-xs font-semibold text-[var(--ui-text)]">{article.title || "（无标题）"}</span>
+                            <span className="min-w-0 break-words text-xs font-semibold text-[var(--ui-text)]">{article.title || "（无标题）"}</span>
                           </div>
-                          <p className="mt-1 line-clamp-2 text-xs leading-5 text-[var(--ui-text-muted)]">
+                          <p className="mt-1 line-clamp-2 break-words text-xs leading-5 text-[var(--ui-text-muted)]">
                             {reviewExcerpt(article.content || "暂无正文", 150)}
                           </p>
                         </div>
@@ -1230,7 +1230,7 @@ function ReviewSourcesModal({
                             <ReviewStatusPill status={review.status} />
                             <span className="text-[11px] text-[var(--ui-text-subtle)]">v{review.version}</span>
                           </div>
-                          <p className="mt-1 truncate text-xs font-semibold text-[var(--ui-text)]">{review.title || "（无标题）"}</p>
+                          <p className="mt-1 line-clamp-2 break-words text-xs font-semibold text-[var(--ui-text)]">{review.title || "（无标题）"}</p>
                           <p className="mt-0.5 text-[11px] text-[var(--ui-text-subtle)]">{review.period_start} 至 {review.period_end}</p>
                         </div>
                         <button type="button" onClick={() => onOpenReview(review)} className="ui-button-secondary min-h-11 w-full shrink-0 px-3 text-xs sm:h-9 sm:min-h-9 sm:w-auto">

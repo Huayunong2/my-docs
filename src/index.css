@@ -133,6 +133,9 @@
   --ui-code-title: #1d4ed8;
   --ui-code-built-in: #0369a1;
   --ui-code-meta: #9f1239;
+  --ui-quote-surface: #f5f1e8;
+  --ui-quote-border: #c8b98d;
+  --ui-quote-text: #5f5749;
   --ui-overlay: rgba(15, 23, 42, 0.45);
   --ui-shadow-panel: 0 1px 2px rgba(15, 23, 42, 0.05), 0 8px 24px rgba(15, 23, 42, 0.06);
   --ui-shadow-hover: 0 1px 2px rgba(15, 23, 42, 0.07), 0 10px 28px rgba(15, 23, 42, 0.1);
@@ -190,6 +193,9 @@
   --ui-code-title: #93c5fd;
   --ui-code-built-in: #67e8f9;
   --ui-code-meta: #fda4af;
+  --ui-quote-surface: rgba(190, 164, 105, 0.1);
+  --ui-quote-border: rgba(220, 198, 143, 0.52);
+  --ui-quote-text: #d8ccb2;
   --ui-overlay: rgba(0, 0, 0, 0.52);
   --ui-shadow-panel: 0 1px 2px rgba(0, 0, 0, 0.28), 0 10px 28px rgba(0, 0, 0, 0.18);
   --ui-shadow-hover: 0 1px 2px rgba(0, 0, 0, 0.35), 0 12px 32px rgba(0, 0, 0, 0.26);
@@ -342,6 +348,48 @@
     box-shadow: var(--ui-shadow-panel);
   }
 
+  /* Editable CodeMirror surfaces share one containment contract. The editor
+   * extension owns Markdown/JSON line wrapping; this rule keeps every inner
+   * layer inside the surface so long content cannot widen or clip its parent. */
+  .ui-code-editor {
+    width: 100%;
+    min-width: 0;
+    max-width: 100%;
+  }
+
+  .ui-code-editor .cm-editor,
+  .ui-code-editor .cm-scroller {
+    width: 100%;
+    min-width: 0;
+    max-width: 100%;
+    background: transparent;
+  }
+
+  .ui-code-editor .cm-scroller {
+    overflow-x: hidden;
+  }
+
+  .ui-code-editor .cm-content {
+    box-sizing: border-box;
+    width: 100%;
+    min-width: 0;
+    max-width: 100%;
+    overflow-wrap: anywhere;
+  }
+
+  .ui-code-editor .cm-line {
+    width: 100%;
+    max-width: none;
+    overflow-wrap: anywhere;
+  }
+
+  .ui-code-editor > textarea {
+    width: 100%;
+    min-width: 0;
+    max-width: 100%;
+    overflow-wrap: anywhere;
+  }
+
   .ui-alert {
     @apply rounded-xl border px-3 py-2 text-sm leading-5;
   }
@@ -372,6 +420,7 @@
   .ui-status-warning,
   .ui-status-danger,
   .ui-status-info,
+  .ui-status-quote,
   .ui-status-muted {
     border: 1px solid transparent;
   }
@@ -421,6 +470,12 @@
     border-color: var(--ui-info-border);
     background: var(--ui-info-surface);
     color: var(--ui-info-text);
+  }
+
+  .ui-status-quote {
+    border-color: var(--ui-quote-border);
+    background: var(--ui-quote-surface);
+    color: var(--ui-quote-text);
   }
 
   /* Chart and calendar fills use the same semantic palette as the rest of
@@ -655,6 +710,12 @@
     bottom: calc(var(--ui-mobile-nav-total-height) + 0.75rem);
   }
 
+  .ui-mobile-editor-actions {
+    border-color: var(--ui-border);
+    background: var(--ui-surface-raised);
+    box-shadow: var(--ui-shadow-panel);
+  }
+
   .ui-metric-grid > :not(:first-child) {
     border-left: 1px solid var(--ui-border);
   }
@@ -700,6 +761,200 @@
     color: var(--ui-accent-text);
     background: var(--ui-surface-raised);
     box-shadow: var(--ui-shadow-panel);
+  }
+
+  /* Settings is an operating surface: one consistent reading column, with
+   * dense rows for repeated data and generous space only at task boundaries. */
+  .settings-header {
+    background: color-mix(in srgb, var(--ui-surface) 84%, var(--ui-canvas));
+  }
+
+  .settings-header-inner,
+  .settings-content-inner {
+    width: 100%;
+    max-width: 72rem;
+    margin-inline: auto;
+  }
+
+  .settings-header .page-header,
+  .settings-header .settings-tabs {
+    max-width: none;
+    margin-inline: 0;
+  }
+
+  .settings-content-inner {
+    min-width: 0;
+  }
+
+  .settings-card {
+    border-radius: 16px;
+  }
+
+  .settings-section-title {
+    max-width: 70ch;
+  }
+
+  .settings-section-actions,
+  .settings-section-actions > button,
+  .settings-action-button,
+  .settings-row-action {
+    white-space: nowrap;
+  }
+
+  .settings-action-button,
+  .settings-row-action {
+    width: auto !important;
+  }
+
+  .settings-connection-fields {
+    align-items: start;
+  }
+
+  .settings-saved-connection {
+    border: 1px solid var(--ui-border);
+    border-radius: 12px;
+    background: var(--ui-surface-inset);
+    padding: 0.875rem 1rem;
+  }
+
+  .settings-data-layout > *,
+  .settings-panel-stack {
+    min-width: 0;
+  }
+
+  .settings-count-badge,
+  .settings-risk-badge {
+    display: inline-flex;
+    align-items: center;
+    min-height: 1.5rem;
+    border: 1px solid var(--ui-border);
+    border-radius: 999px;
+    padding: 0.125rem 0.5rem;
+    color: var(--ui-text-subtle);
+    font-size: 0.6875rem;
+    font-weight: 600;
+    line-height: 1rem;
+  }
+
+  .settings-risk-badge {
+    border-color: var(--ui-warning-border);
+    background: var(--ui-warning-surface);
+    color: var(--ui-warning-text);
+  }
+
+  .settings-backup-list {
+    border-top: 1px solid var(--ui-border);
+  }
+
+  .settings-backup-row {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 1rem;
+    min-width: 0;
+    border-bottom: 1px solid var(--ui-border);
+    padding: 0.875rem 0;
+  }
+
+  .settings-backup-row-latest {
+    background: color-mix(in srgb, var(--ui-surface-selected) 42%, transparent);
+  }
+
+  .settings-backup-row-latest .settings-backup-row-main,
+  .settings-backup-row-latest .settings-row-actions {
+    padding-inline: 0.5rem;
+  }
+
+  .settings-row-actions {
+    align-items: center;
+    justify-content: flex-end;
+  }
+
+  .settings-row-actions .ui-button-primary,
+  .settings-row-actions .ui-button-secondary,
+  .settings-row-actions .ui-button-danger {
+    min-width: 4.75rem;
+  }
+
+  .settings-export-list {
+    border-top: 1px solid var(--ui-border);
+  }
+
+  .settings-export-row {
+    display: grid;
+    grid-template-columns: 2rem minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 0.875rem;
+    min-width: 0;
+    border-bottom: 1px solid var(--ui-border);
+    padding: 1rem 0;
+  }
+
+  .settings-export-row-featured {
+    padding-block: 1.25rem;
+  }
+
+  .settings-export-row-icon {
+    display: inline-flex;
+    width: 2rem;
+    height: 2rem;
+    align-items: center;
+    justify-content: center;
+    border: 1px solid var(--ui-border);
+    border-radius: 0.625rem;
+    background: var(--ui-surface-inset);
+    color: var(--ui-text-muted);
+  }
+
+  .settings-export-row-icon-accent {
+    border-color: var(--ui-selected-border);
+    background: var(--ui-surface-selected);
+    color: var(--ui-accent-text);
+  }
+
+  .settings-export-row-copy {
+    max-width: 48ch;
+  }
+
+  .settings-preview-item {
+    min-width: 0;
+    border-bottom: 1px solid var(--ui-border);
+    padding-bottom: 0.625rem;
+  }
+
+  .settings-preview-item dd {
+    overflow-wrap: anywhere;
+  }
+
+  @media (max-width: 767px) {
+    .settings-backup-row {
+      grid-template-columns: minmax(0, 1fr);
+      gap: 0.75rem;
+    }
+
+    .settings-row-actions {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      width: 100%;
+    }
+
+    .settings-row-actions .ui-button-primary,
+    .settings-row-actions .ui-button-secondary,
+    .settings-row-actions .ui-button-danger,
+    .settings-action-button {
+      width: 100% !important;
+      min-width: 0;
+    }
+
+    .settings-export-row {
+      grid-template-columns: 2rem minmax(0, 1fr);
+      align-items: start;
+    }
+
+    .settings-export-row .settings-action-button {
+      grid-column: 1 / -1;
+      margin-top: 0.125rem;
+    }
   }
 
   .ui-theme-choice {
@@ -929,8 +1184,8 @@
   .ui-inline-code {
     border: 1px solid var(--ui-border);
     border-radius: 0.375rem;
-    background: var(--ui-surface-inset);
-    color: var(--ui-accent-text);
+    background: var(--ui-code-surface);
+    color: var(--ui-code-text);
   }
 
   .ui-wiki-link {
@@ -948,6 +1203,117 @@
 
   .ui-reader {
     @apply mx-auto w-full max-w-[760px] text-[15px] leading-7;
+  }
+
+  .article-detail-header-inner {
+    container: article-detail-header / inline-size;
+    max-width: 80rem;
+    margin-inline: auto;
+  }
+
+  .article-detail-meta {
+    color: var(--ui-text-subtle);
+    font-size: 0.75rem;
+    letter-spacing: 0.035em;
+    line-height: 1rem;
+  }
+
+  .article-detail-meta > svg {
+    color: var(--ui-text-muted);
+  }
+
+  .article-detail-mood {
+    filter: saturate(0.82);
+  }
+
+  .article-detail-title {
+    color: var(--ui-text);
+    letter-spacing: -0.025em;
+  }
+
+  .article-detail-title-empty {
+    color: var(--ui-text-muted);
+    font-weight: 500;
+  }
+
+  .article-detail-tag {
+    @apply inline-flex h-6 items-center gap-1 rounded-md px-2 text-[11px] leading-none;
+    border: 1px solid var(--ui-border);
+    background: var(--ui-surface-inset);
+    color: var(--ui-text-muted);
+  }
+
+  .article-detail-space {
+    border-color: var(--ui-selected-border);
+    background: var(--ui-surface-selected);
+    color: var(--ui-accent-text);
+  }
+
+  .article-detail-actions {
+    gap: 0.375rem;
+  }
+
+  .article-detail-actions .article-detail-action-button {
+    height: 2.5rem;
+    min-height: 2.5rem;
+    width: 2.5rem;
+    padding-inline: 0;
+    border: 1px solid var(--ui-border);
+    border-radius: 0.5rem;
+    background: var(--ui-surface-inset);
+    color: var(--ui-text-muted);
+  }
+
+  .article-detail-actions .article-detail-action-button:hover {
+    border-color: var(--ui-border-strong);
+    background: var(--ui-surface-hover);
+    color: var(--ui-text);
+  }
+
+  .article-detail-actions .ui-button-danger {
+    border-color: var(--ui-danger-border);
+    background: color-mix(in srgb, var(--ui-danger-surface) 70%, var(--ui-surface-inset));
+    color: var(--ui-danger-text);
+  }
+
+  .article-detail-actions .ui-button-danger:hover {
+    border-color: var(--ui-danger-border);
+    background: var(--ui-danger-surface);
+    color: var(--ui-danger-text);
+  }
+
+  .article-detail-close-button {
+    height: 2.5rem;
+    width: 2.5rem;
+    border: 1px solid var(--ui-border);
+    background: transparent;
+  }
+
+  .article-detail-close-button:hover {
+    border-color: var(--ui-border-strong);
+    background: var(--ui-surface-hover);
+  }
+
+  .article-detail-action-label {
+    display: none;
+  }
+
+  @container article-detail-header (min-width: 40rem) {
+    .article-detail-action-label {
+      display: inline;
+    }
+
+    .article-detail-actions .article-detail-action-button {
+      height: 2.25rem;
+      min-height: 2.25rem;
+      width: auto;
+      padding-inline: 0.625rem;
+    }
+
+    .article-detail-close-button {
+      height: 2.25rem;
+      width: 2.25rem;
+    }
   }
 
   .ui-skeleton {
@@ -1137,6 +1503,7 @@
   .ui-status-warning,
   .ui-status-danger,
   .ui-status-info,
+  .ui-status-quote,
   .ui-status-muted,
   .ui-alert-bad,
   .ui-alert-good,
@@ -1446,6 +1813,10 @@
     scroll-padding-bottom: calc(var(--ui-mobile-nav-total-height) + 1rem);
     min-width: 0;
   }
+  .settings-content {
+    padding-bottom: calc(var(--ui-mobile-nav-total-height) + 1.5rem);
+    scroll-padding-bottom: calc(var(--ui-mobile-nav-total-height) + 1.5rem);
+  }
 
   .ui-toast {
     bottom: calc(var(--ui-mobile-nav-total-height) + 0.75rem) !important;
@@ -1476,7 +1847,7 @@
   --knowledge-index: var(--ui-surface);
   --knowledge-editor: var(--ui-canvas);
   --knowledge-paper: var(--ui-surface-raised);
-  --knowledge-source: var(--ui-warning-surface);
+  --knowledge-source: color-mix(in srgb, var(--ui-surface-soft) 90%, #b99c62);
   gap: 0 !important;
   border: 1px solid var(--ui-border-strong);
   border-radius: 18px;
@@ -1491,7 +1862,7 @@
   --knowledge-index: #12171d;
   --knowledge-editor: #0f1318;
   --knowledge-paper: #1a2028;
-  --knowledge-source: rgba(245, 158, 11, 0.055);
+  --knowledge-source: color-mix(in srgb, var(--ui-surface-soft) 90%, rgba(196, 161, 91, 0.8));
 }
 
 .knowledge-workspace > .knowledge-project-index.ui-panel,
@@ -1586,20 +1957,11 @@
   box-shadow: inset 0 1px 0 color-mix(in srgb, #fff 5%, transparent), var(--ui-shadow-panel);
 }
 
-.knowledge-body-editor .cm-editor,
-.knowledge-body-editor .cm-scroller {
-  background: transparent;
-}
-
 .knowledge-body-editor .cm-content {
   min-height: 220px;
   padding: 1rem 1.125rem;
   font-size: 0.9375rem;
   line-height: 1.75;
-}
-
-.knowledge-body-editor .cm-line {
-  max-width: 72ch;
 }
 
 .knowledge-inspector .ui-panel-muted {
@@ -1646,38 +2008,45 @@
   color: var(--ui-danger-text);
 }
 
+.knowledge-source-state[data-state="incomplete"],
+.knowledge-source-state[data-state="manual"],
 .knowledge-source-state[data-state="locator"],
 .knowledge-source-state[data-state="loading"],
 .knowledge-source-state[data-state="ready"] {
-  border-color: var(--ui-warning-border);
-  background: var(--ui-warning-surface);
-  color: var(--ui-warning-text);
+  border-color: var(--ui-quote-border);
+  background: var(--ui-quote-surface);
+  color: var(--ui-quote-text);
 }
 
 .knowledge-source-panel.ui-editor-surface {
   border-color: var(--ui-border-strong);
   border-radius: 14px;
-  background: var(--knowledge-source);
+  background: var(--ui-surface-soft);
   box-shadow: none;
 }
 
 .knowledge-source-panel[data-source-state="verified"] {
   border-color: var(--ui-success-border);
+  background: color-mix(in srgb, var(--ui-surface-soft) 92%, var(--ui-success-surface));
 }
 
 .knowledge-source-panel[data-source-state="mismatch"],
 .knowledge-source-panel[data-source-state="error"] {
   border-color: var(--ui-danger-border);
+  background: color-mix(in srgb, var(--ui-surface-soft) 92%, var(--ui-danger-surface));
 }
 
+.knowledge-source-panel[data-source-state="incomplete"],
+.knowledge-source-panel[data-source-state="manual"],
 .knowledge-source-panel[data-source-state="locator"],
 .knowledge-source-panel[data-source-state="loading"],
 .knowledge-source-panel[data-source-state="ready"] {
-  border-color: var(--ui-warning-border);
+  border-color: var(--ui-quote-border);
+  background: var(--knowledge-source);
 }
 
 .knowledge-source-titlebar {
-  background: color-mix(in srgb, var(--knowledge-source) 62%, var(--ui-surface-raised));
+  background: var(--ui-surface-inset);
 }
 
 .knowledge-source-excerpt {
@@ -1690,9 +2059,9 @@
 .knowledge-source-excerpt textarea {
   min-height: 8.5rem;
   flex: 1 1 auto;
-  border: 1px dashed var(--ui-warning-border);
+  border: 1px solid var(--ui-border);
   border-radius: 10px;
-  background: color-mix(in srgb, var(--knowledge-source) 62%, var(--ui-surface-raised));
+  background: var(--ui-surface-raised);
   padding: 0.75rem;
   line-height: 1.65;
 }
@@ -1713,7 +2082,7 @@
 }
 
 .knowledge-card-row[data-state="active"] .knowledge-source-line {
-  color: var(--ui-accent-text);
+  color: var(--ui-quote-text);
 }
 
 @media (max-width: 1535px) {
@@ -1740,7 +2109,19 @@
   }
 
   .knowledge-inspector.ui-panel {
-    padding: 1rem;
+    padding: 1.25rem 1rem 2.5rem;
+  }
+
+  /* Keep editor actions reachable without turning them into a second layer
+   * over the source and review content. The bar remains in the document flow
+   * and only hugs the viewport when the user reaches its natural position. */
+  .ui-mobile-editor-actions {
+    position: sticky;
+    bottom: calc(var(--ui-mobile-nav-total-height) + 0.75rem);
+    margin-top: 1.75rem;
+    background: color-mix(in srgb, var(--ui-surface-raised) 97%, transparent);
+    box-shadow: var(--ui-shadow-panel);
+    backdrop-filter: none;
   }
 }
 

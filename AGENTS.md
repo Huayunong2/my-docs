@@ -50,6 +50,7 @@ daily-summary 是一个单用户、自托管的工作记录、知识沉淀与间
 | Vite 代理 | /api 和根 /health 代理到 http://127.0.0.1:8080 |
 | 健康检查 | 公开存活检查为 GET /health；受令牌保护的详细检查为 GET /api/health |
 | 本地数据 | SQLite 和运行状态默认位于用户数据目录下的 .daily-summary/，具体路径以 server/src/helpers.rs 和 server/src/db.rs 为准 |
+| 本地 AI 测试链接 | `http://127.0.0.1:5173/today?local_ai_token=daily-summary-local-ai-test-token`；仅 loopback 开发服务可用 |
 | Tauri | 开发仍使用 http://localhost:5173；远程 API 地址通过设置页或 VITE_API_BASE_URL 配置，不得改为直接访问 SQLite |
 | 服务端工作目录 | 从 server/ 运行，使静态资源回退正确解析到 ../dist；npm run server:dev 已处理该切换 |
 
@@ -62,6 +63,13 @@ package.json、vite.config.ts、server/src/server.rs、server/.env.example、部
 - 生产、systemd、反向代理和公开网卡监听不得启用无令牌模式；生产必须配置 DAILY_SUMMARY_TOKEN。
 - 公网长期使用必须采用 HTTPS 反向代理。IP + HTTP 只能作为明确的受控网络例外，并且必须启用令牌和网络访问限制。
 - 不能把有令牌保护的明文公网 HTTP 描述为安全传输；变更监听、TLS、反向代理或防火墙属于安全边界变更。
+
+### 本地 AI 页面链接（测试令牌）
+
+- 本地开发脚本通过 `DAILY_SUMMARY_LOCAL_AI_ACCESS=1`、`DAILY_SUMMARY_LOCAL_AI_TOKEN=daily-summary-local-ai-test-token` 开启测试入口；生产部署必须保持 `DAILY_SUMMARY_LOCAL_AI_ACCESS=0` 且不配置该令牌。
+- 可交给具备浏览器能力的 AI 的入口是 `http://127.0.0.1:5173/today?local_ai_token=daily-summary-local-ai-test-token`。`localhost` 或 `::1` 对应地址也可以使用。
+- `src/main.tsx` 会在 loopback 页面首次加载时消费 URL 令牌、写入当前会话临时存储并清理地址栏；`src/lib/api.ts` 只会对 loopback API 使用该临时令牌，并通过 `Authorization: Bearer ...` 发送。
+- `server/src/middleware.rs` 只在显式开关、令牌配置和 loopback 绑定同时满足时接受该令牌，并仅允许 GET、HEAD、OPTIONS；它是公开的测试值，不替代生产 `DAILY_SUMMARY_TOKEN`。
 
 ## 项目索引
 

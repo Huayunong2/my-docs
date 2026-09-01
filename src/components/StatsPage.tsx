@@ -130,7 +130,7 @@ const knowledgeQualityOptions: Array<{
   icon: LucideIcon;
   tone: StatTone;
 }> = [
-  { key: "missing_source", label: "缺少来源", hint: "补回日期或证据片段", icon: FileText, tone: "amber" },
+  { key: "missing_source", label: "未关联来源", hint: "仅筛选没有来源定位的知识条目", icon: FileText, tone: "gray" },
   { key: "missing_project", label: "未归入项目", hint: "补充项目归属", icon: Folder, tone: "sky" },
   { key: "missing_tags", label: "缺少标签", hint: "补充检索标签", icon: Tags, tone: "accent" },
   { key: "short_content", label: "内容过短", hint: "补成可复习的完整表述", icon: BookMarked, tone: "rose" },
@@ -594,7 +594,7 @@ export default function StatsPage({
 
       <div className="space-y-4 md:space-y-6">
         <div className="grid items-start gap-4 xl:grid-cols-[minmax(0,1.55fr)_minmax(360px,0.85fr)]">
-        <section className="min-w-0 h-[clamp(440px,78dvh,644px)] min-h-[440px] sm:h-[684px] sm:min-h-0 xl:h-[760px]">
+        <section className="min-w-0 h-[min(118vw,520px)] min-h-[400px] sm:h-[684px] sm:min-h-0 xl:h-[760px]">
           <div className="ui-panel flex h-full flex-col overflow-hidden">
             <div className="flex flex-wrap items-center justify-between gap-3 border-b px-3 py-3 sm:px-4 ui-soft-divider">
               <div>
@@ -966,7 +966,7 @@ export default function StatsPage({
         </div>
 
       {reviewStats && (
-        <details className="ui-panel group mb-4 p-4 md:mb-6">
+        <details className="ui-panel group mt-6 mb-4 min-w-0 p-4 md:mt-8 md:mb-6">
           <summary className="flex cursor-pointer list-none items-center justify-between gap-3 rounded-lg focus:outline-hidden focus-visible:ring-2 focus-visible:ring-[var(--ui-focus)]/40 [&::-webkit-details-marker]:hidden">
             <div>
               <h3 className="flex items-center gap-2 text-sm font-semibold text-[var(--ui-text)]">
@@ -1594,7 +1594,7 @@ function ReviewPanel({
   const previewContent = selectedReview ? reviewPreview(selectedReview.kind, selectedReview.title, selectedReview.content, 360) : "";
 
   return (
-    <section className={`ui-panel p-3 transition-colors sm:p-4 ${className}`}>
+    <section className={`ui-panel p-4 transition-colors sm:p-4 ${className}`}>
       {/* Header */}
       <div className="mb-3 flex items-start justify-between gap-3">
         <div className="min-w-0">
@@ -1628,7 +1628,7 @@ function ReviewPanel({
             <span className="truncate text-xs font-medium text-[var(--ui-text-muted)]">{selectedReview.title}</span>
             <ReviewStatusPill status={selectedReview.status} />
           </div>
-          <p className="line-clamp-4 text-xs leading-5 text-[var(--ui-text-muted)]">{previewContent}</p>
+          <p className="line-clamp-4 break-words text-xs leading-5 text-[var(--ui-text-muted)]">{previewContent}</p>
         </div>
       ) : reviews.length > 0 ? (
         <p className="mb-4 text-xs text-[var(--ui-text-subtle)]">进入复盘库查看历史版本</p>

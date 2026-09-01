@@ -4,6 +4,8 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { RouterProvider } from "@tanstack/react-router";
 import router from "./router";
 import "./index.css";
+import { consumeLocalAiTokenFromUrl, LOCAL_AI_TOKEN_SESSION_KEY } from "./lib/localAiAccess";
+import { writeSessionStorage } from "./lib/storage";
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -28,6 +30,13 @@ function clearLegacyTransientState() {
   if (changed) window.history.replaceState({}, "", `${url.pathname}${url.search}${url.hash}`);
 }
 
+function bootstrapLocalAiAccess() {
+  const url = new URL(window.location.href);
+  if (!consumeLocalAiTokenFromUrl(url, (token) => writeSessionStorage(LOCAL_AI_TOKEN_SESSION_KEY, token))) return;
+  window.history.replaceState({}, "", `${url.pathname}${url.search}${url.hash}`);
+}
+
+bootstrapLocalAiAccess();
 clearLegacyTransientState();
 
 ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(

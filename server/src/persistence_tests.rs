@@ -241,6 +241,51 @@ fn sqlite_snapshot_can_be_verified_before_restore() {
 }
 
 #[test]
+fn sqlite_snapshot_can_be_restored_into_the_live_database() {
+    let mut source = Database::new_in_memory().unwrap();
+    source
+        .articles()
+        .save(ArticleDraft {
+            date: "2026-07-17".into(),
+            title: "恢复后的记录".into(),
+            content: "来自已验证快照".into(),
+            mood: "专注".into(),
+            tags: vec!["restore".into()],
+            spaces: vec![],
+        })
+        .unwrap();
+    let path = std::env::temp_dir().join(format!("daily-summary-{}.db", uuid::Uuid::new_v4()));
+    source.snapshot_to(path.to_str().unwrap()).unwrap();
+
+    let mut live = Database::new_in_memory().unwrap();
+    live.articles()
+        .save(ArticleDraft {
+            date: "2026-07-18".into(),
+            title: "当前记录".into(),
+            content: "恢复前的数据".into(),
+            mood: "平静".into(),
+            tags: vec![],
+            spaces: vec![],
+        })
+        .unwrap();
+    live.restore_from_snapshot(&path).unwrap();
+
+    assert!(live
+        .articles()
+        .find_by_date("2026-07-18")
+        .unwrap()
+        .is_none());
+    let restored = live
+        .articles()
+        .find_by_date("2026-07-17")
+        .unwrap()
+        .expect("restored record");
+    assert_eq!(restored.title, "恢复后的记录");
+    assert_eq!(restored.tags, vec!["restore"]);
+    std::fs::remove_file(path).unwrap();
+}
+
+#[test]
 fn corrupted_file_is_rejected_before_restore() {
     let path = std::env::temp_dir().join(format!("daily-summary-{}.db", uuid::Uuid::new_v4()));
     std::fs::write(&path, b"not a sqlite database").unwrap();
@@ -1088,7 +1133,7 @@ fn confirmed_card_enters_due_queue_with_default_fields() {
 }
 
 #[test]
-fn batch_confirmation_requires_source_and_creates_default_review_items() {
+fn batch_confirmation_accepts_manual_excerpts_and_source_free_cards() {
     let mut db = Database::new_in_memory().expect("in-memory database");
 
     let mut date_only = card_draft("draft");
@@ -1109,11 +1154,20 @@ fn batch_confirmation_requires_source_and_creates_default_review_items() {
         .knowledge()
         .save(excerpt_only)
         .expect("save excerpt-only source draft");
-    assert!(matches!(
+    assert_eq!(
         db.knowledge()
-            .batch_update(std::slice::from_ref(&excerpt_only.id), "confirm", &[]),
-        Err(rusqlite::Error::InvalidQuery)
-    ));
+            .batch_update(std::slice::from_ref(&excerpt_only.id), "confirm", &[])
+            .expect("confirm manual excerpt card"),
+        1
+    );
+    assert_eq!(
+        db.knowledge()
+            .find(&excerpt_only.id)
+            .unwrap()
+            .unwrap()
+            .status,
+        "confirmed"
+    );
 
     let mut missing_source_for_confirm = card_draft("draft");
     missing_source_for_confirm.source_date.clear();
@@ -1122,21 +1176,23 @@ fn batch_confirmation_requires_source_and_creates_default_review_items() {
         .knowledge()
         .save(missing_source_for_confirm)
         .expect("save draft without source");
-    assert!(matches!(
-        db.knowledge().batch_update(
-            std::slice::from_ref(&missing_source_for_confirm.id),
-            "confirm",
-            &[]
-        ),
-        Err(rusqlite::Error::InvalidQuery)
-    ));
+    assert_eq!(
+        db.knowledge()
+            .batch_update(
+                std::slice::from_ref(&missing_source_for_confirm.id),
+                "confirm",
+                &[]
+            )
+            .expect("confirm source-free card"),
+        1
+    );
     assert_eq!(
         db.knowledge()
             .find(&missing_source_for_confirm.id)
             .unwrap()
             .unwrap()
             .status,
-        "draft"
+        "confirmed"
     );
 
     let mut missing_source_for_set_status = card_draft("draft");
@@ -1146,14 +1202,24 @@ fn batch_confirmation_requires_source_and_creates_default_review_items() {
         .knowledge()
         .save(missing_source_for_set_status)
         .expect("save second draft without source");
-    assert!(matches!(
-        db.knowledge().batch_update(
-            std::slice::from_ref(&missing_source_for_set_status.id),
-            "set_status",
-            &["confirmed".into()]
-        ),
-        Err(rusqlite::Error::InvalidQuery)
-    ));
+    assert_eq!(
+        db.knowledge()
+            .batch_update(
+                std::slice::from_ref(&missing_source_for_set_status.id),
+                "set_status",
+                &["confirmed".into()]
+            )
+            .expect("set source-free card status"),
+        1
+    );
+    assert_eq!(
+        db.knowledge()
+            .find(&missing_source_for_set_status.id)
+            .unwrap()
+            .unwrap()
+            .status,
+        "confirmed"
+    );
 
     let mut confirm_draft = card_draft("draft");
     confirm_draft.title = "批量确认创建复习题".into();

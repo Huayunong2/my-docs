@@ -107,11 +107,20 @@ fn valid_review_item_status(value: &str) -> bool {
     matches!(value, "active" | "suspended" | "stale")
 }
 
-fn has_card_source(article_id: &str, review_id: &str, date: &str, excerpt: &str) -> bool {
-    let has_locator = [article_id, review_id, date]
+fn has_card_locator(article_id: &str, review_id: &str, date: &str) -> bool {
+    [article_id, review_id, date]
         .iter()
-        .any(|value| !value.trim().is_empty());
-    has_locator && !excerpt.trim().is_empty()
+        .any(|value| !value.trim().is_empty())
+}
+
+fn has_card_source(article_id: &str, review_id: &str, date: &str, excerpt: &str) -> bool {
+    has_card_locator(article_id, review_id, date) && !excerpt.trim().is_empty()
+}
+
+fn has_any_card_source(article_id: &str, review_id: &str, date: &str, excerpt: &str) -> bool {
+    [article_id, review_id, date, excerpt]
+        .iter()
+        .any(|value| !value.trim().is_empty())
 }
 
 fn validate_card_text(title: &str, content: &str) -> Result<(), (StatusCode, String)> {
@@ -225,10 +234,19 @@ fn validate_card_source(
     date: &str,
     excerpt: &str,
 ) -> Result<(), (StatusCode, String)> {
+    // A manually written or imported knowledge item may intentionally have no
+    // source. A manually supplied excerpt is also useful without a database
+    // locator; only linked evidence crosses the verification boundary.
+    if !has_any_card_source(article_id, review_id, date, excerpt) {
+        return Ok(());
+    }
+    if !has_card_locator(article_id, review_id, date) && !excerpt.trim().is_empty() {
+        return Ok(());
+    }
     if !has_card_source(article_id, review_id, date, excerpt) {
         return Err((
             StatusCode::BAD_REQUEST,
-            "确认卡片前请补充来源定位和连续原文片段".into(),
+            "关联来源还不完整；请同时提供定位和连续原文片段。手动来源可以只保留片段，没有来源也可以留空".into(),
         ));
     }
     let matched = source_matches_card(db, article_id, review_id, date, excerpt)
@@ -241,7 +259,7 @@ fn validate_card_source(
         )),
         None => Err((
             StatusCode::BAD_REQUEST,
-            "找不到来源记录，无法确认卡片".into(),
+            "找不到来源记录，无法确认知识条目".into(),
         )),
     }
 }
@@ -1964,7 +1982,7 @@ pub(crate) async fn batch_cards(
         .map_err(|e| match e {
             rusqlite::Error::InvalidQuery if confirms_cards => (
                 StatusCode::BAD_REQUEST,
-                "确认卡片前请补充来源定位和连续原文片段".into(),
+                "关联来源还不完整；请同时提供定位和连续原文片段。手动来源可以只保留片段，没有来源也可以留空".into(),
             ),
             rusqlite::Error::InvalidQuery => {
                 (StatusCode::BAD_REQUEST, "批量操作参数或卡片数据无效".into())
@@ -2079,7 +2097,7 @@ mod similarity_tests {
     }
 
     #[test]
-    fn api_source_validation_requires_a_real_matching_article() {
+    fn api_source_validation_allows_empty_source_but_requires_real_matching_article() {
         let mut db = Database::new_in_memory().expect("in-memory database");
         let article = db
             .articles()
@@ -2097,6 +2115,8 @@ mod similarity_tests {
             validate_card_source(&mut db, &article.id, "", "", "整体回滚，避免留下半完成状态")
                 .is_ok()
         );
+        assert!(validate_card_source(&mut db, "", "", "", "").is_ok());
+        assert!(validate_card_source(&mut db, "", "", "", "手动导入的代码原片段").is_ok());
 
         let mismatch = validate_card_source(&mut db, &article.id, "", "", "不存在的证据");
         assert_eq!(mismatch.unwrap_err().0, StatusCode::BAD_REQUEST);

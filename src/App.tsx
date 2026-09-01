@@ -2,7 +2,7 @@ import { createContext, Suspense, useCallback, useContext, useEffect, useMemo, u
 import { MotionConfig } from "framer-motion";
 import { Outlet, useLocation, useNavigate as useRouterNavigate } from "@tanstack/react-router";
 import { useQuery } from "@tanstack/react-query";
-import { Toaster } from "sonner";
+import { Toaster, toast } from "sonner";
 import Sidebar from "./components/Sidebar";
 import CommandPalette from "./components/CommandPalette";
 import * as api from "./lib/api";
@@ -71,7 +71,7 @@ export interface AppShellContextValue {
   openKnowledgeQuality: (quality: api.KnowledgeCardQuality) => void;
   openNewKnowledgeCard: () => void;
   backToKnowledge: () => void;
-  returnFromConnectionSettings: () => void;
+  returnFromConnectionSettings: (message?: string) => void;
   zen: boolean;
   onToggleZen: () => void;
   dark: boolean;
@@ -282,7 +282,8 @@ export function AppShell() {
     });
   }, [routerNavigate]);
 
-  const returnFromConnectionSettings = useCallback(() => {
+  const returnFromConnectionSettings = useCallback((message?: string) => {
+    if (message) toast.success(message);
     const target = readSessionStorage(connectionReturnStorageKey);
     removeSessionStorage(connectionReturnStorageKey);
     if (!target || !target.startsWith("/")) {
@@ -291,7 +292,7 @@ export function AppShell() {
     try {
       const url = new URL(target, window.location.origin);
       const search: Record<string, unknown> = {};
-      const searchKeys = ["q", "date", "returnTo", "page", "scope", "project", "tag", "status", "type", "sort", "usage", "quality", "view"];
+      const searchKeys = ["q", "date", "returnTo", "page", "scope", "project", "tag", "status", "type", "sort", "usage", "quality", "view", "tab"];
       for (const key of searchKeys) {
         const value = url.searchParams.get(key);
         if (!value) continue;

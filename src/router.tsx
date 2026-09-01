@@ -24,6 +24,7 @@ const SettingsPage = lazy(() => import("./components/SettingsPage"));
 export type AppSearch = {
   q?: string;
   date?: string;
+  tab?: string;
   returnTo?: string;
   page?: number;
   scope?: string;
@@ -53,6 +54,7 @@ function validateAppSearch(search: Record<string, unknown>): AppSearch {
   return {
     q: stringValue(search.q),
     date: stringValue(search.date),
+    tab: stringValue(search.tab),
     returnTo: stringValue(search.returnTo),
     page: positiveInteger(search.page),
     scope: stringValue(search.scope),

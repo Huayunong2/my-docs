@@ -6,6 +6,8 @@ import remarkGfm from "remark-gfm";
 import remarkWikiLink from "remark-wiki-link";
 import { toast } from "sonner";
 import type { PanzoomObject } from "@panzoom/panzoom";
+import { Check, Copy, Maximize2, Minimize2, RotateCcw, ZoomIn, ZoomOut } from "lucide-react";
+import { copyText } from "../lib/clipboard";
 import { repairMarkdownFences } from "../lib/markdownFences";
 
 function textFromNode(node: unknown): string {
@@ -91,12 +93,11 @@ function CopyButton({ text, label = "复制" }: { text: string; label?: string }
 
   const copy = async () => {
     try {
-      if (!navigator.clipboard) throw new Error("clipboard unavailable");
-      await navigator.clipboard.writeText(text);
+      await copyText(text);
       setCopied(true);
       window.setTimeout(() => setCopied(false), 1200);
     } catch {
-      toast.error("复制失败，请手动选中内容复制。", { duration: 2600 });
+      toast.error("复制失败，当前浏览器未允许访问剪贴板；请选中内容后复制。", { duration: 3200 });
     }
   };
 
@@ -104,10 +105,11 @@ function CopyButton({ text, label = "复制" }: { text: string; label?: string }
     <button
       type="button"
       onClick={() => void copy()}
-      className="ui-button-ghost h-11 min-h-11 rounded-md px-2 text-xs md:h-8 md:min-h-8"
+      className="ui-button-ghost h-10 min-h-10 min-w-10 rounded-md px-2 text-xs md:h-8 md:min-h-8 md:min-w-0"
       aria-label={copied ? `${label}成功` : label}
     >
-      {copied ? "已复制" : label}
+      {copied ? <Check size={13} /> : <Copy size={13} />}
+      <span className="hidden sm:inline">{copied ? "已复制" : label}</span>
     </button>
   );
 }
@@ -164,28 +166,38 @@ function MermaidControls({
   const sliderScale = Math.min(MERMAID_MAX_SCALE, Math.max(MERMAID_MIN_SCALE, zoomScale));
 
   return (
-    <div className="mermaid-controls mermaid-control flex flex-wrap items-center justify-end gap-1.5" role="toolbar" aria-label="Mermaid 图表缩放控制">
-      <span className="mr-1 min-w-[3.5rem] text-right text-[11px] tabular-nums text-[var(--ui-text-subtle)]" aria-live="polite">
-        {ready ? `${Math.round(zoomScale * 100)}%` : "加载中"}
-      </span>
-      <label className="flex h-11 min-h-11 items-center rounded-md px-1 md:h-9 md:min-h-9">
-        <span className="sr-only">图表缩放比例</span>
-        <input
-          type="range"
-          min={MERMAID_MIN_SCALE}
-          max={MERMAID_MAX_SCALE}
-          step={0.1}
-          value={sliderScale}
-          onChange={(event) => action(() => onZoomTo(Number(event.target.value)))}
-          disabled={!ready}
-          className="mermaid-zoom-range w-24 accent-[var(--ui-accent-solid)] sm:w-32"
-          aria-label="图表缩放比例"
-        />
-      </label>
-      <button type="button" onClick={() => action(() => panzoom?.zoomOut())} disabled={!ready} className="ui-button-ghost h-11 min-h-11 min-w-11 px-2 text-xs md:h-9 md:min-h-9 md:min-w-9" aria-label="缩小图表">−</button>
-      <button type="button" onClick={() => action(() => panzoom?.zoomIn())} disabled={!ready} className="ui-button-ghost h-11 min-h-11 min-w-11 px-2 text-xs md:h-9 md:min-h-9 md:min-w-9" aria-label="放大图表">＋</button>
-      <button type="button" onClick={() => action(onReset)} disabled={!ready} className="ui-button-ghost h-11 min-h-11 px-2 text-xs md:h-9 md:min-h-9">重置视图</button>
-      <button type="button" onClick={onCollapse} className="ui-button-secondary h-11 min-h-11 px-2 text-xs md:h-9 md:min-h-9">收起</button>
+    <div className="mermaid-controls mermaid-control flex min-w-0 flex-wrap items-center justify-end gap-1" role="toolbar" aria-label="Mermaid 图表缩放控制">
+      <div className="flex min-w-0 items-center gap-1 rounded-md border border-[var(--ui-border)] bg-[var(--ui-surface-inset)] px-1">
+        <span className="min-w-[3.25rem] text-right text-[11px] tabular-nums text-[var(--ui-text-subtle)]" aria-live="polite">
+          {ready ? `${Math.round(zoomScale * 100)}%` : "加载中"}
+        </span>
+        <label className="flex h-10 min-h-10 items-center rounded-md px-1 md:h-8 md:min-h-8">
+          <span className="sr-only">图表缩放比例</span>
+          <input
+            type="range"
+            min={MERMAID_MIN_SCALE}
+            max={MERMAID_MAX_SCALE}
+            step={0.1}
+            value={sliderScale}
+            onChange={(event) => action(() => onZoomTo(Number(event.target.value)))}
+            disabled={!ready}
+            className="mermaid-zoom-range w-20 sm:w-28"
+            aria-label="图表缩放比例"
+          />
+        </label>
+      </div>
+      <button type="button" onClick={() => action(() => panzoom?.zoomOut())} disabled={!ready} className="ui-button-ghost h-10 min-h-10 min-w-10 px-2 text-xs md:h-8 md:min-h-8 md:min-w-8" aria-label="缩小图表" title="缩小图表">
+        <ZoomOut size={14} />
+      </button>
+      <button type="button" onClick={() => action(() => panzoom?.zoomIn())} disabled={!ready} className="ui-button-ghost h-10 min-h-10 min-w-10 px-2 text-xs md:h-8 md:min-h-8 md:min-w-8" aria-label="放大图表" title="放大图表">
+        <ZoomIn size={14} />
+      </button>
+      <button type="button" onClick={() => action(onReset)} disabled={!ready} className="ui-button-ghost h-10 min-h-10 gap-1 px-2 text-xs md:h-8 md:min-h-8" aria-label="重置图表视图" title="重置视图">
+        <RotateCcw size={13} /> <span className="hidden sm:inline">重置</span>
+      </button>
+      <button type="button" onClick={onCollapse} className="ui-button-secondary h-10 min-h-10 gap-1 px-2 text-xs md:h-8 md:min-h-8" aria-label="收起图表" title="收起图表">
+        <Minimize2 size={13} /> <span className="hidden sm:inline">收起</span>
+      </button>
       <span className="basis-full text-right text-[10px] leading-4 text-[var(--ui-text-subtle)]">可拖动、滚轮或双指缩放 · 50%–1200%</span>
     </div>
   );
@@ -334,29 +346,33 @@ function MermaidBlock({ chart }: { chart: string }) {
   };
 
   return (
-    <div className="ui-editor-surface my-4 overflow-hidden rounded-lg">
-      <div className="ui-soft-divider flex min-h-9 flex-wrap items-center justify-between gap-2 border-b px-3 py-1.5">
-        <span className="text-[11px] font-medium uppercase tracking-wide text-[var(--ui-text-subtle)]">mermaid</span>
-        <div className="flex flex-wrap items-center justify-end gap-1.5">
-          <div className="ui-segment flex items-center gap-0.5 p-0.5" role="group" aria-label="Mermaid 图表显示方式">
+    <div className="ui-editor-surface my-3 overflow-hidden rounded-xl">
+      <div className="mermaid-toolbar ui-soft-divider flex min-h-9 flex-col gap-2 border-b px-3 py-2 sm:flex-row sm:items-center sm:justify-between">
+        <span className="shrink-0 text-[11px] font-semibold uppercase tracking-wide text-[var(--ui-text-subtle)]">Mermaid 图表</span>
+        <div className="mermaid-toolbar-actions flex w-full min-w-0 flex-wrap items-center justify-end gap-1 sm:w-auto sm:gap-1.5">
+          <div className="ui-segment flex min-w-0 flex-1 items-center gap-0.5 p-0.5 sm:flex-none" role="group" aria-label="Mermaid 图表显示方式">
             {(["compact", "fit", "original"] as const).map((mode) => (
               <button
                 key={mode}
                 type="button"
                 onClick={() => setViewMode(mode)}
-                className={["ui-segment-item h-11 px-2 text-xs md:h-8", viewMode === mode ? "ui-segment-item-active" : ""].join(" ")}
+                className={["ui-segment-item h-10 min-h-10 flex-1 px-2 text-xs sm:flex-none md:h-8 md:min-h-0", viewMode === mode ? "ui-segment-item-active" : ""].join(" ")}
                 aria-pressed={viewMode === mode}
               >
                 {mode === "compact" ? "紧凑" : mode === "fit" ? "适配" : "原始"}
               </button>
             ))}
           </div>
-          {!expanded && <button type="button" onClick={() => setExpanded(true)} className="ui-button-ghost h-11 min-h-11 px-2 text-xs md:h-8 md:min-h-8">展开</button>}
+          {!expanded && (
+            <button type="button" onClick={() => setExpanded(true)} className="ui-button-ghost h-10 min-h-10 gap-1 px-2 text-xs md:h-8 md:min-h-8" aria-label="展开图表" title="展开图表">
+              <Maximize2 size={13} /> <span className="hidden sm:inline">展开</span>
+            </button>
+          )}
           <CopyButton text={chart} label="复制源码" />
         </div>
       </div>
       {expanded && (
-        <div className="ui-soft-divider flex items-center justify-end border-b px-3 py-1.5">
+        <div className="ui-soft-divider flex min-w-0 items-center justify-end border-b bg-[var(--ui-surface-inset)] px-3 py-1.5">
           <MermaidControls
             panzoom={panzoom}
             zoomScale={zoomScale}
@@ -413,11 +429,10 @@ function MarkdownFenceNotice({ content, onRepairContent }: { content: string; on
   const lineLabels = repair.issues.map((issue) => `第 ${issue.line} 行：${issue.message}`);
   const copyRepair = async () => {
     try {
-      if (!navigator.clipboard) throw new Error("clipboard unavailable");
-      await navigator.clipboard.writeText(repair.fixedContent);
+      await copyText(repair.fixedContent);
       toast.success("修正版 Markdown 已复制。", { duration: 2200 });
     } catch {
-      toast.error("复制失败，请手动复制修正版内容。", { duration: 2600 });
+      toast.error("复制失败，当前浏览器未允许访问剪贴板；请选中修正版内容后复制。", { duration: 3200 });
     }
   };
 
@@ -457,7 +472,7 @@ function MarkdownContent({ content, onWikiLink, onRepairContent }: MarkdownConte
   }
 
   return (
-    <div className="text-[15px] leading-7 text-[var(--ui-text-muted)]">
+    <div className="min-w-0 max-w-full break-words text-[15px] leading-7 text-[var(--ui-text-muted)]">
       <MarkdownFenceNotice content={content} onRepairContent={onRepairContent} />
       <ReactMarkdown
         remarkPlugins={[
@@ -484,7 +499,7 @@ function MarkdownContent({ content, onWikiLink, onRepairContent }: MarkdownConte
           ol: ({ children }) => <ol className="mb-4 list-decimal space-y-1.5 pl-6">{children}</ol>,
           li: ({ children }) => <li className="leading-relaxed">{children}</li>,
           blockquote: ({ children }) => (
-            <blockquote className="my-3 border-l-2 border-[var(--ui-accent-solid)] pl-4 italic text-[var(--ui-text-muted)]">{children}</blockquote>
+            <blockquote className="my-4 rounded-xl border border-[var(--ui-quote-border)] bg-[var(--ui-quote-surface)] px-4 py-3 text-[var(--ui-quote-text)]">{children}</blockquote>
           ),
           code: ({ children, className }) => {
             const rawLanguage = (className || "").split(/\s+/).find((item) => item.startsWith("language-"))?.slice("language-".length) || "";

@@ -3,14 +3,14 @@ import type { ButtonHTMLAttributes, InputHTMLAttributes, ReactNode, TextareaHTML
 export type Tone = "neutral" | "good" | "warn" | "bad";
 
 export const SectionTitle = ({ children, desc }: { children: string; desc?: string }) => (
-  <div className="mb-3">
-    <h3 className="text-xs font-semibold uppercase tracking-widest text-[var(--ui-text-subtle)]">{children}</h3>
-    {desc && <p className="mt-1 text-xs text-[var(--ui-text-subtle)]">{desc}</p>}
+  <div className="settings-section-title mb-3">
+    <h3 className="text-sm font-semibold leading-5 tracking-tight text-[var(--ui-text)]">{children}</h3>
+    {desc && <p className="mt-1 text-xs leading-5 text-[var(--ui-text-muted)]">{desc}</p>}
   </div>
 );
 
 export const Card = ({ children, className = "" }: { children: ReactNode; className?: string }) => (
-  <section className={`ui-panel p-4 ${className}`}>
+  <section className={`ui-panel settings-card p-4 sm:p-5 ${className}`}>
     {children}
   </section>
 );

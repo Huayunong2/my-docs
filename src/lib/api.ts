@@ -1,6 +1,7 @@
 // API layer — 桌面端和浏览器统一走服务器 HTTP，同源部署默认使用 /api。
 import { normalizeTags, parseTags } from "./tags";
-import { readLocalStorage, removeLocalStorage, writeLocalStorage } from "./storage";
+import { isLocalHttpLocation, isLoopbackHostname, isLoopbackHttpUrl, LOCAL_AI_ACCESS_QUERY_PARAM, LOCAL_AI_TEST_TOKEN, LOCAL_AI_TOKEN_SESSION_KEY } from "./localAiAccess";
+import { readLocalStorage, readSessionStorage, removeLocalStorage, writeLocalStorage } from "./storage";
 
 function normalizeBaseUrl(url: string): string {
   const trimmed = url.trim().replace(/\/+$/, "");
@@ -52,22 +53,26 @@ function getBaseUrl(): string {
   return "/api";
 }
 
-function buildUrl(path: string): string {
-  const baseUrl = getBaseUrl();
-  if (!baseUrl) {
-    throw new ApiError(
-      0,
-      "Desktop client server URL is not configured",
-      "桌面端尚未配置服务器地址，请到「设置 -> 连接」填写 http://服务器IP:8080/api 并保存。"
-    );
+function isLocalApiBase(baseUrl: string): boolean {
+  const pageIsLocal = typeof window !== "undefined" && isLocalHttpLocation(window.location);
+  if (!pageIsLocal) return false;
+  if (baseUrl.startsWith("//")) return false;
+  if (baseUrl.startsWith("/")) {
+    return true;
   }
-  return `${baseUrl}${path}`;
+  return isLoopbackHttpUrl(baseUrl);
 }
 
-function authHeaders(options?: RequestInit, includeJson = true): Headers {
+export function getApiTokenForUrl(baseUrl = getBaseUrl()): string {
+  const localAiToken = readSessionStorage(LOCAL_AI_TOKEN_SESSION_KEY);
+  if (localAiToken && isLocalApiBase(baseUrl)) return localAiToken;
+  return getApiToken();
+}
+
+function authHeaders(options?: RequestInit, includeJson = true, baseUrl = getBaseUrl()): Headers {
   const headers = new Headers(options?.headers);
   if (includeJson) headers.set("Content-Type", "application/json");
-  const token = getApiToken();
+  const token = getApiTokenForUrl(baseUrl);
   if (token) headers.set("Authorization", `Bearer ${token}`);
   return headers;
 }
@@ -84,9 +89,17 @@ export function getErrorMessage(error: unknown): string {
 }
 
 function httpRequest<T>(path: string, options?: RequestInit): Promise<T> {
-  return fetch(buildUrl(path), {
+  const baseUrl = getBaseUrl();
+  if (!baseUrl) {
+    throw new ApiError(
+      0,
+      "Desktop client server URL is not configured",
+      "桌面端尚未配置服务器地址，请到「设置 -> 连接」填写 http://服务器IP:8080/api 并保存。"
+    );
+  }
+  return fetch(`${baseUrl}${path}`, {
     ...options,
-    headers: authHeaders(options),
+    headers: authHeaders(options, true, baseUrl),
   }).then(async (res) => {
     if (!res.ok) {
       throw await parseErrorResponse(res);
@@ -123,12 +136,24 @@ export function validateServerUrl(url: string): string {
   try {
     const parsed = new URL(trimmed);
     if (!["http:", "https:"].includes(parsed.protocol)) return "服务器地址必须是 http 或 https";
-    if (parsed.protocol === "http:" && !["localhost", "127.0.0.1"].includes(parsed.hostname)) {
+    if (parsed.protocol === "http:" && !isLoopbackServerUrl(trimmed)) {
       return "公网 HTTP 可以使用，但记录和令牌不会加密传输";
     }
     return "";
   } catch {
     return "服务器地址格式不正确";
+  }
+}
+
+export function isLoopbackServerUrl(url: string): boolean {
+  const trimmed = url.trim();
+  if (!trimmed) return false;
+  if (trimmed === "/api" || (trimmed.startsWith("/") && !trimmed.startsWith("//"))) return true;
+  try {
+    const parsed = new URL(trimmed);
+    return isLoopbackHostname(parsed.hostname);
+  } catch {
+    return false;
   }
 }
 
@@ -152,6 +177,18 @@ export function setApiToken(token: string) {
     removeLocalStorage("server_token");
     removeLocalStorage("api_token");
   }
+}
+
+export function isLocalAiAccessAvailable(): boolean {
+  if (typeof window === "undefined" || !isLocalHttpLocation(window.location)) return false;
+  return isLocalApiBase(getBaseUrl());
+}
+
+export function getLocalAiAccessUrl(): string {
+  if (!isLocalAiAccessAvailable()) return "";
+  const url = new URL("/today", window.location.origin);
+  url.searchParams.set(LOCAL_AI_ACCESS_QUERY_PARAM, LOCAL_AI_TEST_TOKEN);
+  return url.toString();
 }
 
 // ── Articles ────────────────────────────────────────
@@ -1151,10 +1188,44 @@ export function exportJson(ids: string[]) {
   return httpRequest<string>("/export/json", { method: "POST", body: JSON.stringify({ ids }) });
 }
 
-export async function downloadMarkdownZip(ids: string[], filename = "daily-summary-markdown.zip") {
-  const res = await fetch(buildUrl("/export/zip"), {
+export async function downloadJson(ids: string[], filename = "daily-summary.json") {
+  const baseUrl = getBaseUrl();
+  if (!baseUrl) {
+    throw new ApiError(
+      0,
+      "Desktop client server URL is not configured",
+      "桌面端尚未配置服务器地址，请到「设置 -> 连接」填写 http://服务器IP:8080/api 并保存。"
+    );
+  }
+  const res = await fetch(baseUrl + "/export/json/download", {
     method: "POST",
-    headers: authHeaders(),
+    headers: authHeaders(undefined, true, baseUrl),
+    body: JSON.stringify({ ids }),
+  });
+  if (!res.ok) {
+    throw await parseErrorResponse(res);
+  }
+  const blob = await res.blob();
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = filename;
+  anchor.click();
+  URL.revokeObjectURL(url);
+}
+
+export async function downloadMarkdownZip(ids: string[], filename = "daily-summary-markdown.zip") {
+  const baseUrl = getBaseUrl();
+  if (!baseUrl) {
+    throw new ApiError(
+      0,
+      "Desktop client server URL is not configured",
+      "桌面端尚未配置服务器地址，请到「设置 -> 连接」填写 http://服务器IP:8080/api 并保存。"
+    );
+  }
+  const res = await fetch(`${baseUrl}/export/zip`, {
+    method: "POST",
+    headers: authHeaders(undefined, true, baseUrl),
     body: JSON.stringify({ ids }),
   });
   if (!res.ok) {
@@ -1175,6 +1246,13 @@ export interface BackupMeta {
   name: string;
   size_bytes: number;
   created_at: string;
+  kind?: "manual" | "automated" | "pre_upgrade" | "pre_restore" | "unknown" | string;
+  protected?: boolean;
+}
+
+export interface RestoreBackupResult {
+  restored_from: string;
+  pre_restore_backup: BackupMeta;
 }
 
 export function listBackups() {
@@ -1189,9 +1267,24 @@ export function deleteBackup(name: string) {
   return httpRequest<void>(`/backups/${encodeURIComponent(name)}`, { method: "DELETE" });
 }
 
+export function restoreBackup(name: string) {
+  return httpRequest<RestoreBackupResult>(`/backups/${encodeURIComponent(name)}/restore`, {
+    method: "POST",
+    body: "{}",
+  });
+}
+
 export async function downloadBackup(name: string) {
-  const res = await fetch(buildUrl(`/backups/${encodeURIComponent(name)}/download`), {
-    headers: authHeaders(undefined, false),
+  const baseUrl = getBaseUrl();
+  if (!baseUrl) {
+    throw new ApiError(
+      0,
+      "Desktop client server URL is not configured",
+      "桌面端尚未配置服务器地址，请到「设置 -> 连接」填写 http://服务器IP:8080/api 并保存。"
+    );
+  }
+  const res = await fetch(`${baseUrl}/backups/${encodeURIComponent(name)}/download`, {
+    headers: authHeaders(undefined, false, baseUrl),
   });
   if (!res.ok) {
     throw await parseErrorResponse(res);

@@ -70,7 +70,6 @@ const statusOptions = Object.entries(statusLabels) as Array<[KnowledgeCardStatus
 const statusFilterOptions: Array<[KnowledgeStatusFilter, string]> = [["all", "全部"], ...statusOptions];
 const knowledgeQueryStaleTime = 30_000;
 const knowledgePageSize = 24;
-const workflowHelpDismissedKey = "knowledge-workflow-help-dismissed";
 const sortOptions: Array<[KnowledgeSort, string]> = [
   ["updated", "最近更新"],
   ["created", "最近创建"],
@@ -78,7 +77,7 @@ const sortOptions: Array<[KnowledgeSort, string]> = [
   ["review", "优先复习"],
 ];
 const qualityOptions: Array<[api.KnowledgeCardQuality, string, string]> = [
-  ["missing_source", "缺少来源", "需要补回来源定位和连续原文片段"],
+  ["missing_source", "未关联来源记录", "筛选没有记录或复盘定位的知识条目；手动来源片段和空来源都可以保留"],
   ["missing_project", "未归入空间", "还没有主题或项目归属"],
   ["missing_tags", "缺少标签", "还没有可检索标签"],
   ["short_content", "内容过短", "正文少于 24 个字符"],
@@ -110,7 +109,7 @@ type KnowledgeQuality = "" | api.KnowledgeCardQuality;
 type KnowledgeStatusFilter = "all" | KnowledgeCardStatus;
 type KnowledgeDensity = "comfortable" | "compact";
 type KnowledgeBatchMode = "" | "tag" | "remove_tag" | "add_project" | "move_project" | "remove_project";
-type KnowledgeSourceState = "empty" | "locator" | "loading" | "ready" | "verified" | "mismatch" | "error";
+type KnowledgeSourceState = "empty" | "manual" | "incomplete" | "locator" | "loading" | "ready" | "verified" | "mismatch" | "error";
 
 function toDraft(card: KnowledgeCard): DraftState {
   return {
@@ -158,8 +157,32 @@ function hasKnowledgeLocator(value: { source_article_id?: string; source_review_
     .some((item) => !!item?.trim());
 }
 
+function hasKnowledgeSourceData(value: { source_article_id?: string; source_review_id?: string; source_date?: string; source_excerpt?: string }) {
+  return [value.source_article_id, value.source_review_id, value.source_date, value.source_excerpt]
+    .some((item) => !!item?.trim());
+}
+
+function hasKnowledgeExcerpt(value: { source_excerpt?: string }) {
+  return !!value.source_excerpt?.trim();
+}
+
+function hasManualKnowledgeSource(value: { source_article_id?: string; source_review_id?: string; source_date?: string; source_excerpt?: string }) {
+  return !hasKnowledgeLocator(value) && hasKnowledgeExcerpt(value);
+}
+
 function hasKnowledgeEvidence(value: { source_article_id?: string; source_review_id?: string; source_date?: string; source_excerpt?: string }) {
   return hasKnowledgeLocator(value) && !!value.source_excerpt?.trim();
+}
+
+function knowledgeSourceLabel(value: { source_article_id?: string; source_review_id?: string; source_date?: string; source_excerpt?: string }) {
+  if (hasKnowledgeEvidence(value)) return "已附来源片段";
+  if (hasManualKnowledgeSource(value)) return "已填写片段";
+  return hasKnowledgeSourceData(value) ? "来源待完善" : "无来源";
+}
+
+function knowledgeSourceTone(value: { source_article_id?: string; source_review_id?: string; source_date?: string; source_excerpt?: string }) {
+  if (hasKnowledgeEvidence(value)) return "ui-status-success";
+  return hasKnowledgeSourceData(value) ? "ui-status-quote" : "ui-status-muted";
 }
 
 function sourceContent(article: Article | null, review: api.Review | null) {
@@ -187,7 +210,7 @@ function getKnowledgeSourceState({
   loading: boolean;
   error: string;
 }): KnowledgeSourceState {
-  if (!hasKnowledgeLocator(value)) return "empty";
+  if (!hasKnowledgeLocator(value)) return hasKnowledgeExcerpt(value) ? "manual" : "empty";
   if (loading) return "loading";
   if (error) return "error";
   if (!article && !review) return "locator";
@@ -198,7 +221,11 @@ function getKnowledgeSourceState({
 function sourceVerificationMessage(state: KnowledgeSourceState) {
   switch (state) {
     case "empty":
-      return "确认沉淀前请先填写来源日期或来源 ID，并粘贴能直接支撑正文的连续原文片段。";
+      return "这条知识条目没有来源，可以直接确认；如需关联来源，请填写定位并粘贴连续原文片段。";
+    case "manual":
+      return "已填写手动来源片段；不关联记录也可以直接确认，片段会随知识条目保留。";
+    case "incomplete":
+      return "关联来源还不完整；请补齐定位和连续原文片段，或清空关联字段。手动来源只保留片段即可。";
     case "locator":
       return "来源已定位，但尚未成功加载。请点击“定位原文”并确认来源可读取后再沉淀。";
     case "loading":
@@ -212,6 +239,11 @@ function sourceVerificationMessage(state: KnowledgeSourceState) {
     case "verified":
       return "";
   }
+}
+
+function canConfirmKnowledgeSource(value: { source_article_id?: string; source_review_id?: string; source_date?: string; source_excerpt?: string }, state?: KnowledgeSourceState | null) {
+  if (!hasKnowledgeSourceData(value) || hasManualKnowledgeSource(value)) return true;
+  return state === "verified" || (hasKnowledgeEvidence(value) && state === undefined);
 }
 
 function hasDraftInput(draft: DraftState) {
@@ -319,6 +351,8 @@ export default function KnowledgePage({
   const [tagInput, setTagInput] = useState("");
   const [projectFilter, setProjectFilter] = useState(initialProject || "");
   const [projectCounts, setProjectCounts] = useState<api.KnowledgeProject[]>([]);
+  const [spaceFilterQuery, setSpaceFilterQuery] = useState("");
+  const [spacesExpanded, setSpacesExpanded] = useState(false);
   const [spaceArticles, setSpaceArticles] = useState<api.ArticleSummary[]>([]);
   const [spaceArticlesLoading, setSpaceArticlesLoading] = useState(false);
   const [spaceArticlesError, setSpaceArticlesError] = useState("");
@@ -351,7 +385,6 @@ export default function KnowledgePage({
   const [sourceError, setSourceError] = useState("");
   const [sourceDetailOpen, setSourceDetailOpen] = useState(false);
   const [organizeOpen, setOrganizeOpen] = useState(false);
-  const [workflowHelpOpen, setWorkflowHelpOpen] = useState(() => readLocalStorage(workflowHelpDismissedKey) !== "1");
   const [recoverableDraft, setRecoverableDraft] = useState<StoredKnowledgeDraft | null>(null);
   const [draftRelatedIds, setDraftRelatedIds] = useState<string[]>([]);
   const [relatedQuery, setRelatedQuery] = useState("");
@@ -390,11 +423,6 @@ export default function KnowledgePage({
     setNotice(message);
     setNoticeTone(tone);
   };
-  const dismissWorkflowHelp = () => {
-    setWorkflowHelpOpen(false);
-    writeLocalStorage(workflowHelpDismissedKey, "1");
-  };
-  const showWorkflowHelp = () => setWorkflowHelpOpen(true);
 
   const persistCurrentDraft = () => {
     if (!hasDraftInput(draft)) return false;
@@ -555,6 +583,15 @@ export default function KnowledgePage({
     () => projectCounts.find((space) => space.name.toLocaleLowerCase() === projectFilter.toLocaleLowerCase()),
     [projectCounts, projectFilter]
   );
+  const normalizedSpaceFilterQuery = spaceFilterQuery.trim().toLocaleLowerCase();
+  const filteredProjectCounts = useMemo(() => {
+    const matching = projectCounts.filter((space) => !normalizedSpaceFilterQuery || space.name.toLocaleLowerCase().includes(normalizedSpaceFilterQuery));
+    if (!projectFilter) return matching;
+    const selected = projectCounts.find((space) => space.name.toLocaleLowerCase() === projectFilter.toLocaleLowerCase());
+    if (!selected || matching.some((space) => space.name.toLocaleLowerCase() === selected.name.toLocaleLowerCase())) return matching;
+    return [selected, ...matching];
+  }, [normalizedSpaceFilterQuery, projectCounts, projectFilter]);
+  const visibleProjectCounts = spacesExpanded || normalizedSpaceFilterQuery ? filteredProjectCounts : filteredProjectCounts.slice(0, 6);
   const counts = summary;
 
   // 本地临时副本是路由离开、切后台和自动保存竞态下的恢复网；服务端仍是唯一权威数据源。
@@ -1545,7 +1582,7 @@ export default function KnowledgePage({
             error: loadedSource ? "" : "来源加载失败",
           });
         }
-        if (selectedSourceState !== "verified") {
+        if (!canConfirmKnowledgeSource(draft, selectedSourceState)) {
           const message = sourceVerificationMessage(selectedSourceState);
           reportValidation({ source: message });
           toast.error(message);
@@ -1553,14 +1590,14 @@ export default function KnowledgePage({
         }
       }
       const missingSource = ids.filter((id) => {
-        if (id === selectedId) return selectedSourceState !== "verified";
+        if (id === selectedId) return !canConfirmKnowledgeSource(draft, selectedSourceState);
         const card = cards.find((item) => item.id === id);
-        return !card || !hasKnowledgeEvidence(card);
+        return !card || !canConfirmKnowledgeSource(card);
       });
       if (missingSource.length > 0) {
         const message = missingSource.length === 1
-          ? "确认沉淀前请补充来源定位和连续原文片段。"
-          : `有 ${missingSource.length} 个知识条目缺少来源，请补齐后再批量确认。`;
+          ? "关联来源还不完整；请补齐定位和连续原文片段，或清空关联字段后确认。手动来源只保留片段即可。"
+          : `有 ${missingSource.length} 个知识条目的关联来源还不完整，请补齐或清空关联字段后再确认。`;
         if (missingSource.length === 1 && missingSource[0] === selectedId) reportValidation({ source: message });
         else showNotice(message, "bad");
         toast.error(message);
@@ -1838,7 +1875,9 @@ export default function KnowledgePage({
     sourceReview,
   ]);
   const sourceStateLabel: Record<KnowledgeSourceState, string> = {
-    empty: "未提供来源",
+    empty: "未填写（可选）",
+    manual: "已填写片段",
+    incomplete: "来源待完善",
     locator: "已定位来源",
     loading: "正在加载",
     ready: "待补证据片段",
@@ -1899,7 +1938,13 @@ export default function KnowledgePage({
         statusLabels[draft.status],
         parsedTags.length ? `${parsedTags.length} 个标签` : "无标签",
         parsedProjects.length ? `${parsedProjects.length} 个空间` : "未归入空间",
-        sourceState === "verified" ? "已核验来源" : hasKnowledgeLocator(draft) ? "已定位来源" : "未提供来源",
+        sourceState === "verified"
+          ? "已核验来源"
+          : sourceState === "manual"
+            ? "已填写来源片段"
+            : hasKnowledgeSourceData(draft)
+              ? sourceState === "incomplete" ? "来源待完善" : "已定位来源"
+              : "无来源（可选）",
       ].join(" · ")
     : "类型、标签、空间和关联可稍后补充";
   const hasSearchFilters = Boolean(activeQuery || typeFilter || usageFilter || qualityFilter || tagFilter || projectFilter);
@@ -1913,7 +1958,7 @@ export default function KnowledgePage({
       : activeStatus === "draft"
         ? "从每日记录或周/月复盘提取草稿后，在这里逐条确认。"
         : activeStatus === "all"
-          ? "先创建一个知识条目，标题和正文写好后再补充来源。"
+          ? "先创建一个知识条目，标题和正文写好后即可确认；如需回溯依据，再补充来源。"
           : "当前状态还没有知识条目，可以回到全部知识条目继续整理。";
   const emptyStateAction = totalCards > 0 && page > 1
     ? { label: "回到上一页", onClick: () => changePage(page - 1) }
@@ -2077,9 +2122,21 @@ export default function KnowledgePage({
                     <FolderCog size={13} /> 空间管理
                   </button>
                 </div>
+                {projectCounts.length > 6 && (
+                  <label className="relative mb-2 block">
+                    <Search className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-[var(--ui-text-subtle)]" size={15} />
+                    <input
+                      value={spaceFilterQuery}
+                      onChange={(event) => setSpaceFilterQuery(event.target.value)}
+                      placeholder="筛选空间"
+                      aria-label="筛选空间"
+                      className="ui-field h-11 min-h-11 pl-9 text-xs"
+                    />
+                  </label>
+                )}
                 <div className="flex flex-wrap gap-2">
                   <FilterButton active={!projectFilter} onClick={() => changeProject("")}>全部空间</FilterButton>
-                  {projectCounts.map(({ name, count, article_count = 0 }) => (
+                  {visibleProjectCounts.map(({ name, count, article_count = 0 }) => (
                     <button
                       key={name}
                       type="button"
@@ -2092,14 +2149,25 @@ export default function KnowledgePage({
                       <Folder size={12} /> {name} <span className="opacity-60">{count} 个条目{article_count > 0 ? ` · ${article_count} 篇记录` : ""}</span>
                     </button>
                   ))}
+                  {projectCounts.length > 6 && !normalizedSpaceFilterQuery && (
+                    <button
+                      type="button"
+                      onClick={() => setSpacesExpanded((expanded) => !expanded)}
+                      aria-expanded={spacesExpanded}
+                      className="ui-button-ghost h-11 min-h-11 gap-1 px-2 text-[11px] md:h-8 md:min-h-8"
+                    >
+                      {spacesExpanded ? "收起空间" : `显示全部 ${projectCounts.length} 个空间`}
+                      <ChevronDown size={13} className={spacesExpanded ? "rotate-180" : ""} />
+                    </button>
+                  )}
+                  {projectCounts.length > 6 && normalizedSpaceFilterQuery && visibleProjectCounts.length === 0 && (
+                    <span className="w-full px-1 text-xs text-[var(--ui-text-subtle)]">没有匹配的空间</span>
+                  )}
                 </div>
               </div>
               <div>
                 <div className="ui-section-kicker mb-2">类型</div>
-                <div className="grid grid-cols-2 gap-2">
-                  <FilterButton active={!typeFilter} onClick={() => changeType("")}>全部类型</FilterButton>
-                  {typeOptions.map(([value, label]) => <FilterButton key={value} active={typeFilter === value} onClick={() => changeType(value)}>{label}</FilterButton>)}
-                </div>
+                <TypeFilterSelect value={typeFilter} onChange={changeType} />
               </div>
               <div>
                 <div className="ui-section-kicker mb-2">使用情况</div>
@@ -2140,22 +2208,7 @@ export default function KnowledgePage({
                   <span>标签</span>
                   {tagFilter && <button type="button" onClick={() => changeTag("")} className="ui-button-ghost h-11 min-h-11 px-1 text-[11px] md:h-8 md:min-h-8">清除</button>}
                 </div>
-                <div className="flex max-h-28 flex-wrap gap-2 overflow-y-auto">
-                  {tagCounts.map(({ tag, count }) => (
-                    <button
-                      key={tag}
-                      type="button"
-                      onClick={() => changeTag(tagFilter === tag ? "" : tag)}
-                      className={[
-                        "ui-filter-button min-h-11 gap-1 px-2.5 md:min-h-8",
-                        tagFilter === tag ? "ui-filter-button-active" : "",
-                      ].join(" ")}
-                    >
-                      #{tag} <span className="opacity-60">{count}</span>
-                    </button>
-                  ))}
-                  {tagCounts.length === 0 && <span className="text-xs text-[var(--ui-text-subtle)]">暂无标签</span>}
-                </div>
+                <TagFilterPicker tags={tagCounts} selectedTag={tagFilter} onChange={changeTag} inputId="knowledge-mobile-tag-filter" compact />
               </div>
             </div>
           </div>
@@ -2356,6 +2409,18 @@ export default function KnowledgePage({
                 <FolderCog size={13} /> 空间管理
               </button>
             </div>
+            {projectCounts.length > 6 && (
+              <label className="relative mb-2 block">
+                <Search className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-[var(--ui-text-subtle)]" size={13} />
+                <input
+                  value={spaceFilterQuery}
+                  onChange={(event) => setSpaceFilterQuery(event.target.value)}
+                  placeholder="筛选空间"
+                  aria-label="筛选空间"
+                  className="ui-field h-8 min-h-8 pl-8 text-[11px]"
+                />
+              </label>
+            )}
             <div className="flex flex-col gap-0.5">
               <button
                 type="button"
@@ -2371,7 +2436,7 @@ export default function KnowledgePage({
                 </span>
                 <span className={`shrink-0 rounded-full px-1.5 py-1 text-[11px] font-semibold leading-none ${!projectFilter ? "ui-status-accent" : "ui-status-muted"}`}>{projectFilter ? "全库" : String(summary.total) + " 条"}</span>
               </button>
-              {projectCounts.map(({ name, count, article_count = 0, kind }) => (
+              {visibleProjectCounts.map(({ name, count, article_count = 0, kind }) => (
                 <button
                   key={name}
                   type="button"
@@ -2396,6 +2461,20 @@ export default function KnowledgePage({
                   </span>
                 </button>
               ))}
+              {projectCounts.length > 6 && !normalizedSpaceFilterQuery && (
+                <button
+                  type="button"
+                  onClick={() => setSpacesExpanded((expanded) => !expanded)}
+                  aria-expanded={spacesExpanded}
+                  className="ui-button-ghost mt-1 h-8 min-h-8 w-full justify-between px-2 text-[11px]"
+                >
+                  {spacesExpanded ? "收起空间" : `显示全部 ${projectCounts.length} 个空间`}
+                  <ChevronDown size={13} className={spacesExpanded ? "rotate-180" : ""} />
+                </button>
+              )}
+              {projectCounts.length > 6 && normalizedSpaceFilterQuery && visibleProjectCounts.length === 0 && (
+                <p className="px-2 py-1 text-xs text-[var(--ui-text-subtle)]">没有匹配的空间</p>
+              )}
               {projectCounts.length === 0 && (
                 <p className="px-2 py-1 text-xs text-[var(--ui-text-subtle)]">暂无空间，创建一个</p>
               )}
@@ -2437,12 +2516,7 @@ export default function KnowledgePage({
                 </div>
                 <div>
                   <div className="ui-section-kicker mb-2">类型</div>
-                  <div className="grid grid-cols-2 gap-1.5 xl:grid-cols-1">
-                    <FilterButton active={!typeFilter} onClick={() => changeType("")}>全部类型</FilterButton>
-                    {typeOptions.map(([value, label]) => (
-                      <FilterButton key={value} active={typeFilter === value} onClick={() => changeType(value)}>{label}</FilterButton>
-                    ))}
-                  </div>
+                  <TypeFilterSelect value={typeFilter} onChange={changeType} compact />
                 </div>
                 <div>
                   <div className="ui-section-kicker mb-2">使用</div>
@@ -2477,55 +2551,12 @@ export default function KnowledgePage({
                       <button type="button" onClick={() => changeTag("")} className="ui-button-ghost h-6 px-1 text-[11px]">清除</button>
                     )}
                   </div>
-                  {tagCounts.length === 0 ? (
-                    <p className="text-xs text-[var(--ui-text-subtle)]">暂无标签</p>
-                  ) : (
-                    <div className="flex max-h-44 flex-wrap gap-1.5 overflow-y-auto">
-                      {tagCounts.map(({ tag, count }) => (
-                        <button
-                          key={tag}
-                          type="button"
-                          onClick={() => changeTag(tagFilter === tag ? "" : tag)}
-                          className={[
-                            "ui-filter-button min-h-11 gap-1 px-2 py-1 md:min-h-8",
-                            tagFilter === tag ? "ui-filter-button-active" : "",
-                          ].join(" ")}
-                        >
-                          #{tag} <span className="opacity-60">{count}</span>
-                        </button>
-                      ))}
-                    </div>
-                  )}
+                  <TagFilterPicker tags={tagCounts} selectedTag={tagFilter} onChange={changeTag} inputId="knowledge-desktop-tag-filter" />
                 </div>
               </div>
             )}
           </div>
 
-          {workflowHelpOpen ? (
-            <div id="knowledge-workflow-help" className="ui-panel-muted mt-4 p-3">
-              <div className="flex items-center justify-between gap-2">
-                <div className="flex items-center gap-2 text-xs font-semibold text-[var(--ui-text)]">
-                  <CheckCircle2 size={14} className="text-[var(--ui-accent-text)]" /> 工作流
-                </div>
-                <button type="button" onClick={dismissWorkflowHelp} className="ui-icon-button h-7 w-7" title="不再显示工作流提示" aria-label="不再显示工作流提示">
-                  <X size={14} />
-                </button>
-              </div>
-              <div className="mt-2.5 space-y-2 text-xs leading-5 text-[var(--ui-text-muted)]">
-                <div className="flex items-start gap-2"><span className="ui-status-muted flex h-5 w-5 shrink-0 items-center justify-center rounded-md font-mono text-[10px]">1</span><span>从记录、复盘或文档生成草稿</span></div>
-                <div className="flex items-start gap-2"><span className="ui-status-muted flex h-5 w-5 shrink-0 items-center justify-center rounded-md font-mono text-[10px]">2</span><span>对照来源片段确认</span></div>
-                <div className="flex items-start gap-2"><span className="ui-status-muted flex h-5 w-5 shrink-0 items-center justify-center rounded-md font-mono text-[10px]">3</span><span>沉淀后用于复习检索</span></div>
-              </div>
-              <div className="ui-soft-divider mt-3 border-t pt-3 text-[11px] leading-5 text-[var(--ui-text-muted)]">
-                <div className="flex items-center gap-1.5 font-semibold text-[var(--ui-accent-text)]"><ShieldCheck size={13} /> 来源约束</div>
-                <p className="mt-1">没有来源片段的内容，不建议确认沉淀。</p>
-              </div>
-            </div>
-          ) : (
-            <button type="button" onClick={showWorkflowHelp} className="ui-button-ghost mt-3 h-8 w-full justify-start px-2 text-xs" aria-expanded={false} aria-controls="knowledge-workflow-help">
-              <CheckCircle2 size={13} /> 显示工作流提示
-            </button>
-          )}
           </div>
           <div className="ui-soft-divider mt-3 shrink-0 border-t pt-3">
             <div className="grid grid-cols-[minmax(0,1fr)_auto] gap-2">
@@ -2703,7 +2734,7 @@ export default function KnowledgePage({
               </div>
             )}
             {selectedIds.length > 0 && (
-              <div role="toolbar" aria-label="知识条目批量操作" className="ui-status-accent ui-mobile-fixed-toolbar mt-1 flex flex-col gap-2 rounded-xl px-2.5 py-2 shadow-md max-xl:fixed max-xl:inset-x-3 max-xl:z-30 max-xl:mx-auto max-xl:max-w-xl xl:shadow-none">
+              <div role="toolbar" aria-label="知识条目批量操作" className="ui-status-accent ui-mobile-fixed-toolbar mt-3 flex flex-col gap-2 rounded-xl px-2.5 py-2 shadow-md max-xl:sticky max-xl:z-30 max-xl:mx-0 max-xl:max-w-none xl:mt-1 xl:shadow-none">
                 <div className="flex flex-col gap-2 xl:flex-row xl:items-center xl:justify-between">
                   <span className="text-xs font-semibold text-[var(--ui-accent-text)]">
                     已选 {selectedIds.length} 个
@@ -2864,7 +2895,7 @@ export default function KnowledgePage({
                       page: page > 1 ? page : undefined,
                       view: "detail",
                     }}
-                    aria-label={`${card.title}，${statusLabels[card.status]}，${hasKnowledgeEvidence(card) ? "已附来源片段" : "待补来源"}`}
+                    aria-label={`${card.title}，${statusLabels[card.status]}，${knowledgeSourceLabel(card)}${hasKnowledgeSourceData(card) ? "" : "（可选）"}`}
                     onClick={(event) => {
                       if (!onOpenCard || event.defaultPrevented || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
                       event.preventDefault();
@@ -2896,11 +2927,11 @@ export default function KnowledgePage({
                       <span
                         className={[
                           "rounded-md px-1.5 py-0.5 text-[10px] font-medium",
-                          hasKnowledgeEvidence(card) ? "ui-status-success" : "ui-status-warning",
+                          knowledgeSourceTone(card),
                         ].join(" ")}
-                        data-source-state={hasKnowledgeEvidence(card) ? "attached" : "missing"}
+                        data-source-state={hasKnowledgeEvidence(card) ? "attached" : hasManualKnowledgeSource(card) ? "manual" : hasKnowledgeSourceData(card) ? "incomplete" : "empty"}
                       >
-                        {hasKnowledgeEvidence(card) ? "已附来源片段" : "待补来源"}
+                        {knowledgeSourceLabel(card)}
                       </span>
                       {card.source_date && <span className="knowledge-source-line">{card.source_date} · {card.source_review_id ? "AI 复盘" : "每日记录"}</span>}
                       {card.usage_count ? `· 用过 ${card.usage_count} 次` : ""}
@@ -3006,7 +3037,11 @@ export default function KnowledgePage({
                 )}
               </div>
               <p className="mt-1 text-xs text-[var(--ui-text-subtle)]">
-                {draft.source_date ? `${draft.source_date} · ${currentSourceType}` : "来源用于回溯依据"}
+                {hasManualKnowledgeSource(draft)
+                  ? "手动来源片段"
+                  : hasKnowledgeSourceData(draft)
+                    ? `${draft.source_date || "已填写"} · ${currentSourceType}`
+                    : "来源可选"}
                 {selectedCard?.usage_count ? ` · 用过 ${selectedCard.usage_count} 次` : ""}
                 {selectedCard?.last_used_at ? ` · 最近使用 ${selectedCard.last_used_at}` : ""}
               </p>
@@ -3113,7 +3148,7 @@ export default function KnowledgePage({
             </div>
             <div>
               <div id="knowledge-card-content-label" className="knowledge-field-label mb-1.5">可复习正文</div>
-              <div id="knowledge-card-content" className="knowledge-body-editor ui-editor-surface overflow-hidden" role="group" tabIndex={-1} aria-labelledby="knowledge-card-content-label">
+              <div id="knowledge-card-content" className="knowledge-body-editor ui-editor-surface ui-code-editor w-full min-w-0 overflow-hidden" role="group" tabIndex={-1} aria-labelledby="knowledge-card-content-label">
                 <CodeMirror
                   value={draft.content}
                   onChange={(value) => updateDraft({ content: value })}
@@ -3173,13 +3208,16 @@ export default function KnowledgePage({
                       <div className="min-w-0">
                         <div className="ui-section-kicker mb-1.5">状态</div>
                         <div className="ui-status-accent inline-flex min-h-8 items-center rounded-lg px-3 text-xs font-semibold">待确认</div>
-                        <p className="mt-1.5 text-[11px] leading-4 text-[var(--ui-text-subtle)]">新知识条目会先保存为草稿，补充来源后再确认沉淀。</p>
+                        <p className="mt-1.5 text-[11px] leading-4 text-[var(--ui-text-subtle)]">新知识条目会先保存为草稿；来源可选，填写后会在确认时核验。</p>
                       </div>
                     )}
                   </div>
               <div>
-              <label htmlFor="knowledge-card-tags" className="ui-section-kicker mb-1.5 block">标签</label>
-              <div className="ui-token-input">
+              <div className="mb-1.5 flex items-center justify-between gap-2">
+                <label htmlFor="knowledge-card-tags" className="ui-section-kicker">标签</label>
+                {parsedTags.length > 0 && <span className="text-[11px] text-[var(--ui-text-subtle)]">已添加 {parsedTags.length} 个</span>}
+              </div>
+              <div className="ui-token-input max-h-32 overflow-y-auto pr-1">
                 {parsedTags.map((tag) => (
                   <button
                     key={tag}
@@ -3227,20 +3265,25 @@ export default function KnowledgePage({
               )}
                   </div>
               <div>
-              <div className="ui-section-kicker mb-1.5">空间（主题或项目）</div>
-              <div className="ui-token-input">
-                {parsedProjects.map((project) => (
-                  <button
-                    key={project}
-                    type="button"
-                    onClick={() => removeProject(project)}
-                    className="ui-chip border-[var(--ui-selected-border)] bg-[var(--ui-surface-selected)] text-[var(--ui-accent-text)] hover:bg-[var(--ui-surface-hover)]"
-                    title="点击移除空间"
-                    aria-label={`移除空间：${project}`}
-                  >
-                    <Folder size={12} /> {project} <X size={12} />
-                  </button>
-                ))}
+              <div className="mb-1.5 flex items-center justify-between gap-2">
+                <div className="ui-section-kicker">空间（主题或项目）</div>
+                {parsedProjects.length > 0 && <span className="text-[11px] text-[var(--ui-text-subtle)]">已添加 {parsedProjects.length} 个</span>}
+              </div>
+              <div className="ui-token-input items-start pr-1">
+                <div className="flex max-h-24 min-w-0 w-full flex-wrap content-start gap-1.5 overflow-y-auto">
+                  {parsedProjects.map((project) => (
+                    <button
+                      key={project}
+                      type="button"
+                      onClick={() => removeProject(project)}
+                      className="ui-chip border-[var(--ui-selected-border)] bg-[var(--ui-surface-selected)] text-[var(--ui-accent-text)] hover:bg-[var(--ui-surface-hover)]"
+                      title="点击移除空间"
+                      aria-label={`移除空间：${project}`}
+                    >
+                      <Folder size={12} /> {project} <X size={12} />
+                    </button>
+                  ))}
+                </div>
                 <SpaceAutocomplete
                   spaces={projectCounts}
                   value={projectInput}
@@ -3257,7 +3300,7 @@ export default function KnowledgePage({
                   placeholder="选择或输入空间"
                   ariaLabel="知识条目所属空间"
                   inputClassName="h-8 min-w-[120px] flex-1 border-0 bg-transparent px-1 pr-7 text-sm text-[var(--ui-text)] outline-hidden placeholder:text-[var(--ui-text-subtle)]"
-                  containerClassName="min-w-[140px] flex-1"
+                  containerClassName="basis-full min-w-0"
                   showIcon={false}
                 />
               </div>
@@ -3314,7 +3357,7 @@ export default function KnowledgePage({
             <div className="flex min-w-0 flex-col">
               <div className="knowledge-source-heading mb-2 flex items-center justify-between gap-2">
                 <div className="knowledge-field-label flex items-center gap-1.5">
-                  <ShieldCheck size={14} /> 核验来源
+                  <ShieldCheck size={14} className="text-[var(--ui-quote-text)]" /> 来源（可选）
                 </div>
                 <div className="flex shrink-0 items-center gap-2">
                   <span className="knowledge-source-state" data-state={sourceState}>
@@ -3327,7 +3370,7 @@ export default function KnowledgePage({
                       ref={sourceTriggerRef}
                       disabled={sourceLoading}
                       aria-label={`${sourceActionLabel}：${sourceReferenceLabel}`}
-                      className="ui-button-ghost h-11 min-h-11 gap-1 px-2 text-xs font-semibold text-[var(--ui-accent-text)] disabled:cursor-wait disabled:opacity-60 md:h-9 md:min-h-9 xl:hidden"
+                      className="ui-button-ghost h-11 min-h-11 gap-1 px-2 text-xs font-semibold text-[var(--ui-quote-text)] disabled:cursor-wait disabled:opacity-60 md:h-9 md:min-h-9 xl:hidden"
                     >
                       <ExternalLink size={12} /> {sourceActionLabel}
                     </button>
@@ -3338,12 +3381,20 @@ export default function KnowledgePage({
                 <div className="knowledge-source-titlebar ui-soft-divider flex items-center gap-2 border-b px-4 py-3" role="status" aria-live="polite">
                   <FileText size={13} className="shrink-0 text-[var(--ui-text-subtle)]" />
                   <div className="min-w-0 flex-1 truncate text-xs font-medium text-[var(--ui-text-muted)]">
-                    {sourceLoading ? "加载来源..." : sourceError ? "来源暂时无法加载" : sourceArticle?.title || sourceReview?.title || (draft.source_date ? `${draft.source_date} · ${currentSourceType}` : "暂无来源")}
+                    {sourceLoading
+                      ? "加载来源..."
+                      : sourceError
+                        ? "来源暂时无法加载"
+                        : sourceArticle?.title
+                          || sourceReview?.title
+                          || (hasManualKnowledgeSource(draft)
+                            ? "手动来源片段"
+                            : draft.source_date ? `${draft.source_date} · ${currentSourceType}` : "暂无来源")}
                   </div>
                 </div>
                 {sourceError && (
                   <div className="ui-alert-warn m-3 mb-0 flex items-start justify-between gap-3 text-xs leading-5" role="alert">
-                    <span className="min-w-0">{sourceError}。仍可补充来源片段，或稍后重试加载原文。</span>
+                    <span className="min-w-0">{sourceError}。如果这是一条手动导入且不需要来源，可以清空来源字段后确认。</span>
                     <span className="flex shrink-0 items-center gap-1">
                       {sourceConnectionError && (
                         <button
@@ -3366,19 +3417,21 @@ export default function KnowledgePage({
                   </p>
                 )}
                 <div className="knowledge-source-excerpt px-4 pt-4">
-                  <label htmlFor="knowledge-source-excerpt" className="knowledge-field-label mb-1.5 block">证据片段</label>
-                  <p id="knowledge-source-excerpt-help" className="mb-1.5 text-[11px] leading-4 text-[var(--ui-text-subtle)]">粘贴能直接支撑正文的连续片段，方便以后复核。</p>
+                  <label htmlFor="knowledge-source-excerpt" className="knowledge-field-label mb-1.5 block">证据片段（可选）</label>
+                  <p id="knowledge-source-excerpt-help" className="mb-1.5 text-[11px] leading-4 text-[var(--ui-text-subtle)]">有来源时，粘贴能直接支撑正文的连续片段，方便以后复核；手动导入可以留空。</p>
                   <p className={[
                     "mb-2 text-[11px] leading-4",
                     sourceState === "verified" ? "text-[var(--ui-success-text)]" : sourceState === "mismatch" || sourceState === "error" ? "text-[var(--ui-danger-text)]" : "text-[var(--ui-text-subtle)]",
                   ].join(" ")} role="status" aria-live="polite">
-                    {sourceState === "empty" && "先提供日期或来源 ID，系统才能读取原文。"}
+                    {sourceState === "empty" && "未填写来源；手动导入的知识条目可以直接确认。"}
+                    {sourceState === "manual" && "已填写手动来源片段；不关联记录也可以直接确认。"}
+                    {sourceState === "incomplete" && "关联来源还不完整；请补齐定位和连续片段，或清空关联字段。"}
                     {sourceState === "locator" && "已记录来源定位；打开原文后再粘贴可匹配的连续片段。"}
                     {sourceState === "loading" && "正在读取来源，请稍候。"}
                     {sourceState === "ready" && "原文已读取；还需要一段能直接支撑正文的连续片段。"}
                     {sourceState === "verified" && "片段已在当前原文中找到，可以进入确认沉淀。"}
                     {sourceState === "mismatch" && "片段未在当前原文中找到，请从原文重新复制，避免把推断写成证据。"}
-                    {sourceState === "error" && "来源读取失败；修复连接或重试成功后，才能完成核验。"}
+                    {sourceState === "error" && "来源读取失败；可以修复连接后重试，也可以清空来源字段。"}
                   </p>
                   <textarea
                     id="knowledge-source-excerpt"
@@ -3387,12 +3440,12 @@ export default function KnowledgePage({
                     aria-describedby={["knowledge-source-excerpt-help", fieldErrors.source ? validationErrorIds.source : ""].filter(Boolean).join(" ")}
                     value={draft.source_excerpt}
                     onChange={(e) => updateDraft({ source_excerpt: e.target.value })}
-                    placeholder="粘贴来源片段"
+                    placeholder="有来源时粘贴连续原文片段"
                     className="min-h-[120px] w-full resize-none rounded-sm border-0 bg-transparent px-0 py-1 text-xs leading-5 text-[var(--ui-text)] outline-none placeholder:text-[var(--ui-text-subtle)] focus-visible:ring-2 focus-visible:ring-[var(--ui-focus)]/40"
                   />
                 </div>
-                <div className="ui-soft-divider grid gap-2 border-t p-3 pt-2">
-                  <label className="ui-section-kicker" htmlFor="knowledge-source-date">来源日期</label>
+                <div className="grid gap-2 p-3 pt-3">
+                  <label className="ui-section-kicker" htmlFor="knowledge-source-date">来源日期（可选）</label>
                   <input
                     id="knowledge-source-date"
                     type="date"
@@ -3402,14 +3455,14 @@ export default function KnowledgePage({
                     aria-describedby={["knowledge-source-date-help", fieldErrors.source ? validationErrorIds.source : ""].filter(Boolean).join(" ")}
                     className="ui-field h-11 min-h-11 text-xs"
                   />
-                  <p id="knowledge-source-date-help" className="text-[11px] leading-4 text-[var(--ui-text-subtle)]">可填写原文日期，格式为 YYYY-MM-DD。</p>
-                  <label className="ui-section-kicker" htmlFor="knowledge-source-id">来源 ID（只读）</label>
-                  <p id="knowledge-source-id-help" className="text-[11px] leading-4 text-[var(--ui-text-subtle)]">由来源记录自动带入，不能手动编辑。</p>
+                  <p id="knowledge-source-date-help" className="text-[11px] leading-4 text-[var(--ui-text-subtle)]">有来源时可填写原文日期，格式为 YYYY-MM-DD。</p>
+                  <label className="ui-section-kicker" htmlFor="knowledge-source-id">关联来源 ID（只读）</label>
+                  <p id="knowledge-source-id-help" className="text-[11px] leading-4 text-[var(--ui-text-subtle)]">有可读取来源时自动带入；手动来源片段可以留空。</p>
                   <input
                     id="knowledge-source-id"
                     value={draft.source_article_id || draft.source_review_id}
                     readOnly
-                    placeholder="保存后自动关联"
+                    placeholder="没有关联记录（可选）"
                     aria-describedby="knowledge-source-id-help"
                     className="ui-field h-11 min-h-11 text-xs text-[var(--ui-text-muted)]"
                   />
@@ -3496,7 +3549,7 @@ export default function KnowledgePage({
             )}
           </div>
 
-          <div className="ui-mobile-editor-actions relative z-20 mt-5 flex flex-wrap gap-2 rounded-xl border border-[var(--ui-border)] bg-[var(--ui-surface)]/95 p-2 shadow-md backdrop-blur-xl max-md:fixed max-md:inset-x-3 max-md:bottom-[calc(var(--ui-mobile-nav-total-height)+0.5rem)] max-md:mx-auto max-md:max-w-xl xl:hidden">
+          <div className="ui-mobile-editor-actions relative z-20 mt-5 flex flex-wrap gap-2 rounded-xl border p-2 xl:hidden">
             <div className="flex min-h-8 w-full items-center justify-between gap-2 px-1 text-[11px]" role="status" aria-live="polite">
               <span className={saveState === "error" ? "font-semibold text-[var(--ui-danger-text)]" : dirty ? "text-[var(--ui-warning-text)]" : "text-[var(--ui-text-subtle)]"}>
                 {mobileSaveLabel}
@@ -3686,6 +3739,105 @@ function FilterButton({ active, onClick, children }: { active: boolean; onClick:
     >
       {children}
     </button>
+  );
+}
+
+function TypeFilterSelect({ value, onChange, compact = false }: { value: string; onChange: (value: string) => void; compact?: boolean }) {
+  return (
+    <Select value={value || "all"} onValueChange={(nextValue) => onChange(nextValue === "all" ? "" : nextValue)}>
+      <SelectTrigger
+        className={compact ? "h-9 min-h-9 w-full rounded-lg px-2 text-xs" : "h-11 min-h-11 w-full rounded-xl px-3 text-xs md:h-9 md:min-h-9"}
+        aria-label="按类型筛选"
+      >
+        <SelectValue placeholder="全部类型" />
+      </SelectTrigger>
+      <SelectContent align="start" className="min-w-[160px]">
+        <SelectItem value="all" className="justify-start px-2 pr-8 text-xs">全部类型</SelectItem>
+        {typeOptions.map(([type, label]) => (
+          <SelectItem key={type} value={type} className="justify-start px-2 pr-8 text-xs">{label}</SelectItem>
+        ))}
+      </SelectContent>
+    </Select>
+  );
+}
+
+function TagFilterPicker({
+  tags,
+  selectedTag,
+  onChange,
+  inputId,
+  compact = false,
+}: {
+  tags: api.KnowledgeTagCount[];
+  selectedTag: string;
+  onChange: (tag: string) => void;
+  inputId: string;
+  compact?: boolean;
+}) {
+  const [query, setQuery] = useState("");
+  const [showAll, setShowAll] = useState(false);
+  const normalizedQuery = query.trim().toLocaleLowerCase();
+  const limit = compact ? 10 : 12;
+  const matchingTags = useMemo(
+    () => tags.filter(({ tag }) => !normalizedQuery || tag.toLocaleLowerCase().includes(normalizedQuery)),
+    [normalizedQuery, tags],
+  );
+  const selectedTagEntry = tags.find(({ tag }) => tag === selectedTag);
+  const orderedTags = selectedTagEntry && !matchingTags.some(({ tag }) => tag === selectedTag)
+    ? [selectedTagEntry, ...matchingTags]
+    : matchingTags;
+  const visibleTags = showAll || normalizedQuery ? orderedTags : orderedTags.slice(0, limit);
+  const canSearch = tags.length > limit;
+  const canExpand = orderedTags.length > visibleTags.length;
+
+  if (tags.length === 0) return <p className="text-xs text-[var(--ui-text-subtle)]">暂无标签</p>;
+
+  return (
+    <div className="space-y-2">
+      {canSearch && (
+        <label className="relative block">
+          <Search className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-[var(--ui-text-subtle)]" size={compact ? 14 : 13} />
+          <input
+            id={inputId}
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+            placeholder="筛选标签"
+            aria-label="筛选标签"
+            className={compact ? "ui-field h-11 min-h-11 pl-9 text-xs" : "ui-field h-8 min-h-8 pl-8 text-[11px]"}
+          />
+        </label>
+      )}
+      {orderedTags.length === 0 ? (
+        <p className="text-xs text-[var(--ui-text-subtle)]">没有匹配的标签</p>
+      ) : (
+        <div className={compact ? "flex max-h-32 flex-wrap gap-2 overflow-y-auto" : "flex max-h-44 flex-wrap gap-1.5 overflow-y-auto"}>
+          {visibleTags.map(({ tag, count }) => (
+            <button
+              key={tag}
+              type="button"
+              onClick={() => onChange(selectedTag === tag ? "" : tag)}
+              className={[
+                compact ? "ui-filter-button min-h-11 gap-1 px-2.5 md:min-h-8" : "ui-filter-button min-h-9 gap-1 px-2 md:min-h-8",
+                selectedTag === tag ? "ui-filter-button-active" : "",
+              ].join(" ")}
+            >
+              #{tag} <span className="opacity-60">{count}</span>
+            </button>
+          ))}
+        </div>
+      )}
+      {canExpand && (
+        <button
+          type="button"
+          onClick={() => setShowAll((open) => !open)}
+          aria-expanded={showAll}
+          className={compact ? "ui-button-ghost h-11 min-h-11 w-full justify-between px-1.5 text-[11px]" : "ui-button-ghost h-8 min-h-8 w-full justify-between px-1.5 text-[11px]"}
+        >
+          <span>{showAll ? "收起标签" : `显示全部 ${orderedTags.length} 个标签`}</span>
+          <ChevronDown size={13} className={showAll ? "rotate-180" : ""} />
+        </button>
+      )}
+    </div>
   );
 }
 

@@ -133,7 +133,7 @@ export function ReviewViewerModal({
       <Dialog.Portal>
         <Dialog.Overlay className="ui-overlay fixed inset-0 z-50 data-[state=open]:animate-fade-in" />
         <Dialog.Content
-          className="ui-modal-surface fixed inset-x-3 bottom-3 z-50 flex max-h-[min(92dvh,860px)] max-w-5xl flex-col overflow-hidden outline-hidden sm:left-1/2 sm:right-auto sm:top-1/2 sm:bottom-auto sm:w-[calc(100%-1.5rem)] sm:-translate-x-1/2 sm:-translate-y-1/2"
+          className="ui-modal-surface fixed inset-x-3 bottom-3 z-50 flex min-w-0 max-h-[min(92dvh,860px)] max-w-5xl flex-col overflow-hidden outline-hidden sm:left-1/2 sm:right-auto sm:top-1/2 sm:bottom-auto sm:w-[calc(100%-1.5rem)] sm:-translate-x-1/2 sm:-translate-y-1/2"
           aria-busy={saving || extractingKnowledge}
           onPointerDownOutside={(event) => {
             if (!hasUnsavedChanges) return;
@@ -152,10 +152,10 @@ export function ReviewViewerModal({
           }}
         >
         {/* Header */}
-        <div className="ui-soft-divider flex flex-wrap items-start justify-between gap-3 border-b px-4 py-4 sm:px-5">
-          <div className="min-w-0">
+        <div className="ui-soft-divider flex items-start justify-between gap-3 border-b px-4 py-4 sm:px-5">
+          <div className="min-w-0 flex-1">
             <div className="flex flex-wrap items-center gap-2">
-              <Dialog.Title className="text-base font-bold text-[var(--ui-text)]">{title || "复盘详情"}</Dialog.Title>
+              <Dialog.Title className="break-words text-base font-bold text-[var(--ui-text)]">{title || "复盘详情"}</Dialog.Title>
               <ReviewStatusPill status={review.status} />
               {readOnly && <span className="ui-status-muted rounded-full px-2 py-0.5 text-[11px] font-medium">只读来源</span>}
               {hasUnsavedChanges && (
@@ -163,7 +163,12 @@ export function ReviewViewerModal({
               )}
             </div>
             <Dialog.Description className="mt-1 break-words text-xs leading-5 text-[var(--ui-text-subtle)]">
-              {review.kind === "weekly" ? "周复盘" : "月复盘"} · {review.period_start} 至 {review.period_end} · v{review.version} · {review.model || "AI"} · 生成于 {formatReviewTimestamp(review.generated_at)}{readOnly ? " · 仅用于核对来源" : ""}
+              <span className="sm:hidden">
+                v{review.version} · {review.model || "AI"}{readOnly ? " · 只读来源" : ""}
+              </span>
+              <span className="hidden sm:inline">
+                {review.kind === "weekly" ? "周复盘" : "月复盘"} · {review.period_start} 至 {review.period_end} · v{review.version} · {review.model || "AI"} · 生成于 {formatReviewTimestamp(review.generated_at)}{readOnly ? " · 仅用于核对来源" : ""}
+              </span>
             </Dialog.Description>
           </div>
           <Dialog.Close asChild>
@@ -214,8 +219,8 @@ export function ReviewViewerModal({
 
         {/* Body */}
         {editing && !readOnly ? (
-          <div className="grid flex-1 overflow-y-auto md:min-h-0 md:overflow-hidden md:grid-cols-2">
-            <div className="ui-soft-divider border-b p-4 md:min-h-0 md:overflow-y-auto md:border-b-0 md:border-r">
+          <div className="grid min-h-0 min-w-0 flex-1 overflow-x-hidden overflow-y-auto md:overflow-hidden md:grid-cols-2">
+            <div className="ui-soft-divider min-w-0 border-b p-4 md:min-h-0 md:overflow-y-auto md:border-b-0 md:border-r">
               <div className="mb-1.5 flex items-center justify-between gap-2">
                 <label htmlFor="review-editor-title" className="text-xs font-semibold text-[var(--ui-text)]">标题</label>
                 <span className="text-[10px] text-[var(--ui-text-subtle)]">可直接修改</span>
@@ -234,7 +239,7 @@ export function ReviewViewerModal({
                 className="ui-textarea h-[38vh] min-h-[240px] rounded-lg font-mono text-xs leading-5 md:h-[48vh] md:min-h-[320px]"
               />
             </div>
-            <div className="p-4 md:min-h-0 md:overflow-y-auto">
+            <div className="min-w-0 p-4 md:min-h-0 md:overflow-y-auto">
               <div className="mb-1.5 flex h-[18px] items-center justify-between gap-2">
                 <span className="text-xs font-semibold text-[var(--ui-text)]">预览</span>
                 <span className="text-[10px] text-[var(--ui-text-subtle)]">实时同步</span>
@@ -249,7 +254,7 @@ export function ReviewViewerModal({
             </div>
           </div>
         ) : (
-          <div className="min-h-0 flex-1 overflow-y-auto px-4 py-5 sm:px-5">
+          <div className="min-h-0 min-w-0 flex-1 overflow-x-hidden overflow-y-auto px-4 py-5 sm:px-5">
             <MarkdownContent content={displayContent} />
           </div>
         )}
@@ -261,7 +266,7 @@ export function ReviewViewerModal({
               type="button"
               onClick={() => void requestDelete()}
               disabled={saving || extractingKnowledge}
-              className="ui-button-danger w-full sm:w-auto"
+              className="ui-button-danger self-start"
             >
               删除此版本
             </button>

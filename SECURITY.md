@@ -25,6 +25,7 @@
 
 - 生产环境必须配置 `DAILY_SUMMARY_TOKEN`，不要启用 `DAILY_SUMMARY_ALLOW_NO_TOKEN=1`。
 - 服务端会拒绝 `DAILY_SUMMARY_ALLOW_NO_TOKEN=1` 与非 loopback 监听地址的组合；本地无令牌开发只能绑定 `127.0.0.1`、`localhost` 或 `::1`。
+- `DAILY_SUMMARY_LOCAL_AI_ACCESS=1` 是仅供本地页面测试的显式开关；服务端会要求 loopback 绑定和 `DAILY_SUMMARY_LOCAL_AI_TOKEN`，并把该令牌限制为只读请求。生产部署必须关闭它，`setup.sh` 会显式写入 `0` 和空令牌。
 - 长期公网使用应采用域名 + HTTPS；公网 IP + HTTP 不提供传输加密。
 - 公网 IP 模式必须视为受控网络例外，启用令牌并限制防火墙或私有网络访问；不要把明文 HTTP 当作安全传输。
 - `server/.env`、`server/.env.backup`、迁移包和 Restic 密码文件都可能包含敏感信息，必须保存在 Git 忽略范围之外并限制文件权限。

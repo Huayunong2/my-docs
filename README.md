@@ -152,6 +152,8 @@ APP_DIR=/srv/daily-summary ./setup.sh --cur
 | `DAILY_SUMMARY_BIND` | 监听地址，例如 `127.0.0.1:8080` 或 `0.0.0.0:8080` |
 | `DAILY_SUMMARY_ALLOWED_ORIGINS` | CORS 白名单，应填写实际 Web 来源 |
 | `DAILY_SUMMARY_ALLOW_NO_TOKEN` | 仅 loopback 本地开发使用；生产环境必须为 `0` 或未设置 |
+| `DAILY_SUMMARY_LOCAL_AI_ACCESS` | 仅 loopback 本地测试链接使用；生产环境必须为 `0` 或未设置 |
+| `DAILY_SUMMARY_LOCAL_AI_TOKEN` | 本地 AI 测试令牌；只应与上一个变量一起用于本地开发 |
 | `DAILY_SUMMARY_AI_API_KEY` | 服务端 AI Key，可留空以关闭 AI |
 | `DAILY_SUMMARY_AI_BASE_URL` | OpenAI-compatible API 地址 |
 | `DAILY_SUMMARY_AI_MODEL` | AI 模型名 |
@@ -182,6 +184,26 @@ npm run dev
 ```
 
 打开 `http://localhost:5173`。`server:dev` 默认只绑定本机并允许无令牌访问，不能用于生产环境。
+
+### 让具备浏览器能力的 AI 查看本地页面（测试）
+
+`npm run server:dev` 已启用 loopback-only 的本地测试入口。将下面的链接交给 AI，即可从「今日」页面开始查看完整应用内容：
+
+```text
+http://127.0.0.1:5173/today?local_ai_token=daily-summary-local-ai-test-token
+```
+
+页面首次加载时会把令牌转存到当前浏览器会话的临时存储，并立即从地址栏移除；后续 API 请求使用 `Authorization` 请求头。服务端只在 `DAILY_SUMMARY_LOCAL_AI_ACCESS=1`、`DAILY_SUMMARY_LOCAL_AI_TOKEN=daily-summary-local-ai-test-token` 且绑定地址为 loopback 时接受它，并将该令牌限制为只读请求。它是公开的测试值，不是生产令牌；`setup.sh` 会在生产环境明确写入关闭状态。
+
+手动启动服务端时，可使用等价的本地配置：
+
+```bash
+DAILY_SUMMARY_BIND=127.0.0.1:8080 \
+DAILY_SUMMARY_LOCAL_AI_ACCESS=1 \
+DAILY_SUMMARY_LOCAL_AI_TOKEN=daily-summary-local-ai-test-token \
+DAILY_SUMMARY_ALLOW_NO_TOKEN=0 \
+cargo run --manifest-path server/Cargo.toml
+```
 
 ### Tauri 桌面端
 

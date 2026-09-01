@@ -304,9 +304,9 @@ export default function ReviewPage({
         actions={
           stats ? (
             <>
-              <StatChip label="今日到期" value={stats.due} highlight={stats.due > 0} />
-              {typeof stats.due_reviews === "number" && <StatChip label="到期复习" value={stats.due_reviews} />}
-              {typeof stats.new_cards === "number" && <StatChip label="新卡" value={stats.new_cards} />}
+              <StatChip label="今日可复习" value={stats.due} highlight={stats.due > 0} />
+              {typeof stats.due_reviews === "number" && <StatChip label="到期复习题" value={stats.due_reviews} />}
+              {typeof stats.new_cards === "number" && <StatChip label="可加入新题" value={stats.new_cards} />}
               <StatChip label="已复习" value={stats.reviewed_today} />
               <StatChip label="已沉淀" value={stats.total_confirmed} />
             </>
@@ -337,7 +337,7 @@ export default function ReviewPage({
 
       <div className="mx-auto max-w-2xl">
         {loading ? (
-          <LoadingState label="加载到期卡片..." rows={2} />
+          <LoadingState label="加载今日复习队列..." rows={2} />
         ) : batchComplete ? (
           <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }}>
             <ReviewBatchComplete
@@ -633,7 +633,7 @@ function ReviewEmptyState({
     ? "从第一张卡片开始"
     : reviewedToday > 0
       ? "今日复习已完成"
-      : "今天没有到期卡片";
+      : "今天没有可复习内容";
   const description = hasNoConfirmedCards
     ? "确认一张知识卡片，它就会进入可追踪的间隔复习队列。"
     : reviewedToday > 0
