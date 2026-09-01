@@ -2063,7 +2063,11 @@ export default function KnowledgePage({
       )}
 
       <Sheet open={mobileFiltersOpen} onOpenChange={setMobileFiltersOpen}>
-        <SheetContent side="bottom" className="px-0 pb-[calc(0.75rem+env(safe-area-inset-bottom,0px))]">
+        <SheetContent
+          side="bottom"
+          className="px-0 pb-[calc(0.75rem+env(safe-area-inset-bottom,0px))]"
+          onOpenAutoFocus={(event) => event.preventDefault()}
+        >
           <SheetHeader>
             <div className="flex items-center justify-between gap-3">
               <SheetTitle>搜索与筛选</SheetTitle>
@@ -2085,7 +2089,6 @@ export default function KnowledgePage({
                 placeholder="搜索标题、内容或来源"
                 aria-label="搜索标题、内容或来源"
                 className="ui-field h-11 pl-10"
-                autoFocus
               />
             </div>
             <div className="mt-5 space-y-5 pb-2">
@@ -2338,7 +2341,6 @@ export default function KnowledgePage({
                       placeholder="标签，逗号分隔多个"
                       aria-label={batchMode === "tag" ? "要添加的标签" : "要移除的标签"}
                       className="ui-field h-11 min-w-0 flex-1"
-                      autoFocus
                     />
                   ) : (
                     <SpaceAutocomplete
@@ -2350,7 +2352,6 @@ export default function KnowledgePage({
                       ariaLabel={batchMode === "move_project" ? "批量移动的目标空间" : "批量操作的空间"}
                       inputClassName="ui-field h-11 pl-9 text-sm"
                       containerClassName="min-w-0 flex-1"
-                      autoFocus
                     />
                   )}
                   <button type="button" onClick={() => void applyBatch()} disabled={saving || !batchValue.trim()} className="ui-button-primary h-11 shrink-0 px-3 text-xs">
