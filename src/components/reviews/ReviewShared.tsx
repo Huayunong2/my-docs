@@ -133,7 +133,7 @@ export function ReviewViewerModal({
       <Dialog.Portal>
         <Dialog.Overlay className="ui-overlay fixed inset-0 z-50 data-[state=open]:animate-fade-in" />
         <Dialog.Content
-          className="ui-modal-surface fixed inset-x-3 bottom-3 z-50 flex min-w-0 max-h-[min(92dvh,860px)] max-w-5xl flex-col overflow-hidden outline-hidden sm:left-1/2 sm:right-auto sm:top-1/2 sm:bottom-auto sm:w-[calc(100%-1.5rem)] sm:-translate-x-1/2 sm:-translate-y-1/2"
+          className="ui-modal-surface fixed inset-x-3 bottom-3 z-50 flex w-[calc(100%-1.5rem)] min-w-0 max-h-[min(92dvh,860px)] max-w-5xl flex-col overflow-hidden outline-hidden sm:left-1/2 sm:right-auto sm:top-1/2 sm:bottom-auto sm:w-[calc(100%-1.5rem)] sm:-translate-x-1/2 sm:-translate-y-1/2"
           aria-busy={saving || extractingKnowledge}
           onPointerDownOutside={(event) => {
             if (!hasUnsavedChanges) return;
@@ -254,7 +254,7 @@ export function ReviewViewerModal({
             </div>
           </div>
         ) : (
-          <div className="min-h-0 min-w-0 flex-1 overflow-x-hidden overflow-y-auto px-4 py-5 sm:px-5">
+          <div className="review-viewer-body min-h-0 min-w-0 flex-1 overflow-x-hidden overflow-y-auto px-4 py-5 sm:px-5">
             <MarkdownContent content={displayContent} />
           </div>
         )}

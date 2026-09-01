@@ -3,6 +3,7 @@ import { motion, AnimatePresence } from "framer-motion";
 import { AlertTriangle, BookMarked, ChevronLeft, ChevronRight, FileText, Search, SearchX } from "lucide-react";
 import * as api from "../lib/api";
 import type { Article, ArticleSummary, KnowledgeCard } from "../lib/api";
+import { offerArticleUndo } from "../lib/articleUndo";
 import { cardStatusLabels, cardTypeLabels } from "../lib/cardLabels";
 import ArticleDetail from "./ArticleDetail";
 import { useConfirmDialog } from "./ui/Feedback";
@@ -216,9 +217,9 @@ export default function SearchPage({
 
   const deleteDetail = async (article: Article) => {
     const ok = await confirm({
-      title: "删除记录",
-      message: `确定要删除 ${article.date} 的记录吗？此操作不可撤销。`,
-      confirmText: "删除",
+      title: "移入记录回收站",
+      message: `确定要把 ${article.date} 的记录移入回收站吗？正文和空间关系会保留，可随时恢复。`,
+      confirmText: "移入回收站",
       danger: true,
     });
     if (!ok) return;
@@ -226,6 +227,10 @@ export default function SearchPage({
       await api.deleteArticle(article.id);
       await queryClient.invalidateQueries({ queryKey: ["knowledgeSearch", "articles"] });
       setDetail(null);
+      offerArticleUndo(
+        { id: article.id, date: article.date },
+        () => queryClient.invalidateQueries({ queryKey: ["knowledgeSearch", "articles"] }).then(() => undefined),
+      );
     } catch (e) {
       setActionError(api.getErrorMessage(e));
     }

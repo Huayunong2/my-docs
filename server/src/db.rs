@@ -1,7 +1,7 @@
 use crate::models::{
-    AiConfig, AiRoutingConfig, AiTask, ArchiveMonth, Article, ArticleSummary, DailyReviewCount,
-    DayExemption, KnowledgeCard, KnowledgeProject, KnowledgeSummary, Review, ReviewCard,
-    ReviewHistoryEntry, ReviewItem, ReviewSettings, ReviewStats, ReviewStatsResponse,
+    AiConfig, AiRoutingConfig, AiTask, ArchiveMonth, Article, ArticleListResponse, ArticleSummary,
+    DailyReviewCount, DayExemption, KnowledgeCard, KnowledgeProject, KnowledgeSummary, Review,
+    ReviewCard, ReviewHistoryEntry, ReviewItem, ReviewSettings, ReviewStats, ReviewStatsResponse,
 };
 use chrono::{Duration, Local, NaiveDate};
 use rusqlite::types::{Type, Value as SqlValue};
@@ -254,6 +254,9 @@ struct PortableArticle {
     created_at: String,
     #[serde(default)]
     updated_at: String,
+    /// 缺少该字段表示旧归档没有记录删除状态；显式空字符串才表示活动记录。
+    #[serde(default)]
+    deleted_at: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1528,6 +1531,39 @@ impl Database {
                 .execute("INSERT INTO schema_version (version) VALUES (22)", [])?;
         }
 
+        if current < 23 {
+            // 每日记录删除改为可恢复的软删除：保留正文和空间关系，普通查询统一排除
+            // deleted_at 非空的记录，撤销或重新编辑同一天时再清空该字段。
+            let transaction = self.conn.unchecked_transaction()?;
+            let has_articles: bool = transaction.query_row(
+                "SELECT EXISTS(
+                    SELECT 1 FROM sqlite_master
+                    WHERE type='table' AND name='articles'
+                )",
+                [],
+                |row| row.get(0),
+            )?;
+            if has_articles {
+                let existing_columns: Vec<String> = transaction
+                    .prepare("PRAGMA table_info(articles)")?
+                    .query_map([], |row| row.get(1))?
+                    .collect::<Result<_>>()?;
+                if !existing_columns.iter().any(|column| column == "deleted_at") {
+                    transaction.execute(
+                        "ALTER TABLE articles ADD COLUMN deleted_at TEXT NOT NULL DEFAULT ''",
+                        [],
+                    )?;
+                }
+                transaction.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_articles_deleted_at
+                     ON articles(deleted_at, date DESC)",
+                    [],
+                )?;
+            }
+            transaction.execute("INSERT INTO schema_version (version) VALUES (23)", [])?;
+            transaction.commit()?;
+        }
+
         Ok(())
     }
 }
@@ -1550,11 +1586,11 @@ impl ArticlePersistence<'_> {
             .optional()?;
         let id = existing_id.unwrap_or_else(|| Uuid::new_v4().to_string());
         tx.execute(
-            "INSERT INTO articles (id, date, title, content, mood, tags, word_count, created_at, updated_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?8)
+            "INSERT INTO articles (id, date, title, content, mood, tags, word_count, created_at, updated_at, deleted_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?8, '')
              ON CONFLICT(date) DO UPDATE SET title=excluded.title, content=excluded.content,
                mood=excluded.mood, tags=excluded.tags, word_count=excluded.word_count,
-               updated_at=excluded.updated_at",
+               updated_at=excluded.updated_at, deleted_at=''",
             params![id, draft.date, draft.title, draft.content, draft.mood, tags_json, word_count, now],
         )?;
         sync_article_space_links(&tx, &id, &spaces, &now)?;
@@ -1586,7 +1622,7 @@ impl ArticlePersistence<'_> {
         let tx = self.conn.transaction()?;
         let updated = tx.execute(
             "UPDATE articles SET title=?1, content=?2, mood=?3, tags=COALESCE(?4, tags), word_count=?5,
-             updated_at=?6 WHERE id=?7",
+             updated_at=?6 WHERE id=?7 AND deleted_at=''",
             params![
                 changes.title,
                 changes.content,
@@ -1609,10 +1645,21 @@ impl ArticlePersistence<'_> {
     }
 
     pub(crate) fn delete(&mut self, id: &str) -> Result<bool> {
-        Ok(self
-            .conn
-            .execute("DELETE FROM articles WHERE id=?1", params![id])?
-            > 0)
+        let now = Local::now().format("%Y-%m-%dT%H:%M:%S").to_string();
+        Ok(self.conn.execute(
+            "UPDATE articles SET deleted_at=?1, updated_at=?1
+                 WHERE id=?2 AND deleted_at=''",
+            params![now, id],
+        )? > 0)
+    }
+
+    pub(crate) fn restore(&mut self, id: &str) -> Result<bool> {
+        let now = Local::now().format("%Y-%m-%dT%H:%M:%S").to_string();
+        Ok(self.conn.execute(
+            "UPDATE articles SET deleted_at='', updated_at=?1
+                 WHERE id=?2 AND deleted_at!=''",
+            params![now, id],
+        )? > 0)
     }
 
     pub(crate) fn find_by_id(&mut self, id: &str) -> Result<Option<Article>> {
@@ -1620,7 +1667,7 @@ impl ArticlePersistence<'_> {
             .conn
             .query_row(
                 "SELECT id, date, title, content, mood, tags, word_count, created_at, updated_at
-                 FROM articles WHERE id=?1",
+                 FROM articles WHERE id=?1 AND deleted_at=''",
                 params![id],
                 row_to_article,
             )
@@ -1636,7 +1683,7 @@ impl ArticlePersistence<'_> {
             .conn
             .query_row(
                 "SELECT id, date, title, content, mood, tags, word_count, created_at, updated_at
-                 FROM articles WHERE date=?1 LIMIT 1",
+                 FROM articles WHERE date=?1 AND deleted_at='' LIMIT 1",
                 params![date],
                 row_to_article,
             )
@@ -1647,10 +1694,15 @@ impl ArticlePersistence<'_> {
         Ok(article)
     }
 
-    pub(crate) fn list(&mut self, page: i64, page_size: i64) -> Result<Vec<ArticleSummary>> {
+    pub(crate) fn list_page(&mut self, page: i64, page_size: i64) -> Result<ArticleListResponse> {
         let page = page.max(1);
         let page_size = page_size.clamp(1, 100);
         let offset = (page - 1).saturating_mul(page_size);
+        let total: i64 = self.conn.query_row(
+            "SELECT COUNT(*) FROM articles WHERE deleted_at=''",
+            [],
+            |row| row.get(0),
+        )?;
         let mut statement = self.conn.prepare(
             "SELECT a.id, a.date, a.title, a.mood, a.tags, a.word_count, a.content,
                     COALESCE((
@@ -1661,12 +1713,53 @@ impl ArticlePersistence<'_> {
                         ORDER BY p.name COLLATE NOCASE ASC
                     ), '[]') AS spaces
              FROM articles AS a
-             ORDER BY a.date DESC, a.updated_at DESC LIMIT ?1 OFFSET ?2",
+             WHERE a.deleted_at=''
+             ORDER BY a.date DESC, a.updated_at DESC, a.id DESC LIMIT ?1 OFFSET ?2",
         )?;
-        let rows = statement
+        let items = statement
             .query_map(params![page_size, offset], row_to_article_summary)?
             .collect::<Result<Vec<_>>>()?;
-        Ok(rows)
+        Ok(ArticleListResponse {
+            has_more: offset.saturating_add(items.len() as i64) < total,
+            items,
+            total,
+            page,
+            page_size,
+        })
+    }
+
+    pub(crate) fn list_trash(&mut self, page: i64, page_size: i64) -> Result<ArticleListResponse> {
+        let page = page.max(1);
+        let page_size = page_size.clamp(1, 100);
+        let offset = (page - 1).saturating_mul(page_size);
+        let total: i64 = self.conn.query_row(
+            "SELECT COUNT(*) FROM articles WHERE deleted_at!=''",
+            [],
+            |row| row.get(0),
+        )?;
+        let mut statement = self.conn.prepare(
+            "SELECT a.id, a.date, a.title, a.mood, a.tags, a.word_count, a.content,
+                    COALESCE((
+                        SELECT json_group_array(p.name)
+                        FROM article_spaces AS aps
+                        INNER JOIN knowledge_projects AS p ON p.id=aps.space_id
+                        WHERE aps.article_id=a.id
+                        ORDER BY p.name COLLATE NOCASE ASC
+                    ), '[]') AS spaces
+             FROM articles AS a
+             WHERE a.deleted_at!=''
+             ORDER BY a.updated_at DESC, a.date DESC, a.id DESC LIMIT ?1 OFFSET ?2",
+        )?;
+        let items = statement
+            .query_map(params![page_size, offset], row_to_article_summary)?
+            .collect::<Result<Vec<_>>>()?;
+        Ok(ArticleListResponse {
+            has_more: offset.saturating_add(items.len() as i64) < total,
+            items,
+            total,
+            page,
+            page_size,
+        })
     }
 
     /// 按统一空间读取每日记录。每日记录仍以日期为主轴，这个入口只提供空间上下文下的最近记录。
@@ -1695,8 +1788,8 @@ impl ArticlePersistence<'_> {
              FROM articles AS a
              INNER JOIN article_spaces AS aps ON aps.article_id=a.id
              INNER JOIN knowledge_projects AS p ON p.id=aps.space_id
-             WHERE p.name=?1 COLLATE NOCASE
-             ORDER BY a.date DESC, a.updated_at DESC
+             WHERE p.name=?1 COLLATE NOCASE AND a.deleted_at=''
+             ORDER BY a.date DESC, a.updated_at DESC, a.id DESC
              LIMIT ?2 OFFSET ?3",
         )?;
         let rows = statement
@@ -1729,7 +1822,8 @@ impl ArticlePersistence<'_> {
                         ORDER BY p.name COLLATE NOCASE ASC
                     ), '[]') AS spaces
              FROM articles a INNER JOIN articles_fts fts ON a.rowid = fts.rowid
-             WHERE articles_fts MATCH ?1 ORDER BY a.date DESC LIMIT 50",
+             WHERE articles_fts MATCH ?1 AND a.deleted_at=''
+             ORDER BY a.date DESC, a.updated_at DESC, a.id DESC LIMIT 50",
         )?;
         let rows = statement
             .query_map(params![sanitized], row_to_article_summary)?
@@ -1740,7 +1834,7 @@ impl ArticlePersistence<'_> {
     pub(crate) fn full_between(&mut self, from: &str, to: &str) -> Result<Vec<Article>> {
         let mut statement = self.conn.prepare(
             "SELECT id, date, title, content, mood, tags, word_count, created_at, updated_at
-             FROM articles WHERE date BETWEEN ?1 AND ?2 ORDER BY date ASC",
+             FROM articles WHERE date BETWEEN ?1 AND ?2 AND deleted_at='' ORDER BY date ASC, id ASC",
         )?;
         let mut rows = statement
             .query_map(params![from, to], row_to_article)?
@@ -1764,7 +1858,7 @@ impl ArticlePersistence<'_> {
     pub(crate) fn archive_months(&mut self) -> Result<Vec<ArchiveMonth>> {
         let mut statement = self.conn.prepare(
             "SELECT DISTINCT substr(date, 1, 4), substr(date, 6, 2)
-             FROM articles ORDER BY date DESC",
+             FROM articles WHERE deleted_at='' ORDER BY date DESC",
         )?;
         let rows = statement
             .query_map([], |row| {
@@ -1793,7 +1887,7 @@ impl ArticlePersistence<'_> {
                         ORDER BY p.name COLLATE NOCASE ASC
                     ), '[]') AS spaces
              FROM articles AS a
-             WHERE a.date LIKE ?1 ORDER BY a.date DESC",
+             WHERE a.date LIKE ?1 AND a.deleted_at='' ORDER BY a.date DESC, a.id DESC",
         )?;
         let rows = statement
             .query_map(params![pattern], row_to_article_summary)?
@@ -1848,7 +1942,7 @@ impl ExemptionPersistence<'_> {
         let article_exists = self
             .conn
             .query_row(
-                "SELECT 1 FROM articles WHERE date=?1 LIMIT 1",
+                "SELECT 1 FROM articles WHERE date=?1 AND deleted_at='' LIMIT 1",
                 params![date],
                 |_| Ok(()),
             )
@@ -1874,7 +1968,7 @@ impl PortableArchivePersistence<'_> {
         let articles = {
             let mut statement = self.conn.prepare(
                 "SELECT a.id, a.date, a.title, a.content, a.mood, a.tags, a.word_count,
-                        a.created_at, a.updated_at,
+                        a.created_at, a.updated_at, a.deleted_at,
                         COALESCE((
                             SELECT json_group_array(p.name)
                             FROM article_spaces AS aps
@@ -1897,7 +1991,8 @@ impl PortableArchivePersistence<'_> {
                         "word_count": row.get::<_, i64>(6)?,
                         "created_at": row.get::<_, String>(7)?,
                         "updated_at": row.get::<_, String>(8)?,
-                        "spaces": parse_json_vec(&row.get::<_, String>(9)?)?,
+                        "deleted_at": row.get::<_, String>(9)?,
+                        "spaces": parse_json_vec(&row.get::<_, String>(10)?)?,
                     }))
                 })?
                 .collect::<Result<Vec<_>>>()?;
@@ -2057,25 +2152,37 @@ impl PortableArchivePersistence<'_> {
         }
 
         for article in archive.articles {
-            let existing_by_date: Option<String> = tx
+            let existing_by_date: Option<(String, String)> = tx
                 .query_row(
-                    "SELECT id FROM articles WHERE date=?1 LIMIT 1",
+                    "SELECT id, deleted_at FROM articles WHERE date=?1 LIMIT 1",
                     params![article.date],
-                    |row| row.get(0),
+                    |row| Ok((row.get(0)?, row.get(1)?)),
                 )
                 .optional()?;
-            let existing_by_id: Option<String> = tx
+            let existing_by_id: Option<(String, String)> = tx
                 .query_row(
-                    "SELECT date FROM articles WHERE id=?1 LIMIT 1",
+                    "SELECT date, deleted_at FROM articles WHERE id=?1 LIMIT 1",
                     params![article.id],
-                    |row| row.get(0),
+                    |row| Ok((row.get(0)?, row.get(1)?)),
                 )
                 .optional()?;
-            let target_id = match existing_by_date {
-                Some(id) => id,
+            let target_id = match existing_by_date.as_ref() {
+                Some((id, _)) => id.clone(),
                 None if existing_by_id.is_none() => article.id.clone(),
                 None => Uuid::new_v4().to_string(),
             };
+            let existing_deleted_at = existing_by_date
+                .as_ref()
+                .map(|(_, deleted_at)| deleted_at.as_str());
+            let deleted_at = article.deleted_at.unwrap_or_else(|| {
+                // An old archive represents the state at export time but has no
+                // deletion field. Never silently undelete a local tombstone while
+                // merging that archive into the current database.
+                existing_deleted_at
+                    .filter(|value| !value.is_empty())
+                    .unwrap_or_default()
+                    .to_string()
+            });
             article_id_map.insert(article.id.clone(), target_id.clone());
             let tags = serde_json::to_string(&normalize_tags(article.tags))?;
             let spaces = normalize_space_names(article.spaces.clone());
@@ -2089,11 +2196,12 @@ impl PortableArchivePersistence<'_> {
                 .count() as i64;
             tx.execute(
                 "INSERT INTO articles
-                 (id, date, title, content, mood, tags, word_count, created_at, updated_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+                 (id, date, title, content, mood, tags, word_count, created_at, updated_at, deleted_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
                  ON CONFLICT(id) DO UPDATE SET date=excluded.date, title=excluded.title,
                    content=excluded.content, mood=excluded.mood, tags=excluded.tags,
-                   word_count=excluded.word_count, updated_at=excluded.updated_at",
+                   word_count=excluded.word_count, updated_at=excluded.updated_at,
+                   deleted_at=excluded.deleted_at",
                 params![
                     target_id,
                     article.date,
@@ -2103,7 +2211,8 @@ impl PortableArchivePersistence<'_> {
                     tags,
                     word_count,
                     article.created_at,
-                    article.updated_at
+                    article.updated_at,
+                    deleted_at
                 ],
             )?;
             sync_article_space_links(&tx, &target_id, &spaces, &now)?;
@@ -2897,7 +3006,7 @@ impl KnowledgePersistence<'_> {
                     (SELECT COUNT(*)
                      FROM article_spaces AS aps
                      INNER JOIN articles AS a ON a.id=aps.article_id
-                     WHERE aps.space_id=p.id) AS article_count,
+                     WHERE aps.space_id=p.id AND a.deleted_at='') AS article_count,
                     p.kind, p.description, p.status
              FROM knowledge_projects AS p
              {status_filter}
@@ -4196,11 +4305,17 @@ fn validate_archive(archive: &PortableArchiveInput) -> std::result::Result<(), A
         )));
     }
     let valid_date = |value: &str| NaiveDate::parse_from_str(value, "%Y-%m-%d").is_ok();
-    if archive
-        .articles
-        .iter()
-        .any(|article| article.id.trim().is_empty() || !valid_date(&article.date))
-    {
+    if archive.articles.iter().any(|article| {
+        article.id.trim().is_empty()
+            || !valid_date(&article.date)
+            || article
+                .deleted_at
+                .as_deref()
+                .unwrap_or_default()
+                .chars()
+                .count()
+                > 64
+    }) {
         return Err(ArchiveImportError::Invalid(
             "Every article requires id and date".into(),
         ));
@@ -4633,7 +4748,66 @@ mod migration_tests {
                 row.get(0)
             })
             .unwrap();
-        assert_eq!(version, 22);
+        assert_eq!(version, 23);
+    }
+
+    #[test]
+    fn v22_articles_gain_recoverable_delete_state_idempotently() {
+        let conn = Connection::open_in_memory().expect("in-memory connection");
+        conn.execute_batch(
+            "CREATE TABLE schema_version (version INTEGER NOT NULL);
+             INSERT INTO schema_version (version) VALUES (22);
+             CREATE TABLE articles (
+                 id TEXT PRIMARY KEY,
+                 date TEXT NOT NULL UNIQUE,
+                 title TEXT NOT NULL DEFAULT '',
+                 content TEXT NOT NULL DEFAULT '',
+                 mood TEXT NOT NULL DEFAULT '',
+                 tags TEXT NOT NULL DEFAULT '[]',
+                 word_count INTEGER NOT NULL DEFAULT 0,
+                 created_at TEXT NOT NULL,
+                 updated_at TEXT NOT NULL
+             );
+             INSERT INTO articles (id, date, created_at, updated_at)
+             VALUES ('legacy-article', '2026-08-20', '2026-08-20T09:00:00', '2026-08-20T09:00:00');",
+        )
+        .expect("create v22 schema");
+
+        let db = Database { conn };
+        db.initialize().expect("migrate v22 article schema");
+
+        let deleted_at: String = db
+            .conn
+            .query_row(
+                "SELECT deleted_at FROM articles WHERE id='legacy-article'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("read migrated delete state");
+        assert!(deleted_at.is_empty());
+        let index_exists: i64 = db
+            .conn
+            .query_row(
+                "SELECT EXISTS(
+                    SELECT 1 FROM sqlite_master
+                    WHERE type='index' AND name='idx_articles_deleted_at'
+                )",
+                [],
+                |row| row.get(0),
+            )
+            .expect("read delete index");
+        assert_eq!(index_exists, 1);
+
+        db.initialize().expect("re-initialize migrated schema");
+        let deleted_column_count: i64 = db
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('articles') WHERE name='deleted_at'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("count delete columns");
+        assert_eq!(deleted_column_count, 1);
     }
 
     fn v3_knowledge_cards_table() -> &'static str {
@@ -4800,7 +4974,7 @@ mod migration_tests {
                 row.get(0)
             })
             .expect("read schema version");
-        assert_eq!(version, 22);
+        assert_eq!(version, 23);
 
         // 已迁移的库再次 initialize 必须幂等，不报重复列错误
         db.initialize().expect("re-initialize is idempotent");
@@ -4834,7 +5008,7 @@ mod migration_tests {
                 row.get(0)
             })
             .expect("read schema version");
-        assert_eq!(version, 22);
+        assert_eq!(version, 23);
 
         let settings = db.review_settings().expect("default review settings");
         assert_eq!(settings.new_cards_per_day, 20);
@@ -5107,7 +5281,7 @@ mod migration_v5_tests {
                 row.get(0)
             })
             .expect("read schema version");
-        assert_eq!(version, 22);
+        assert_eq!(version, 23);
         db.initialize()
             .expect("re-initialize after v5 is idempotent");
     }

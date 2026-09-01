@@ -126,14 +126,14 @@ export default function BackupPanel({ refreshToken = 0 }: { refreshToken?: numbe
     }
   };
 
-  const del = async (backup: BackupMeta) => {
+  const deleteBackup = async (backup: BackupMeta) => {
     const name = backup.name;
     if (busy || reloadPending) return;
     if (backup.protected) return;
     const ok = await confirm({
-      title: "删除服务器快照",
-      message: `删除“${name}”？删除后无法从此列表下载它；如果它是唯一恢复点，建议先下载。`,
-      confirmText: "删除快照",
+      title: "删除备份",
+      message: `删除备份“${name}”？删除后无法从此列表下载它；如果它是唯一恢复点，建议先下载。`,
+      confirmText: "删除备份",
       danger: true,
     });
     if (!ok) return;
@@ -141,7 +141,7 @@ export default function BackupPanel({ refreshToken = 0 }: { refreshToken?: numbe
     try {
       await api.deleteBackup(name);
       setBackups((current) => current.filter((backup) => backup.name !== name));
-      setMsg(`已删除服务器快照：${name}`);
+      setMsg(`已删除备份：${name}`);
       setTone("good");
     } catch (e) {
       setMsg(`删除失败：${api.getErrorMessage(e)}`);
@@ -163,11 +163,11 @@ export default function BackupPanel({ refreshToken = 0 }: { refreshToken?: numbe
 
   return (
     <div className="settings-panel-stack flex min-w-0 flex-col gap-5">
-      <Card className="settings-backup-overview">
-        <SectionTitle desc="在当前时间点留下可恢复的服务器副本；要迁移到另一台服务器，请使用右侧的完整归档。">服务器快照</SectionTitle>
+      <Card className="settings-backup-card">
+        <SectionTitle desc="在当前时间点留下可恢复的服务器副本；迁移到另一台服务器时，请下载完整归档。">服务器快照</SectionTitle>
         <StatusBox tone={loading ? "neutral" : loadError ? "bad" : !newest || stale ? "warn" : "good"} message={statusMessage} />
         {msg && <div className="mt-3"><StatusBox message={msg} tone={tone} /></div>}
-        <div className="settings-section-actions mt-4 flex flex-col gap-2 sm:flex-row sm:justify-end">
+        <div className="settings-section-actions mt-4 flex flex-col gap-2 sm:flex-row sm:justify-start">
           <PrimaryBtn onClick={create} disabled={busy !== null || reloadPending}>
             <Save size={15} /> {busy === "create" ? "创建中…" : "创建服务器快照"}
           </PrimaryBtn>
@@ -175,9 +175,7 @@ export default function BackupPanel({ refreshToken = 0 }: { refreshToken?: numbe
             <RefreshCw size={15} className={busy === "refresh" ? "animate-spin" : ""} /> {busy === "refresh" ? "刷新中…" : "刷新列表"}
           </SecondaryBtn>
         </div>
-      </Card>
-
-      <Card className="settings-backup-list-card">
+      <div className="settings-backup-list-section mt-5 border-t border-[var(--ui-border)] pt-5">
         <div className="flex items-start justify-between gap-3">
           <SectionTitle desc="恢复前会自动创建保护点；带锁标记的系统快照由系统保留，不能删除。">快照列表</SectionTitle>
           {!loading && !loadError && <span className="settings-count-badge shrink-0">{backups.length} 个</span>}
@@ -189,7 +187,7 @@ export default function BackupPanel({ refreshToken = 0 }: { refreshToken?: numbe
         ) : backups.length === 0 ? (
           <p className="text-sm leading-6 text-[var(--ui-text-muted)]">暂无快照。创建后，这里会显示恢复、下载和保护状态。</p>
         ) : (
-          <div className="settings-backup-list" aria-busy={busy === "refresh" || reloadPending}>
+          <div className="settings-backup-list" role="list" aria-busy={busy === "refresh" || reloadPending}>
             {backups.map((backup, index) => {
               const downloadBusy = busy === `download:${backup.name}`;
               const deleteBusy = busy === `delete:${backup.name}`;
@@ -211,45 +209,46 @@ export default function BackupPanel({ refreshToken = 0 }: { refreshToken?: numbe
                     ? "自动快照"
                     : "手动快照";
               return (
-                <div key={backup.name} className={`settings-backup-row ${index === 0 ? "settings-backup-row-latest" : ""}`}>
+                <div key={backup.name} className="settings-backup-row" role="listitem">
                   <div className="settings-backup-row-main min-w-0">
-                      <div className="flex flex-wrap items-center gap-2">
-                        <p className="max-w-full truncate font-mono text-sm font-medium text-[var(--ui-text)]">{backup.name}</p>
-                        <span className={`inline-flex shrink-0 items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-semibold ${isProtected ? "ui-status-muted" : "ui-status-accent"}`}>
-                          {isProtected ? <LockKeyhole size={11} /> : <ShieldCheck size={11} />}
-                          {isProtected ? `系统保护 · ${kindLabel}` : kindLabel}
-                        </span>
-                      </div>
-                      <p className="mt-1 text-xs leading-5 text-[var(--ui-text-subtle)]">
-                        {formatSize(backup.size_bytes)} · {formatBackupDate(backup.created_at)}{index === 0 ? " · 最近创建" : ""}
-                      </p>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <p className="max-w-full truncate font-mono text-sm font-medium text-[var(--ui-text)]">{backup.name}</p>
+                      <span className={`inline-flex shrink-0 items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-semibold ${isProtected ? "ui-status-muted" : "ui-status-accent"}`}>
+                        {isProtected ? <LockKeyhole size={11} /> : <ShieldCheck size={11} />}
+                        {isProtected ? `系统保护 · ${kindLabel}` : kindLabel}
+                      </span>
+                    </div>
+                    <p className="mt-1 text-xs leading-5 text-[var(--ui-text-subtle)]">
+                      {formatSize(backup.size_bytes)} · {formatBackupDate(backup.created_at)}{index === 0 ? " · 最近创建" : ""}
+                    </p>
                   </div>
-                  <div className="settings-row-actions flex flex-col gap-2 sm:flex-row">
-                      <SecondaryBtn
-                        onClick={() => void restore(backup)}
-                        disabled={busy !== null || reloadPending}
-                        title="用此快照替换当前数据"
-                        className="settings-row-action text-xs"
-                      >
-                        <RotateCcw size={13} /> {restoreBusy ? "恢复中…" : "恢复"}
-                      </SecondaryBtn>
-                      <SecondaryBtn onClick={() => void download(backup.name)} disabled={busy !== null || reloadPending} className="settings-row-action text-xs">
-                        <Download size={13} /> {downloadBusy ? "准备中…" : "下载"}
-                      </SecondaryBtn>
-                      <DangerBtn
-                        onClick={() => void del(backup)}
-                        disabled={busy !== null || reloadPending || isProtected}
-                        title={isProtected ? "系统保护快照不能删除" : "删除此快照"}
-                        className="settings-row-action text-xs"
-                      >
-                        {isProtected ? <LockKeyhole size={13} /> : <Trash2 size={13} />} {isProtected ? "系统保护" : deleteBusy ? "删除中…" : "删除"}
-                      </DangerBtn>
+                  <div className="settings-row-actions grid gap-2 sm:grid-cols-3">
+                    <SecondaryBtn
+                      onClick={() => void restore(backup)}
+                      disabled={busy !== null || reloadPending}
+                      title="用此快照替换当前数据"
+                      className="settings-row-action text-xs"
+                    >
+                      <RotateCcw size={13} /> {restoreBusy ? "恢复中…" : "恢复"}
+                    </SecondaryBtn>
+                    <SecondaryBtn onClick={() => void download(backup.name)} disabled={busy !== null || reloadPending} className="settings-row-action text-xs">
+                      <Download size={13} /> {downloadBusy ? "准备中…" : "下载"}
+                    </SecondaryBtn>
+                    <DangerBtn
+                      onClick={() => void deleteBackup(backup)}
+                      disabled={busy !== null || reloadPending || isProtected}
+                      title={isProtected ? "系统保护备份不能删除" : "删除此备份"}
+                      className="settings-row-action text-xs"
+                    >
+                      {isProtected ? <LockKeyhole size={13} /> : <Trash2 size={13} />} {isProtected ? "系统保护" : deleteBusy ? "删除中…" : "删除备份"}
+                    </DangerBtn>
                   </div>
-                  </div>
+                </div>
               );
             })}
           </div>
         )}
+      </div>
       </Card>
       {dialog}
     </div>

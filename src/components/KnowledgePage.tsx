@@ -2045,7 +2045,7 @@ export default function KnowledgePage({
       )}
 
       {mobileView === "list" && (
-        <div className="knowledge-mobile-toolbar mb-4 grid gap-2 xl:hidden">
+        <div className="knowledge-mobile-toolbar mb-5 grid gap-3 xl:hidden">
           <button type="button" onClick={startNew} className="ui-button-primary h-11 min-h-11 w-full px-3">
             <Plus size={15} /> <span>新建知识条目</span>
           </button>
@@ -2579,8 +2579,8 @@ export default function KnowledgePage({
           </div>
         </aside>
 
-        <section className={["knowledge-card-index ui-panel flex min-w-0 flex-col overflow-visible p-2 xl:h-full xl:min-h-0 xl:overflow-hidden", mobileView === "list" ? "" : "hidden", "xl:flex"].join(" ")}>
-          <div className="shrink-0 px-2 pt-1">
+        <section className={["knowledge-card-index ui-panel flex min-w-0 flex-col overflow-visible p-2.5 xl:h-full xl:min-h-0 xl:overflow-hidden", mobileView === "list" ? "" : "hidden", "xl:flex"].join(" ")}>
+          <div className="shrink-0 px-2 pt-2">
             <div className="flex min-h-10 items-center justify-between gap-3 border-b border-[var(--ui-border)] pb-2">
               <div className="flex min-w-0 items-center gap-2">
                 <span className="ui-status-accent flex h-7 w-7 shrink-0 items-center justify-center rounded-lg">
@@ -2617,9 +2617,9 @@ export default function KnowledgePage({
                 搜索
               </button>
             </div>
-            <div className="hidden min-h-9 items-center justify-end gap-2 pt-1 xl:flex">
+            <div className="hidden min-h-11 items-center justify-end gap-3 pb-1 pt-2 xl:flex">
               {cards.length > 0 && (
-                <div className="flex flex-wrap items-center justify-end gap-1">
+                <div className="flex flex-wrap items-center justify-end gap-2">
                   <div className="hidden 2xl:hidden xl:block">
                     <DropdownMenu>
                       <DropdownMenuTrigger asChild>
@@ -2656,7 +2656,7 @@ export default function KnowledgePage({
                       </DropdownMenuContent>
                     </DropdownMenu>
                   </div>
-                  <div className="ui-segment min-h-8 gap-0.5 p-0.5" role="group" aria-label="列表密度">
+                  <div className="ui-segment min-h-9 gap-1 p-1" role="group" aria-label="列表密度">
                     <button
                       type="button"
                       onClick={() => changeDensity("comfortable")}
@@ -2679,32 +2679,34 @@ export default function KnowledgePage({
                     </button>
                   </div>
                   <Select value={sort} onValueChange={changeSort}>
-                    <SelectTrigger className="h-8 w-auto min-w-[100px] justify-between gap-1 rounded-lg px-2 py-0 text-left text-xs font-medium" aria-label="知识条目排序">
+                    <SelectTrigger className="h-9 min-h-9 w-auto min-w-[104px] justify-between gap-2 rounded-lg px-3 py-0 text-left text-xs font-medium" aria-label="知识条目排序">
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent align="end" className="min-w-[124px]">
                       {sortOptions.map(([value, label]) => <SelectItem key={value} value={value} className="justify-start px-2 pr-8 text-xs">{label}</SelectItem>)}
                     </SelectContent>
                   </Select>
-                  <label className="ui-button-ghost h-8 min-h-8 gap-1.5 px-2 text-xs">
-                    <TriStateCheckbox
-                      checked={allVisibleSelected}
-                      indeterminate={someVisibleSelected && !allVisibleSelected}
-                      onChange={selectAllVisible}
-                      aria-label={allVisibleSelected ? "取消选择当前列表" : "选择当前列表"}
-                      className="h-4 w-4 rounded border-[var(--ui-border-strong)] accent-[var(--ui-accent-solid)] focus:ring-2 focus:ring-[var(--ui-focus)]/30"
-                    />
-                    <span>{allVisibleSelected ? "取消全选" : someVisibleSelected ? "部分选中" : "全选当前列表"}</span>
-                  </label>
-                  <button type="button" onClick={invertVisibleSelection} className="ui-button-ghost h-8 min-h-8 px-2 text-xs">
-                    反选
-                  </button>
+                  <div className="flex items-center gap-2 border-l border-[var(--ui-border)] pl-3">
+                    <label className="ui-button-ghost h-9 min-h-9 gap-2 whitespace-nowrap px-3 text-xs">
+                      <TriStateCheckbox
+                        checked={allVisibleSelected}
+                        indeterminate={someVisibleSelected && !allVisibleSelected}
+                        onChange={selectAllVisible}
+                        aria-label={allVisibleSelected ? "取消选择当前列表" : "选择当前列表"}
+                        className="h-4 w-4 rounded border-[var(--ui-border-strong)] accent-[var(--ui-accent-solid)] focus:ring-2 focus:ring-[var(--ui-focus)]/30"
+                      />
+                      <span>{allVisibleSelected ? "取消全选" : someVisibleSelected ? "部分选中" : "全选当前列表"}</span>
+                    </label>
+                    <button type="button" onClick={invertVisibleSelection} className="ui-button-ghost h-9 min-h-9 px-3 text-xs">
+                      反选
+                    </button>
+                  </div>
                 </div>
               )}
             </div>
             {cards.length > 0 && (
-              <div className="mt-2 grid gap-2 xl:hidden">
-                <div className="grid min-w-0 grid-cols-[minmax(0,1fr)_auto] gap-2">
+              <div className="mt-3 grid gap-3 xl:hidden">
+                <div className="grid min-w-0 grid-cols-[minmax(0,1fr)_auto] gap-3">
                   <Select value={sort} onValueChange={changeSort}>
                     <SelectTrigger className="h-11 min-h-11 w-full min-w-0 justify-between gap-2 rounded-xl px-3 py-0 text-left text-xs font-medium" aria-label="知识条目排序">
                       <SelectValue />
@@ -2724,11 +2726,11 @@ export default function KnowledgePage({
                     <span className="truncate">{allVisibleSelected ? "取消全选" : someVisibleSelected ? "部分选中" : "全选当前"}</span>
                   </label>
                 </div>
-                <div className="flex min-h-7 items-center justify-between gap-2 px-1">
+                <div className="flex min-h-7 items-center justify-between gap-3 px-2">
                   <span className="min-w-0 truncate text-[11px] leading-4 text-[var(--ui-text-subtle)]">
                     {visibleSelectedCount > 0 ? `已选 ${visibleSelectedCount} 个` : "点击知识条目打开详情 · 勾选可批量处理"}
                   </span>
-                  <button type="button" onClick={invertVisibleSelection} className="ui-button-ghost h-11 min-h-11 shrink-0 px-2 text-xs md:h-9 md:min-h-9">
+                  <button type="button" onClick={invertVisibleSelection} className="ui-button-ghost h-11 min-h-11 shrink-0 px-3 text-xs md:h-9 md:min-h-9">
                     反选
                   </button>
                 </div>

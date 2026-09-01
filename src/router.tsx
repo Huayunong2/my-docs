@@ -12,7 +12,6 @@ import type { KnowledgeCardStatus, KnowledgeCardType } from "./lib/api";
 
 const TodayPage = lazy(() => import("./components/TodayPage"));
 const HistoryPage = lazy(() => import("./components/HistoryPage"));
-const ArchivePage = lazy(() => import("./components/ArchivePage"));
 const SearchPage = lazy(() => import("./components/SearchPage"));
 const StatsPage = lazy(() => import("./components/StatsPage"));
 const ReviewsPage = lazy(() => import("./components/ReviewsPage"));
@@ -24,6 +23,8 @@ const SettingsPage = lazy(() => import("./components/SettingsPage"));
 export type AppSearch = {
   q?: string;
   date?: string;
+  historyView?: "timeline" | "month" | "trash";
+  historyMonth?: string;
   tab?: string;
   returnTo?: string;
   page?: number;
@@ -54,6 +55,8 @@ function validateAppSearch(search: Record<string, unknown>): AppSearch {
   return {
     q: stringValue(search.q),
     date: stringValue(search.date),
+    historyView: validHistoryView(stringValue(search.historyView)),
+    historyMonth: validHistoryMonth(stringValue(search.historyMonth)),
     tab: stringValue(search.tab),
     returnTo: stringValue(search.returnTo),
     page: positiveInteger(search.page),
@@ -110,6 +113,14 @@ function validReviewKind(value?: string): "weekly" | "monthly" | undefined {
 
 function validReviewStatus(value?: string): "draft" | "confirmed" | undefined {
   return value === "draft" || value === "confirmed" ? value : undefined;
+}
+
+function validHistoryView(value?: string): "timeline" | "month" | "trash" | undefined {
+  return value === "timeline" || value === "month" || value === "trash" ? value : undefined;
+}
+
+function validHistoryMonth(value?: string): string | undefined {
+  return value && /^\d{4}-(?:0[1-9]|1[0-2])$/.test(value) ? value : undefined;
 }
 
 const rootRoute = createRootRoute({
@@ -220,8 +231,8 @@ function TodayRoute() {
   const search = useRootSearch();
   const shell = useAppShell();
   const returnFromToday = useCallback(() => {
-    if (search.returnTo) shell.openReviewLibrary(search.returnTo);
-  }, [search.returnTo, shell.openReviewLibrary]);
+    if (search.returnTo) shell.returnFromToday(search.returnTo);
+  }, [search.returnTo, shell.returnFromToday]);
   return (
     <TodayPage
       targetDate={search.date}
@@ -229,6 +240,7 @@ function TodayRoute() {
       onDateChange={shell.openRecordDate}
       returnTo={search.returnTo}
       onReturn={search.returnTo ? returnFromToday : undefined}
+      returnLabel={search.returnTo?.startsWith("/history") ? "记录" : "复盘库"}
       onNavigate={shell.navigate}
       zen={shell.zen}
       onToggleZen={shell.onToggleZen}
@@ -239,13 +251,24 @@ function TodayRoute() {
 }
 
 function HistoryRoute() {
+  const search = useRootSearch();
   const shell = useAppShell();
-  return <HistoryPage onEditDate={shell.openRecordDate} />;
+  return (
+    <HistoryPage
+      onEditDate={shell.openRecordDate}
+      initialView={search.historyView || "timeline"}
+      initialMonth={search.historyMonth}
+      onViewChange={(view) => shell.updateSearch({
+        historyView: view === "timeline" ? undefined : view,
+        historyMonth: view === "month" ? search.historyMonth : undefined,
+      })}
+      onMonthChange={(month) => shell.updateSearch({ historyMonth: month })}
+    />
+  );
 }
 
 function ArchiveRoute() {
-  const shell = useAppShell();
-  return <ArchivePage onEditDate={shell.openRecordDate} />;
+  return <Navigate to="/history" search={{ historyView: "month" } as never} replace />;
 }
 
 function SearchRoute() {

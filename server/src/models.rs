@@ -31,6 +31,16 @@ pub(crate) struct ArticleSummary {
     pub(crate) preview: String,
 }
 
+/// 分页读取每日记录时同时返回总数和终态，客户端不需要用“本页是否刚好满页”猜测是否还有下一页。
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub(crate) struct ArticleListResponse {
+    pub(crate) items: Vec<ArticleSummary>,
+    pub(crate) total: i64,
+    pub(crate) has_more: bool,
+    pub(crate) page: i64,
+    pub(crate) page_size: i64,
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 pub(crate) struct ArchiveMonth {
     pub(crate) year: i32,
@@ -568,6 +578,8 @@ pub(crate) struct ExportPayload {
 pub(crate) struct ListQuery {
     pub(crate) page: Option<i64>,
     pub(crate) page_size: Option<i64>,
+    #[serde(default)]
+    pub(crate) include_meta: bool,
 }
 
 #[derive(Debug, Deserialize)]
