@@ -1,5 +1,6 @@
 /* 每日总结 Service Worker —— 静态资源离线缓存 */
-const CACHE = "daily-summary-v2";
+// 变更静态资源后递增缓存版本，避免已安装的 PWA 长期继续使用旧 bundle。
+const CACHE = "daily-summary-v3";
 const PRECACHE = ["/", "/index.html", "/manifest.webmanifest", "/icon-192.png", "/icon-512.png"];
 
 self.addEventListener("install", (event) => {
