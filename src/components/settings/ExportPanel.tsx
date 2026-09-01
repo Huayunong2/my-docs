@@ -26,6 +26,8 @@ type ImportPreview = {
   articles?: ArticleImport[];
 };
 
+type MessageScope = "export" | "import";
+
 const MAX_IMPORT_FILE_BYTES = 10 * 1024 * 1024;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -103,9 +105,9 @@ async function loadAllArticleIds() {
   const pageSize = 100;
   const ids: string[] = [];
   for (let page = 1; page <= 10_000; page += 1) {
-    const articles = await api.listArticles(page, pageSize);
-    ids.push(...articles.map((article) => article.id));
-    if (articles.length < pageSize) return ids;
+    const response = await api.listArticles(page, pageSize);
+    ids.push(...response.items.map((article) => article.id));
+    if (!response.has_more) return ids;
   }
   throw new Error("记录数量超出单次导出的安全范围，请使用完整归档下载。");
 }
@@ -126,6 +128,7 @@ export default function ExportPanel({
   const [busy, setBusy] = useState<string | null>(null);
   const [msg, setMsg] = useState("");
   const [tone, setTone] = useState<Tone>("neutral");
+  const [messageScope, setMessageScope] = useState<MessageScope>("export");
   const [pendingImport, setPendingImport] = useState<ImportPreview | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   const { confirm, dialog } = useConfirmDialog();
@@ -136,6 +139,7 @@ export default function ExportPanel({
 
   const exportSelectedArticles = async (kind: "markdown" | "json") => {
     if (busy) return;
+    setMessageScope("export");
     setBusy(kind);
     setMsg(kind === "markdown" ? "正在准备 Markdown 文件包…" : "正在生成服务器端 JSON…");
     setTone("neutral");
@@ -163,6 +167,7 @@ export default function ExportPanel({
 
   const exportFull = async () => {
     if (busy) return;
+    setMessageScope("export");
     setBusy("full");
     setMsg("正在生成完整归档…");
     setTone("neutral");
@@ -188,6 +193,7 @@ export default function ExportPanel({
   const handleImport = async (event: ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
     if (!file) return;
+    setMessageScope("import");
     setBusy("read");
     setMsg("正在读取文件，尚未写入服务器…");
     setTone("neutral");
@@ -209,6 +215,7 @@ export default function ExportPanel({
 
   const importPreview = async () => {
     if (!pendingImport || busy) return;
+    setMessageScope("import");
     const summary = `${pendingImport.articleCount} 条记录、${pendingImport.reviewCount} 篇周期回顾、${pendingImport.knowledgeCount} 个知识条目`;
     const ok = await confirm({
       title: "确认导入数据",
@@ -248,12 +255,11 @@ export default function ExportPanel({
 
   return (
     <div className="settings-panel-stack flex min-w-0 flex-col gap-5">
-      {msg && <StatusBox message={msg} tone={tone} />}
-
       <Card className="settings-export-card">
         <SectionTitle desc="完整归档适合迁移或长期保存；Markdown 和 JSON 适合单独处理记录，不包含完整复习状态。">文件导出</SectionTitle>
-        <div className="settings-export-list">
-          <div className="settings-export-row settings-export-row-featured">
+        {messageScope === "export" && msg && <div className="mb-4"><StatusBox message={msg} tone={tone} /></div>}
+        <div className="settings-export-list" role="list">
+          <div className="settings-export-row settings-export-row-featured" role="listitem">
             <span className="settings-export-row-icon settings-export-row-icon-accent" aria-hidden="true"><FileArchive size={17} /></span>
             <div className="settings-export-row-copy min-w-0">
               <p className="text-sm font-semibold text-[var(--ui-text)]">下载完整归档</p>
@@ -263,7 +269,7 @@ export default function ExportPanel({
               <FileArchive size={15} /> {busy === "full" ? busyLabel : "下载完整归档"}
             </PrimaryBtn>
           </div>
-          <div className="settings-export-row">
+          <div className="settings-export-row" role="listitem">
             <span className="settings-export-row-icon" aria-hidden="true"><Download size={16} /></span>
             <div className="settings-export-row-copy min-w-0">
               <p className="text-sm font-semibold text-[var(--ui-text)]">Markdown 记录</p>
@@ -273,7 +279,7 @@ export default function ExportPanel({
               <Download size={15} /> {busy === "markdown" ? busyLabel : "下载 ZIP"}
             </SecondaryBtn>
           </div>
-          <div className="settings-export-row">
+          <div className="settings-export-row" role="listitem">
             <span className="settings-export-row-icon" aria-hidden="true"><FileJson size={16} /></span>
             <div className="settings-export-row-copy min-w-0">
               <p className="text-sm font-semibold text-[var(--ui-text)]">JSON 记录</p>
@@ -288,14 +294,15 @@ export default function ExportPanel({
 
       <Card className="settings-import-card">
         <div className="flex items-start justify-between gap-3">
-          <SectionTitle desc="选择文件后先查看摘要，确认后才会创建恢复点并写入；恢复已有快照请在上方“快照列表”操作。">导入数据</SectionTitle>
+          <SectionTitle desc="选择文件后先查看摘要，确认后才会创建恢复点并写入；恢复已有快照请在“快照列表”中操作。">导入数据</SectionTitle>
           <span className="settings-risk-badge shrink-0">会写入服务器</span>
         </div>
+        {messageScope === "import" && msg && <div className="mb-3"><StatusBox message={msg} tone={tone} /></div>}
         <p className="text-sm leading-6 text-[var(--ui-text-muted)]">建议优先使用完整归档；单次 JSON 文件请控制在 10 MB 以内，大文件先拆分后分批导入。导入前会自动创建服务器快照，结果不符合预期时可以恢复该保护点。</p>
         <input ref={fileRef} type="file" accept="application/json,.json" onChange={(event) => void handleImport(event)} className="hidden" />
         <div className="settings-import-trigger mt-4 flex flex-col gap-2 sm:flex-row sm:items-center">
           <SecondaryBtn onClick={() => fileRef.current?.click()} disabled={busy !== null} className="settings-action-button shrink-0">
-            <Upload size={15} /> {busy === "read" ? "读取中…" : "选择 JSON 文件"}
+            <Upload size={15} /> {busy === "read" ? "读取中…" : "选择归档或 JSON 文件"}
           </SecondaryBtn>
           <span className="text-xs text-[var(--ui-text-subtle)]">读取文件不会立即写入服务器</span>
         </div>

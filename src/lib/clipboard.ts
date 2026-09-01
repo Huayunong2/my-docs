@@ -1,17 +1,24 @@
 /**
- * Copy text in browsers that expose the Clipboard API as well as older or
- * insecure HTTP contexts where that API is unavailable or denied.
+ * Copy text through the asynchronous Clipboard API when it is available.
+ *
+ * The legacy command is deliberately used only when the page is not a secure
+ * context or when the modern API is missing. If writeText() rejects, falling
+ * through after the await can lose the click's transient user activation;
+ * some remote browsers then report execCommand("copy") as successful without
+ * actually updating the system clipboard.
  */
 export async function copyText(text: string): Promise<void> {
   const clipboard = typeof navigator === "undefined" ? undefined : navigator.clipboard;
-  if (clipboard?.writeText) {
+  const secureContext = typeof window === "undefined" || window.isSecureContext !== false;
+
+  if (clipboard?.writeText && secureContext) {
     try {
       await clipboard.writeText(text);
       return;
     } catch {
-      // Fall through to the legacy path. Some remote deployments expose the
-      // API but still reject it because the page is not a secure context or
-      // the browser's Permissions Policy does not allow clipboard access.
+      // Do not run the synchronous fallback after an awaited rejection. The
+      // browser may already have consumed the user activation for this click.
+      throw new Error("clipboard unavailable");
     }
   }
 

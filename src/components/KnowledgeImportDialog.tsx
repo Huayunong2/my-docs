@@ -327,7 +327,14 @@ export default function KnowledgeImportDialog({
       await copyText(knowledgeCardJsonExample);
       toast.success("JSON 示例已复制。", { duration: 2200 });
     } catch {
-      toast.error("复制失败，当前浏览器未允许访问剪贴板；请选中示例内容后复制。", { duration: 3200 });
+      if (!manualRaw.trim()) setManualRaw(knowledgeCardJsonExample);
+      const insecureContext = typeof window !== "undefined" && !window.isSecureContext;
+      toast.error(
+        insecureContext
+          ? "自动复制失败：当前云端页面使用 HTTP。请改用 HTTPS，或选中编辑区中的示例后按 Ctrl/Cmd+C。"
+          : "自动复制失败：当前浏览器未允许访问剪贴板；请选中编辑区中的示例后按 Ctrl/Cmd+C。",
+        { duration: 4200 },
+      );
     } finally {
       setCopyingJsonExample(false);
     }
@@ -510,8 +517,8 @@ export default function KnowledgeImportDialog({
   return (
     <Dialog.Root open={open} onOpenChange={onOpenChange}>
       <Dialog.Portal>
-        <Dialog.Overlay className="ui-overlay fixed inset-0 z-[80] backdrop-blur-[2px] data-[state=open]:animate-fade-in" />
-        <Dialog.Content className="ui-modal-surface fixed inset-x-3 bottom-3 z-[81] flex max-h-[min(94dvh,900px)] w-auto flex-col overflow-hidden p-4 outline-hidden data-[state=open]:animate-slide-up sm:left-1/2 sm:right-auto sm:top-1/2 sm:bottom-auto sm:w-[min(1120px,calc(100%-2rem))] sm:-translate-x-1/2 sm:-translate-y-1/2 sm:animate-fade-in sm:p-5">
+        <Dialog.Overlay className="knowledge-import-dialog-overlay ui-overlay fixed inset-0 z-[80] backdrop-blur-[2px] data-[state=open]:animate-fade-in" />
+        <Dialog.Content className="knowledge-import-dialog-surface ui-modal-surface fixed inset-x-3 bottom-3 z-[81] flex max-h-[min(94dvh,900px)] w-auto flex-col overflow-hidden p-4 outline-hidden data-[state=open]:animate-slide-up sm:left-1/2 sm:right-auto sm:top-1/2 sm:bottom-auto sm:w-[min(1120px,calc(100%-2rem))] sm:-translate-x-1/2 sm:-translate-y-1/2 sm:data-[state=open]:animate-fade-in sm:p-5">
           <header className="flex shrink-0 items-start justify-between gap-4">
             <div className="flex min-w-0 items-start gap-3">
               <span className="ui-status-accent flex h-10 w-10 shrink-0 items-center justify-center rounded-xl">

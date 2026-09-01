@@ -214,6 +214,10 @@ fn build_router(db: Database) -> Router {
             axum::routing::get(articles::get_today_article),
         )
         .route(
+            "/articles/trash",
+            axum::routing::get(articles::list_deleted_articles),
+        )
+        .route(
             "/articles/search",
             axum::routing::get(articles::search_articles),
         )
@@ -226,6 +230,10 @@ fn build_router(db: Database) -> Router {
             axum::routing::get(articles::get_article)
                 .put(articles::update_article)
                 .delete(articles::delete_article),
+        )
+        .route(
+            "/articles/:id/restore",
+            axum::routing::post(articles::restore_article),
         )
         .route(
             "/archive/months",

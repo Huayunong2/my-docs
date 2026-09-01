@@ -1,7 +1,6 @@
 import { Command } from "cmdk";
 import * as Dialog from "@radix-ui/react-dialog";
 import {
-  Archive,
   BarChart3,
   BookMarked,
   BookOpenText,
@@ -16,8 +15,7 @@ import type { Page } from "../App";
 
 const commands: { id: Page; label: string; icon: LucideIcon; hint?: string }[] = [
   { id: "today", label: "今日", icon: NotebookPen, hint: "1" },
-  { id: "history", label: "历史", icon: CalendarDays, hint: "2" },
-  { id: "archive", label: "归档", icon: Archive, hint: "3" },
+  { id: "history", label: "记录", icon: CalendarDays, hint: "2" },
   { id: "search", label: "搜索", icon: Search, hint: "4" },
   { id: "stats", label: "统计", icon: BarChart3, hint: "5" },
   { id: "reviews", label: "复盘", icon: BookOpenText, hint: "6" },

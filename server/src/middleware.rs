@@ -232,7 +232,9 @@ pub(crate) async fn add_security_headers(req: Request<Body>, next: Next) -> Resp
     );
     headers.insert(
         header::HeaderName::from_static("permissions-policy"),
-        HeaderValue::from_static("camera=(), microphone=(), geolocation=()"),
+        HeaderValue::from_static(
+            "camera=(), microphone=(), geolocation=(), clipboard-write=(self)",
+        ),
     );
     if is_api {
         headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));

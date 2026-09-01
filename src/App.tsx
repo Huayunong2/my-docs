@@ -15,7 +15,8 @@ export type { ThemeMode } from "./lib/theme";
 const pageLoaders: Partial<Record<Page, () => Promise<unknown>>> = {
   today: () => import("./components/TodayPage"),
   history: () => import("./components/HistoryPage"),
-  archive: () => import("./components/ArchivePage"),
+  // 旧的 archive 页面仍由路由兼容，但预加载统一后的记录页。
+  archive: () => import("./components/HistoryPage"),
   search: () => import("./components/SearchPage"),
   stats: () => import("./components/StatsPage"),
   reviews: () => import("./components/ReviewsPage"),
@@ -53,8 +54,8 @@ function titleForPath(pathname: string) {
     "/review": "复习",
     "/stats": "统计",
     "/search": "搜索",
-    "/history": "历史",
-    "/archive": "归档",
+    "/history": "记录",
+    "/archive": "记录",
     "/reviews": "复盘",
     "/settings": "设置",
   };
@@ -66,6 +67,7 @@ export interface AppShellContextValue {
   updateSearch: (patch: Record<string, unknown>) => void;
   openRecordDate: (date: string, returnTo?: string) => void;
   openReviewLibrary: (returnTo?: string) => void;
+  returnFromToday: (returnTo?: string) => void;
   openSearchTerm: (query: string) => void;
   openKnowledgeCard: (cardId: string) => void;
   openKnowledgeQuality: (quality: api.KnowledgeCardQuality) => void;
@@ -166,6 +168,7 @@ export function AppShell() {
   const navigate = useCallback((nextPage: Page) => {
     preloadPage(nextPage);
     if (nextPage === "knowledge") go("/knowledge");
+    else if (nextPage === "archive") go("/history", { historyView: "month" });
     else go(`/${nextPage}`);
     if (nextPage !== "today") setZen(false);
   }, [go]);
@@ -201,6 +204,35 @@ export function AppShell() {
     }
     go("/reviews", search);
   }, [go]);
+
+  const returnFromToday = useCallback((returnTo?: string) => {
+    const fallback = () => go("/history");
+    if (!returnTo || !returnTo.startsWith("/") || typeof window === "undefined") {
+      fallback();
+      return;
+    }
+    try {
+      const url = new URL(returnTo, window.location.origin);
+      const allowedPaths = new Set(["/history", "/reviews", "/search", "/stats", "/knowledge", "/review"]);
+      if (url.origin !== window.location.origin || !allowedPaths.has(url.pathname)) {
+        fallback();
+        return;
+      }
+      const search: Record<string, unknown> = {};
+      const searchKeys = [
+        "q", "date", "historyView", "historyMonth", "returnTo", "page", "scope", "project", "tag",
+        "status", "type", "sort", "usage", "quality", "view", "tab", "reviewKind", "reviewStatus",
+      ];
+      for (const key of searchKeys) {
+        const value = url.searchParams.get(key);
+        if (!value) continue;
+        search[key] = key === "page" ? Number(value) : value;
+      }
+      void routerNavigate({ to: url.pathname as never, search: search as never });
+    } catch {
+      fallback();
+    }
+  }, [go, routerNavigate]);
 
   const openSearchTerm = useCallback((query: string) => {
     preloadPage("search");
@@ -292,7 +324,7 @@ export function AppShell() {
     try {
       const url = new URL(target, window.location.origin);
       const search: Record<string, unknown> = {};
-      const searchKeys = ["q", "date", "returnTo", "page", "scope", "project", "tag", "status", "type", "sort", "usage", "quality", "view", "tab"];
+      const searchKeys = ["q", "date", "historyView", "historyMonth", "returnTo", "page", "scope", "project", "tag", "status", "type", "sort", "usage", "quality", "view", "tab"];
       for (const key of searchKeys) {
         const value = url.searchParams.get(key);
         if (!value) continue;
@@ -318,6 +350,7 @@ export function AppShell() {
     updateSearch,
     openRecordDate,
     openReviewLibrary,
+    returnFromToday,
     openSearchTerm,
     openKnowledgeCard,
     openKnowledgeQuality,

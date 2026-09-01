@@ -35,6 +35,113 @@ fn saving_a_daily_record_applies_record_invariants() {
 }
 
 #[test]
+fn daily_record_listing_and_trash_are_paginated_and_reversible() {
+    let mut db = Database::new_in_memory().expect("in-memory database");
+    let first = db
+        .articles()
+        .save(ArticleDraft {
+            date: "2026-08-16".into(),
+            title: "第一条".into(),
+            content: "分页测试一".into(),
+            mood: "".into(),
+            tags: vec![],
+            spaces: vec![],
+        })
+        .expect("save first record");
+    db.articles()
+        .save(ArticleDraft {
+            date: "2026-08-17".into(),
+            title: "第二条".into(),
+            content: "分页测试二".into(),
+            mood: "".into(),
+            tags: vec![],
+            spaces: vec![],
+        })
+        .expect("save second record");
+    let third = db
+        .articles()
+        .save(ArticleDraft {
+            date: "2026-08-18".into(),
+            title: "第三条".into(),
+            content: "分页测试三 trashmarker".into(),
+            mood: "".into(),
+            tags: vec!["可恢复".into()],
+            spaces: vec!["回收站测试".into()],
+        })
+        .expect("save third record");
+
+    let first_page = db.articles().list_page(1, 2).expect("load first page");
+    assert_eq!(first_page.page, 1);
+    assert_eq!(first_page.page_size, 2);
+    assert_eq!(first_page.total, 3);
+    assert!(first_page.has_more);
+    assert_eq!(first_page.items.len(), 2);
+    assert_eq!(first_page.items[0].date, "2026-08-18");
+
+    let second_page = db.articles().list_page(2, 2).expect("load last page");
+    assert_eq!(second_page.total, 3);
+    assert!(!second_page.has_more);
+    assert_eq!(second_page.items.len(), 1);
+    assert_eq!(second_page.items[0].id, first.id);
+    assert_eq!(db.articles().search("trashmarker").unwrap().len(), 1);
+
+    assert!(db.articles().delete(&third.id).expect("soft delete record"));
+    assert!(!db
+        .articles()
+        .delete(&third.id)
+        .expect("repeated delete is not a new deletion"));
+    assert!(db
+        .articles()
+        .find_by_id(&third.id)
+        .expect("query deleted record")
+        .is_none());
+    let active = db.articles().list_page(1, 20).expect("list active records");
+    assert_eq!(active.total, 2);
+    assert_eq!(active.items.len(), 2);
+    let trash = db
+        .articles()
+        .list_trash(1, 20)
+        .expect("list deleted records");
+    assert_eq!(trash.total, 1);
+    assert_eq!(trash.items[0].id, third.id);
+    assert!(db.articles().search("trashmarker").unwrap().is_empty());
+    assert!(db
+        .articles()
+        .list_by_space("回收站测试", 1, 20)
+        .expect("exclude deleted records from spaces")
+        .is_empty());
+    assert!(db
+        .articles()
+        .full_between("2026-08-16", "2026-08-18")
+        .expect("exclude deleted records from exports")
+        .iter()
+        .all(|article| article.id != third.id));
+
+    assert!(db.articles().restore(&third.id).expect("restore record"));
+    assert!(!db.articles().restore(&third.id).expect("restore only once"));
+    let restored = db
+        .articles()
+        .find_by_id(&third.id)
+        .expect("query restored record")
+        .expect("restored record exists");
+    assert_eq!(restored.spaces, vec!["回收站测试"]);
+    assert_eq!(db.articles().search("trashmarker").unwrap().len(), 1);
+    assert_eq!(db.articles().list_page(1, 20).unwrap().total, 3);
+    assert_eq!(
+        db.articles()
+            .summaries_by_month(2026, 8)
+            .expect("list restored month")
+            .len(),
+        3
+    );
+    assert!(db.articles().delete(&third.id).expect("delete again"));
+    assert!(!db
+        .articles()
+        .delete(&third.id)
+        .expect("do not delete twice"));
+}
+
+#[test]
 fn daily_records_and_knowledge_cards_share_named_spaces() {
     let mut db = Database::new_in_memory().expect("in-memory database");
 
@@ -61,14 +168,19 @@ fn daily_records_and_knowledge_cards_share_named_spaces() {
     assert_eq!(article.spaces.len(), 2);
     assert!(article.spaces.contains(&"C++".to_string()));
     assert!(article.spaces.contains(&"系统设计".to_string()));
-    let summaries = db.articles().list(1, 20).expect("list daily summaries");
+    let summaries = db
+        .articles()
+        .list_page(1, 20)
+        .expect("list daily summaries")
+        .items;
     assert_eq!(summaries[0].spaces.len(), 2);
     assert!(summaries[0].spaces.contains(&"C++".to_string()));
     assert!(summaries[0].spaces.contains(&"系统设计".to_string()));
     assert_eq!(
         db.articles()
-            .list(0, -1)
+            .list_page(0, -1)
             .expect("clamp invalid article pagination")
+            .items
             .len(),
         1,
         "invalid page and page size must not turn into an unbounded query"
@@ -110,6 +222,27 @@ fn daily_records_and_knowledge_cards_share_named_spaces() {
     assert_eq!(system_design.count, 0);
     assert_eq!(system_design.article_count, 1);
     assert_eq!(system_design.total_count, 1);
+
+    assert!(db
+        .articles()
+        .delete(&article.id)
+        .expect("move record to trash"));
+    let hidden_spaces = db
+        .knowledge()
+        .list_projects()
+        .expect("count spaces without trash");
+    assert_eq!(
+        hidden_spaces
+            .iter()
+            .find(|space| space.name == "C++")
+            .expect("C++ space remains")
+            .article_count,
+        0
+    );
+    assert!(db
+        .articles()
+        .restore(&article.id)
+        .expect("restore record from trash"));
 
     let restored = db
         .articles()
@@ -218,6 +351,94 @@ fn portable_archive_round_trip_preserves_daily_records_as_domain_values() {
     assert_eq!(restored.word_count, 9);
     assert_eq!(restored.tags, vec!["Rust", "备份"]);
     assert_eq!(restored.spaces, vec!["C++"]);
+}
+
+#[test]
+fn portable_archive_round_trip_preserves_deleted_record_state() {
+    let mut source = Database::new_in_memory().expect("source database");
+    let article = source
+        .articles()
+        .save(ArticleDraft {
+            date: "2026-07-14".into(),
+            title: "待恢复记录".into(),
+            content: "删除状态也需要迁移".into(),
+            mood: "".into(),
+            tags: vec!["迁移".into()],
+            spaces: vec!["备份测试".into()],
+        })
+        .expect("seed record");
+    assert!(source
+        .articles()
+        .delete(&article.id)
+        .expect("soft delete source record"));
+
+    let archive = source
+        .portable_archive()
+        .export_json()
+        .expect("export archive with trash");
+    assert!(archive["articles"]
+        .as_array()
+        .expect("archive articles")
+        .iter()
+        .any(|value| value["deleted_at"]
+            .as_str()
+            .is_some_and(|value| !value.is_empty())));
+
+    let mut target = Database::new_in_memory().expect("target database");
+    let report = target
+        .portable_archive()
+        .import_json(archive)
+        .expect("import archive with trash");
+    assert_eq!(report.imported_articles, 1);
+    assert!(target
+        .articles()
+        .find_by_date("2026-07-14")
+        .expect("active query excludes imported tombstone")
+        .is_none());
+    assert_eq!(target.articles().list_trash(1, 20).unwrap().total, 1);
+    assert!(target.articles().restore(&article.id).unwrap());
+    assert!(target
+        .articles()
+        .find_by_date("2026-07-14")
+        .unwrap()
+        .is_some());
+}
+
+#[test]
+fn legacy_archive_does_not_silently_restore_a_local_deleted_record() {
+    let mut db = Database::new_in_memory().expect("database");
+    let article = db
+        .articles()
+        .save(ArticleDraft {
+            date: "2026-07-13".into(),
+            title: "本地已删除".into(),
+            content: "本地墓碑必须保留".into(),
+            mood: "".into(),
+            tags: vec![],
+            spaces: vec![],
+        })
+        .expect("seed record");
+    assert!(db.articles().delete(&article.id).unwrap());
+
+    let legacy_archive = json!({
+        "version": 2,
+        "articles": [{
+            "id": article.id,
+            "date": "2026-07-13",
+            "title": "旧归档副本",
+            "content": "旧归档内容",
+            "mood": "",
+            "tags": [],
+            "created_at": "2026-07-13T09:00:00",
+            "updated_at": "2026-07-13T09:00:00"
+        }]
+    });
+    db.portable_archive()
+        .import_json(legacy_archive)
+        .expect("import legacy archive");
+
+    assert!(db.articles().find_by_date("2026-07-13").unwrap().is_none());
+    assert_eq!(db.articles().list_trash(1, 20).unwrap().total, 1);
 }
 
 #[test]

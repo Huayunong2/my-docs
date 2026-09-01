@@ -472,7 +472,7 @@ function MarkdownContent({ content, onWikiLink, onRepairContent }: MarkdownConte
   }
 
   return (
-    <div className="min-w-0 max-w-full break-words text-[15px] leading-7 text-[var(--ui-text-muted)]">
+    <div className="markdown-content min-w-0 max-w-full break-words text-[15px] leading-7 text-[var(--ui-text-muted)]">
       <MarkdownFenceNotice content={content} onRepairContent={onRepairContent} />
       <ReactMarkdown
         remarkPlugins={[

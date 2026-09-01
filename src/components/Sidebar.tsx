@@ -3,7 +3,6 @@ import { motion, useReducedMotion } from "framer-motion";
 import * as Dialog from "@radix-ui/react-dialog";
 import { Link } from "@tanstack/react-router";
 import {
-  Archive,
   ArrowUpRight,
   BarChart3,
   BookMarked,
@@ -53,8 +52,7 @@ const desktopNavGroups: Array<{ label: string; items: NavItem[] }> = [
   {
     label: "资料",
     items: [
-      { id: "history", label: "历史", icon: CalendarDays },
-      { id: "archive", label: "归档", icon: Archive },
+      { id: "history", label: "记录", icon: CalendarDays },
       { id: "search", label: "搜索", icon: Search },
     ],
   },
@@ -73,8 +71,7 @@ const mobilePrimaryNav: NavItem[] = [
 
 const mobileMoreNav: NavItem[] = [
   { id: "stats", label: "统计", icon: BarChart3, description: "回看节奏和生成周期回顾" },
-  { id: "history", label: "历史", icon: CalendarDays, description: "浏览每日记录" },
-  { id: "archive", label: "归档", icon: Archive, description: "管理归档内容" },
+  { id: "history", label: "记录", icon: CalendarDays, description: "按时间或月份浏览每日记录" },
   { id: "search", label: "搜索", icon: Search, description: "搜索记录和卡片" },
   { id: "settings", label: "设置", icon: Settings, description: "连接、复习与数据安全" },
 ];

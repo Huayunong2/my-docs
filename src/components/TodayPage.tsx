@@ -27,6 +27,7 @@ import {
 } from "lucide-react";
 import * as api from "../lib/api";
 import type { Article } from "../lib/api";
+import { offerArticleUndo } from "../lib/articleUndo";
 import { normalizeTag } from "../lib/tags";
 import { DailyRecordSession } from "../lib/dailyRecordSession";
 import MarkdownContent from "./MarkdownContent";
@@ -195,6 +196,7 @@ export default function TodayPage({
   onNavigate,
   returnTo,
   onReturn,
+  returnLabel = "复盘库",
   zen,
   onToggleZen,
   dark,
@@ -206,6 +208,7 @@ export default function TodayPage({
   onNavigate?: (page: "knowledge") => void;
   returnTo?: string;
   onReturn?: () => void;
+  returnLabel?: string;
   zen?: boolean;
   onToggleZen?: () => void;
   dark?: boolean;
@@ -240,6 +243,8 @@ export default function TodayPage({
   const saveTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
   const localDraftTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
   const articleRef = useRef<Article | null>(null);
+  const selectedDateRef = useRef(selectedDate);
+  selectedDateRef.current = selectedDate;
   const recordSession = useRef(new DailyRecordSession({
     create: api.createArticle,
     update: api.updateArticle,
@@ -334,7 +339,7 @@ export default function TodayPage({
   useEffect(() => {
     let cancelled = false;
     api.listArticles(1, 60)
-      .then((items) => {
+      .then(({ items }) => {
         if (cancelled) return;
         const counts = new Map<string, number>();
         for (const item of items) {
@@ -452,7 +457,7 @@ export default function TodayPage({
     if (dirty || saveTimer.current) {
       const shouldSave = await confirm({
         title: "离开当天记录",
-        message: "当前记录有未保存内容。返回复盘库前先保存吗？",
+        message: `当前记录有未保存内容。返回${returnLabel}前先保存吗？`,
         confirmText: "先保存",
       });
       if (shouldSave) {
@@ -460,7 +465,7 @@ export default function TodayPage({
         if (!saved) return;
       } else if (!(await confirm({
         title: "放弃未保存内容",
-        message: "确定放弃未保存内容并返回复盘库？",
+        message: `确定放弃未保存内容并返回${returnLabel}？`,
         confirmText: "放弃并返回",
         danger: true,
       }))) {
@@ -468,7 +473,7 @@ export default function TodayPage({
       }
     }
     onReturn();
-  }, [confirm, content, dirty, doSave, mood, onReturn, spaces, tags, title]);
+  }, [confirm, content, dirty, doSave, mood, onReturn, returnLabel, spaces, tags, title]);
 
   useEffect(() => {
     if (targetDate && targetNonce !== externalNonceRef.current) {
@@ -532,9 +537,9 @@ export default function TodayPage({
     const current = articleRef.current;
     if (!current) return;
     const ok = await confirm({
-      title: "删除记录",
-      message: `确定要删除 ${date} 的记录吗？此操作不可撤销。`,
-      confirmText: "删除",
+      title: "移入记录回收站",
+      message: `确定要把 ${date} 的记录移入回收站吗？正文和空间关系会保留，可随时恢复。`,
+      confirmText: "移入回收站",
       danger: true,
     });
     if (!ok) return;
@@ -557,6 +562,21 @@ export default function TodayPage({
       setSaveStatus("idle");
       setSaveError("");
       clearLocalDraft(date);
+      offerArticleUndo({ id: current.id, date }, async () => {
+        if (selectedDateRef.current !== date) return;
+        const restored = await api.getTodayArticle(date);
+        if (!restored) throw new Error("恢复后暂时找不到这条记录，请刷新后重试。");
+        articleRef.current = restored;
+        setArticle(restored);
+        setTitle(restored.title);
+        setContent(restored.content);
+        setMood(restored.mood);
+        setTags(restored.tags);
+        setSpaces(restored.spaces || []);
+        setDirty(false);
+        setSaveStatus("idle");
+        setSaveError("");
+      });
     } catch (e: any) {
       setSaveError("删除失败: " + api.getErrorMessage(e));
     }
@@ -836,9 +856,9 @@ export default function TodayPage({
                 type="button"
                 onClick={() => void requestReturn()}
                 className="ui-button-secondary col-span-2 w-full md:col-span-1 md:w-auto"
-                title="返回刚才的复盘库位置"
+                title={`返回刚才的${returnLabel}位置`}
               >
-                <ChevronLeft size={14} /> 返回复盘库
+                <ChevronLeft size={14} /> 返回{returnLabel}
               </button>
             )}
             <motion.button
@@ -964,7 +984,7 @@ export default function TodayPage({
                             }}
                             className="ui-button-danger h-9 min-h-9 w-full justify-start gap-2 border-0 bg-transparent px-2.5 text-xs"
                           >
-                            <Trash2 size={14} /> 删除记录
+                            <Trash2 size={14} /> 移入回收站
                           </button>
                         )}
                     </motion.div>
@@ -978,9 +998,9 @@ export default function TodayPage({
                 whileTap={{ scale: 0.95 }}
                 onClick={handleDelete}
                 className="ui-button-danger hidden md:ml-auto md:inline-flex"
-                title="删除"
+                title="移入回收站"
               >
-                <Trash2 size={14} /> 删除
+                <Trash2 size={14} /> 移入回收站
               </motion.button>
             )}
           </div>

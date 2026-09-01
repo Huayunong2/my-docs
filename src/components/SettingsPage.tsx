@@ -168,7 +168,7 @@ export default function SettingsPage({ accentTheme, onChangeAccentTheme, themeMo
     >
       <div className="settings-header ui-soft-divider shrink-0 border-b px-3 pb-3 pt-4 sm:px-4 md:px-8 md:pb-5 md:pt-6">
         <div className="settings-header-inner">
-          <PageHeader icon={Settings} title="设置" description="连接、复习、AI、备份迁移与外观" className="mb-4" />
+          <PageHeader icon={Settings} title="设置" description="连接、复习、AI、备份与迁移、外观" className="mb-4" />
           <div className="settings-tabs ui-segment flex w-full min-w-0 gap-1 overflow-x-auto p-0.5 sm:w-fit sm:overflow-visible" role="tablist" aria-orientation="horizontal" aria-label="设置分类">
             {settingsTabs.map((id) => {
               const Icon = tabIcons[id];

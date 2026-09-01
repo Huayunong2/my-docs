@@ -200,7 +200,7 @@ export default function SpaceManagerDialog({
     <Dialog.Root open={open} onOpenChange={onOpenChange}>
       <Dialog.Portal>
         <Dialog.Overlay className="ui-overlay fixed inset-0 z-[80] backdrop-blur-[2px] data-[state=open]:animate-fade-in" />
-        <Dialog.Content className="ui-modal-surface fixed inset-x-3 bottom-3 z-[81] w-auto max-h-[min(90dvh,720px)] overflow-y-auto p-4 outline-hidden data-[state=open]:animate-slide-up sm:left-1/2 sm:right-auto sm:top-1/2 sm:bottom-auto sm:w-[min(920px,calc(100%-2rem))] sm:-translate-x-1/2 sm:-translate-y-1/2 sm:animate-fade-in sm:p-5">
+        <Dialog.Content className="ui-modal-surface fixed inset-x-3 bottom-3 z-[81] w-auto max-h-[min(90dvh,720px)] overflow-y-auto p-4 outline-hidden data-[state=open]:animate-slide-up sm:left-1/2 sm:right-auto sm:top-1/2 sm:bottom-auto sm:w-[min(920px,calc(100%-2rem))] sm:-translate-x-1/2 sm:-translate-y-1/2 sm:data-[state=open]:animate-fade-in sm:p-5">
           <div className="flex items-start justify-between gap-4">
             <div className="flex min-w-0 items-start gap-3">
               <span className="ui-status-accent flex h-10 w-10 shrink-0 items-center justify-center rounded-xl">

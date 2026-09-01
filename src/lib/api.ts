@@ -202,6 +202,14 @@ export interface ArticleSummary {
   id: string; date: string; title: string; mood: string; tags: string[]; spaces?: string[]; word_count: number; preview: string;
 }
 
+export interface ArticleListResponse {
+  items: ArticleSummary[];
+  total: number;
+  has_more: boolean;
+  page: number;
+  page_size: number;
+}
+
 function readTagList(value: unknown): string[] {
   if (Array.isArray(value)) return normalizeTags(value.filter((item): item is string => typeof item === "string"));
   return typeof value === "string" ? parseTags(value) : [];
@@ -246,6 +254,10 @@ export function deleteArticle(id: string) {
   return httpRequest<void>(`/articles/${id}`, { method: "DELETE" });
 }
 
+export function restoreArticle(id: string) {
+  return httpRequest<void>(`/articles/${id}/restore`, { method: "POST", body: "{}" });
+}
+
 export function getArticle(id: string) {
   return httpRequest<Article>(`/articles/${id}`).then(mapArticle);
 }
@@ -255,7 +267,25 @@ export function getTodayArticle(date: string) {
 }
 
 export function listArticles(page: number, pageSize: number) {
-  return httpRequest<ArticleSummary[]>(`/articles?page=${page}&page_size=${pageSize}`).then((items) => items.map(mapArticle));
+  return httpRequest<ArticleListResponse | ArticleSummary[]>(`/articles?page=${page}&page_size=${pageSize}&include_meta=true`).then((response) => {
+    // Older self-hosted servers returned a bare array. Keep the client readable
+    // during a rolling upgrade; the new server supplies an authoritative end state.
+    const items = Array.isArray(response) ? response : response.items;
+    return {
+      items: items.map(mapArticle),
+      total: Array.isArray(response) ? Math.max((page - 1) * pageSize + items.length, items.length) : response.total,
+      has_more: Array.isArray(response) ? items.length === pageSize : response.has_more,
+      page: Array.isArray(response) ? page : response.page ?? page,
+      page_size: Array.isArray(response) ? pageSize : response.page_size ?? pageSize,
+    };
+  });
+}
+
+export function listArticleTrash(page = 1, pageSize = 20) {
+  return httpRequest<ArticleListResponse>(`/articles/trash?page=${page}&page_size=${pageSize}`).then((response) => ({
+    ...response,
+    items: response.items.map(mapArticle),
+  }));
 }
 
 export function listSpaceArticles(space: string, page = 1, pageSize = 12, options?: ReadRequestOptions) {
