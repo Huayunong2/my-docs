@@ -467,6 +467,14 @@ pub(crate) struct BackupMeta {
     pub(crate) name: String,
     pub(crate) size_bytes: u64,
     pub(crate) created_at: String,
+    pub(crate) kind: String,
+    pub(crate) protected: bool,
+}
+
+#[derive(Debug, Serialize)]
+pub(crate) struct RestoreBackupResult {
+    pub(crate) restored_from: String,
+    pub(crate) pre_restore_backup: BackupMeta,
 }
 
 #[derive(Debug, Deserialize)]

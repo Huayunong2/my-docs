@@ -8,6 +8,13 @@ use tower_http::cors::{AllowOrigin, CorsLayer};
 
 pub(crate) const DEFAULT_BIND_ADDRESS: &str = "0.0.0.0:8080";
 
+#[derive(Debug, PartialEq, Eq)]
+enum AuthorizationKind {
+    ConfiguredToken,
+    LocalAiTestToken,
+    NoTokenMode,
+}
+
 pub(crate) fn env_enabled(name: &str) -> bool {
     matches!(
         std::env::var(name).ok().as_deref(),
@@ -45,27 +52,63 @@ pub(crate) fn validate_security_configuration(bind: &str) -> Result<(), String> 
         std::env::var("DAILY_SUMMARY_TOKEN").ok(),
         Some(token) if !token.trim().is_empty()
     );
-    validate_security_configuration_for(bind, token_configured, allow_no_token)
+    let local_ai_access = env_enabled("DAILY_SUMMARY_LOCAL_AI_ACCESS");
+    let local_ai_token_configured = matches!(
+        std::env::var("DAILY_SUMMARY_LOCAL_AI_TOKEN").ok(),
+        Some(token) if !token.trim().is_empty()
+    );
+    validate_security_configuration_for(bind, token_configured, allow_no_token)?;
+    validate_local_ai_configuration_for(bind, local_ai_access, local_ai_token_configured)
 }
 
 fn authorize_request(
     expected: Option<&str>,
+    local_ai_token: Option<&str>,
+    local_ai_access: bool,
     allow_no_token: bool,
     bind: &str,
     provided: Option<&str>,
-) -> Result<(), (StatusCode, String)> {
-    match expected.filter(|token| !token.trim().is_empty()) {
-        Some(expected) => match provided {
-            Some(token) if constant_time_eq(token.as_bytes(), expected.as_bytes()) => Ok(()),
-            _ => Err((StatusCode::UNAUTHORIZED, "Unauthorized".into())),
-        },
-        None if allow_no_token => validate_no_token_bind_for(allow_no_token, bind)
-            .map_err(|error| (StatusCode::INTERNAL_SERVER_ERROR, error)),
-        None => Err((
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "Server token is not configured".into(),
-        )),
+) -> Result<AuthorizationKind, (StatusCode, String)> {
+    if let (Some(provided), Some(expected)) =
+        (provided, expected.filter(|token| !token.trim().is_empty()))
+    {
+        if constant_time_eq(provided.as_bytes(), expected.as_bytes()) {
+            return Ok(AuthorizationKind::ConfiguredToken);
+        }
     }
+
+    if local_ai_access {
+        validate_local_ai_configuration_for(
+            bind,
+            local_ai_access,
+            local_ai_token.is_some_and(|token| !token.trim().is_empty()),
+        )
+        .map_err(|error| (StatusCode::INTERNAL_SERVER_ERROR, error))?;
+        if let (Some(provided), Some(expected)) = (provided, local_ai_token) {
+            if constant_time_eq(provided.as_bytes(), expected.as_bytes()) {
+                return Ok(AuthorizationKind::LocalAiTestToken);
+            }
+        }
+    }
+
+    // Preserve the existing local no-token development contract when the
+    // optional AI-link mode is enabled alongside it. Supplying the local test
+    // token still identifies the request as read-only; omitting it keeps the
+    // explicitly enabled no-token development behavior.
+    if expected.filter(|token| !token.trim().is_empty()).is_none() && allow_no_token {
+        validate_no_token_bind_for(allow_no_token, bind)
+            .map_err(|error| (StatusCode::INTERNAL_SERVER_ERROR, error))?;
+        return Ok(AuthorizationKind::NoTokenMode);
+    }
+
+    if expected.filter(|token| !token.trim().is_empty()).is_some() || local_ai_access {
+        return Err((StatusCode::UNAUTHORIZED, "Unauthorized".into()));
+    }
+
+    Err((
+        StatusCode::INTERNAL_SERVER_ERROR,
+        "Server token is not configured".into(),
+    ))
 }
 
 fn validate_no_token_bind_for(allow_no_token: bool, bind: &str) -> Result<(), String> {
@@ -95,6 +138,33 @@ fn validate_security_configuration_for(
     )
 }
 
+fn validate_local_ai_configuration_for(
+    bind: &str,
+    local_ai_access: bool,
+    local_ai_token_configured: bool,
+) -> Result<(), String> {
+    if !local_ai_access {
+        return Ok(());
+    }
+    if !bind_is_loopback(bind) {
+        return Err(
+            "DAILY_SUMMARY_LOCAL_AI_ACCESS=1 requires DAILY_SUMMARY_BIND to use a loopback address"
+                .into(),
+        );
+    }
+    if !local_ai_token_configured {
+        return Err(
+            "DAILY_SUMMARY_LOCAL_AI_ACCESS=1 requires DAILY_SUMMARY_LOCAL_AI_TOKEN to be configured"
+                .into(),
+        );
+    }
+    Ok(())
+}
+
+fn local_ai_method_is_read_only(method: &Method) -> bool {
+    matches!(method, &Method::GET | &Method::HEAD | &Method::OPTIONS)
+}
+
 pub(crate) async fn require_api_token(
     req: Request<Body>,
     next: Next,
@@ -111,14 +181,25 @@ pub(crate) async fn require_api_token(
         .map(str::trim);
 
     let expected = std::env::var("DAILY_SUMMARY_TOKEN").ok();
+    let local_ai_token = std::env::var("DAILY_SUMMARY_LOCAL_AI_TOKEN").ok();
     let bind =
         std::env::var("DAILY_SUMMARY_BIND").unwrap_or_else(|_| DEFAULT_BIND_ADDRESS.to_string());
-    authorize_request(
+    let authorization = authorize_request(
         expected.as_deref(),
+        local_ai_token.as_deref(),
+        env_enabled("DAILY_SUMMARY_LOCAL_AI_ACCESS"),
         env_enabled("DAILY_SUMMARY_ALLOW_NO_TOKEN"),
         &bind,
         provided,
     )?;
+    if authorization == AuthorizationKind::LocalAiTestToken
+        && !local_ai_method_is_read_only(req.method())
+    {
+        return Err((
+            StatusCode::FORBIDDEN,
+            "The local AI test token is read-only".into(),
+        ));
+    }
     Ok(next.run(req).await)
 }
 
@@ -212,26 +293,42 @@ fn is_allowed_local_origin(origin: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use axum::http::StatusCode;
+    use axum::http::{Method, StatusCode};
 
     use super::{
-        authorize_request, bind_is_loopback, is_allowed_local_origin, no_token_mode_is_allowed,
-        validate_security_configuration_for,
+        authorize_request, bind_is_loopback, is_allowed_local_origin, local_ai_method_is_read_only,
+        no_token_mode_is_allowed, validate_local_ai_configuration_for,
+        validate_security_configuration_for, AuthorizationKind,
     };
 
     #[test]
     fn authorization_requires_a_matching_token_when_configured() {
-        assert!(authorize_request(Some("secret"), false, "0.0.0.0:8080", Some("secret")).is_ok());
+        assert!(authorize_request(
+            Some("secret"),
+            None,
+            false,
+            false,
+            "0.0.0.0:8080",
+            Some("secret")
+        )
+        .is_ok());
         assert_eq!(
-            authorize_request(Some("secret"), false, "0.0.0.0:8080", None)
+            authorize_request(Some("secret"), None, false, false, "0.0.0.0:8080", None)
                 .expect_err("missing token must be rejected")
                 .0,
             StatusCode::UNAUTHORIZED
         );
         assert_eq!(
-            authorize_request(Some("secret"), false, "0.0.0.0:8080", Some("wrong"))
-                .expect_err("wrong token must be rejected")
-                .0,
+            authorize_request(
+                Some("secret"),
+                None,
+                false,
+                false,
+                "0.0.0.0:8080",
+                Some("wrong")
+            )
+            .expect_err("wrong token must be rejected")
+            .0,
             StatusCode::UNAUTHORIZED
         );
     }
@@ -239,14 +336,14 @@ mod tests {
     #[test]
     fn authorization_rejects_missing_configuration_unless_safe_no_token_mode_is_enabled() {
         assert_eq!(
-            authorize_request(None, false, "0.0.0.0:8080", None)
+            authorize_request(None, None, false, false, "0.0.0.0:8080", None)
                 .expect_err("missing server token must fail closed")
                 .0,
             StatusCode::INTERNAL_SERVER_ERROR
         );
-        assert!(authorize_request(None, true, "127.0.0.1:8080", None).is_ok());
+        assert!(authorize_request(None, None, false, true, "127.0.0.1:8080", None).is_ok());
         assert_eq!(
-            authorize_request(None, true, "0.0.0.0:8080", None)
+            authorize_request(None, None, false, true, "0.0.0.0:8080", None)
                 .expect_err("no-token mode must not expose a public bind")
                 .0,
             StatusCode::INTERNAL_SERVER_ERROR
@@ -269,6 +366,60 @@ mod tests {
                 .expect_err("public no-token mode must prevent startup")
                 .as_str(),
             "DAILY_SUMMARY_ALLOW_NO_TOKEN=1 requires DAILY_SUMMARY_BIND to use a loopback address"
+        );
+    }
+
+    #[test]
+    fn local_ai_test_token_is_opt_in_loopback_only_and_read_only() {
+        assert_eq!(
+            authorize_request(
+                Some("production"),
+                Some("local-test"),
+                true,
+                false,
+                "127.0.0.1:8080",
+                Some("local-test"),
+            )
+            .expect("local test token should work on loopback"),
+            AuthorizationKind::LocalAiTestToken
+        );
+        assert_eq!(
+            authorize_request(
+                Some("production"),
+                Some("local-test"),
+                true,
+                false,
+                "0.0.0.0:8080",
+                Some("local-test"),
+            )
+            .expect_err("local test token must not work on a public bind")
+            .0,
+            StatusCode::INTERNAL_SERVER_ERROR
+        );
+        assert!(local_ai_method_is_read_only(&Method::GET));
+        assert!(local_ai_method_is_read_only(&Method::HEAD));
+        assert!(!local_ai_method_is_read_only(&Method::POST));
+        assert_eq!(
+            authorize_request(None, Some("local-test"), true, true, "127.0.0.1:8080", None,)
+                .expect("explicit no-token development mode should remain available"),
+            AuthorizationKind::NoTokenMode
+        );
+    }
+
+    #[test]
+    fn local_ai_configuration_requires_explicit_loopback_setup() {
+        assert!(validate_local_ai_configuration_for("127.0.0.1:8080", true, true).is_ok());
+        assert_eq!(
+            validate_local_ai_configuration_for("0.0.0.0:8080", true, true)
+                .expect_err("local AI mode must reject a public bind")
+                .as_str(),
+            "DAILY_SUMMARY_LOCAL_AI_ACCESS=1 requires DAILY_SUMMARY_BIND to use a loopback address"
+        );
+        assert_eq!(
+            validate_local_ai_configuration_for("127.0.0.1:8080", true, false)
+                .expect_err("local AI mode must require its token")
+                .as_str(),
+            "DAILY_SUMMARY_LOCAL_AI_ACCESS=1 requires DAILY_SUMMARY_LOCAL_AI_TOKEN to be configured"
         );
     }
 

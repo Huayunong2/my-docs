@@ -37,4 +37,7 @@ result="$(token_display_text "$TOKEN")"
 [[ "$result" == *"Token hint:  test...7890"* ]]
 [[ "$result" != *"$TOKEN"* ]]
 
+grep -Fq 'DAILY_SUMMARY_LOCAL_AI_ACCESS=0' "$SETUP_SCRIPT"
+grep -Fq 'DAILY_SUMMARY_LOCAL_AI_TOKEN=' "$SETUP_SCRIPT"
+
 echo "setup mode guards: ok"

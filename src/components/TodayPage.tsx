@@ -1228,7 +1228,7 @@ export default function TodayPage({
             <span>编辑</span>
             <span className="font-mono normal-case tracking-normal">{wordCount} 字</span>
           </div>
-          <div className="ui-editor-surface h-[56dvh] min-h-0 w-full overflow-hidden md:h-auto md:flex-1">
+          <div className="ui-editor-surface ui-code-editor h-[56dvh] min-h-0 w-full overflow-hidden md:h-auto md:flex-1">
             <CodeMirror
               value={content}
               onChange={handleContentChange}

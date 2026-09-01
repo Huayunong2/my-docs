@@ -45,7 +45,7 @@ export default function ReviewSourceDetail({
           className="ui-modal-surface fixed inset-x-3 bottom-3 z-50 flex max-h-[min(92dvh,860px)] max-w-3xl flex-col overflow-hidden outline-hidden sm:left-1/2 sm:right-auto sm:top-1/2 sm:bottom-auto sm:w-[calc(100%-1.5rem)] sm:-translate-x-1/2 sm:-translate-y-1/2"
         >
           <div className="ui-soft-divider flex items-start justify-between gap-3 border-b px-4 py-4 md:px-6">
-            <div className="min-w-0">
+            <div className="min-w-0 flex-1">
               <div className="flex flex-wrap items-center gap-2">
                 <span className="ui-chip h-auto gap-1 px-2.5 py-1 text-xs">
                   <CalendarDays size={13} /> {kindLabel}

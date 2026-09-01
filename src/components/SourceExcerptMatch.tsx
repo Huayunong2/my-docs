@@ -56,7 +56,7 @@ export default function SourceExcerptMatch({ source, excerpt }: { source: string
   if (!excerpt.trim()) return null;
 
   return (
-    <figure className={match ? "ui-source-match ui-status-accent mb-5 rounded-xl p-3" : "ui-source-match ui-alert-warn mb-5 rounded-xl p-3"} aria-label="来源片段在原文中的定位">
+    <figure className={match ? "ui-source-match ui-status-quote mb-5 rounded-xl p-3" : "ui-source-match ui-alert-warn mb-5 rounded-xl p-3"} aria-label="来源片段在原文中的定位">
       <figcaption className="mb-1 flex flex-wrap items-center gap-2 text-xs font-semibold">
         <span>{match ? "已在原文中定位" : "未在当前原文中找到片段"}</span>
         {match && <span className="text-[11px] font-normal text-[var(--ui-text-subtle)]">以下是匹配处上下文</span>}

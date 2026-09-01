@@ -1,7 +1,9 @@
 import { useRef, useState, type RefObject } from "react";
 import * as Dialog from "@radix-ui/react-dialog";
 import { CalendarDays, Check, Copy, Edit3, Folder, Trash2, X } from "lucide-react";
+import { toast } from "sonner";
 import type { Article } from "../lib/api";
+import { copyText } from "../lib/clipboard";
 import MarkdownContent from "./MarkdownContent";
 import SourceExcerptMatch from "./SourceExcerptMatch";
 
@@ -25,20 +27,17 @@ export default function ArticleDetail({
   const [copied, setCopied] = useState(false);
   const tags = article.tags;
   const spaces = article.spaces || [];
+  const hasTitle = Boolean(article.title?.trim());
+  const displayTitle = article.title?.trim() || "(无标题)";
   const sourceHeadingRef = useRef<HTMLHeadingElement>(null);
 
   const copyContent = async () => {
     try {
-      await navigator.clipboard.writeText(article.content);
+      await copyText(article.content);
       setCopied(true);
       window.setTimeout(() => setCopied(false), 1200);
     } catch {
-      const ta = document.createElement("textarea");
-      ta.value = article.content; ta.style.position = "fixed"; ta.style.opacity = "0";
-      document.body.appendChild(ta); ta.select();
-      document.execCommand("copy"); document.body.removeChild(ta);
-      setCopied(true);
-      window.setTimeout(() => setCopied(false), 1200);
+      toast.error("复制失败，当前浏览器未允许访问剪贴板；请选中正文后复制。", { duration: 3200 });
     }
   };
 
@@ -50,80 +49,79 @@ export default function ArticleDetail({
           : "ui-modal-surface flex max-h-[90vh] max-w-3xl flex-col overflow-hidden"
       }
     >
-      <div className="ui-soft-divider border-b px-4 py-4 md:px-6">
-        <div className="flex items-start justify-between gap-3">
-          <div className="min-w-0">
-          <div className="flex flex-wrap items-center gap-2">
-            <span className="ui-chip h-auto px-2.5 py-1 font-mono text-xs">
-              <CalendarDays size={13} /> {article.date}
-            </span>
-            {article.mood && <span className="text-lg">{article.mood}</span>}
-          </div>
-          {mode === "modal" ? (
-            <Dialog.Title asChild>
-              <h2
-                ref={sourceHeadingRef}
-                tabIndex={-1}
-                className="mt-2 break-words text-xl font-bold leading-7 text-[var(--ui-text)]"
-              >
-                {article.title || "(无标题)"}
+      <div className="article-detail-header ui-soft-divider border-b px-4 py-4 md:px-6">
+        <div className="article-detail-header-inner flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+          <div className="min-w-0 flex-1">
+            <div className="article-detail-meta flex flex-wrap items-center gap-2">
+              <CalendarDays size={14} aria-hidden="true" />
+              <time className="font-mono tabular-nums" dateTime={article.date}>{article.date}</time>
+              {article.mood && <span className="article-detail-mood ml-1 text-base leading-none" aria-label="当天心情">{article.mood}</span>}
+            </div>
+            {mode === "modal" ? (
+              <Dialog.Title asChild>
+                <h2
+                  ref={sourceHeadingRef}
+                  tabIndex={-1}
+                  className={["article-detail-title mt-2 break-words text-[1.375rem] leading-7", hasTitle ? "font-semibold" : "article-detail-title-empty font-medium"].join(" ")}
+                >
+                  {displayTitle}
+                </h2>
+              </Dialog.Title>
+            ) : (
+              <h2 className={["article-detail-title mt-2 break-words text-[1.375rem] leading-7", hasTitle ? "font-semibold" : "article-detail-title-empty font-medium"].join(" ")}>
+                {displayTitle}
               </h2>
-            </Dialog.Title>
-          ) : (
-            <h2 className="mt-2 break-words text-xl font-bold leading-7 text-[var(--ui-text)]">
-              {article.title || "(无标题)"}
-            </h2>
-          )}
-          {mode === "modal" && (
-            <Dialog.Description className="sr-only">
-              查看每日记录详情，可复制、编辑或删除这条记录。
-            </Dialog.Description>
-          )}
-          {tags.length > 0 && (
-            <div className="mt-2 flex flex-wrap gap-1.5">
-              {tags.map((tag) => (
-                <span key={tag} className="ui-chip h-6 px-2 text-[11px]">
-                  #{tag}
-                </span>
-              ))}
-            </div>
-          )}
-          {spaces.length > 0 && (
-            <div className="mt-2 flex flex-wrap gap-1.5">
-              {spaces.map((space) => (
-                <span key={space} className="ui-chip h-6 gap-1 border-[var(--ui-selected-border)] bg-[var(--ui-surface-selected)] px-2 text-[11px] text-[var(--ui-accent-text)]">
-                  <Folder size={11} /> {space}
-                </span>
-              ))}
-            </div>
-          )}
-        </div>
-        <div className="flex shrink-0 items-center gap-1.5">
-            <button type="button" onClick={copyContent} className="ui-button-secondary inline-flex h-11 min-h-11 w-11 justify-center px-0 md:h-auto md:min-h-0 md:w-auto md:px-3" aria-label={copied ? "已复制记录内容" : "复制记录内容"}>
-            {copied ? <Check size={14} /> : <Copy size={14} />}
-            <span className="hidden sm:inline">{copied ? "已复制" : "复制"}</span>
-          </button>
-            <button type="button" onClick={() => onEdit(article.date)} className={`${highlight.trim() ? "ui-button-secondary" : "ui-button-primary"} inline-flex h-11 min-h-11 w-11 justify-center px-0 md:h-auto md:min-h-0 md:w-auto md:px-3`} aria-label="编辑记录">
-            <Edit3 size={14} /> <span className="hidden sm:inline">编辑</span>
-          </button>
-          {onDelete && (
-            <button type="button" onClick={() => onDelete(article)} className="ui-button-danger inline-flex h-11 min-h-11 w-11 justify-center px-0 md:h-auto md:min-h-0 md:w-auto md:px-3" aria-label="删除记录">
-              <Trash2 size={14} /> <span className="hidden sm:inline">删除</span>
+            )}
+            {mode === "modal" && (
+              <Dialog.Description className="sr-only">
+                查看每日记录详情，可复制、编辑或删除这条记录。
+              </Dialog.Description>
+            )}
+            {tags.length > 0 && (
+              <div className="mt-2 flex flex-wrap gap-1.5">
+                {tags.map((tag) => (
+                  <span key={tag} className="article-detail-tag">
+                    #{tag}
+                  </span>
+                ))}
+              </div>
+            )}
+            {spaces.length > 0 && (
+              <div className="mt-2 flex flex-wrap gap-1.5">
+                {spaces.map((space) => (
+                  <span key={space} className="article-detail-tag article-detail-space">
+                    <Folder size={11} /> {space}
+                  </span>
+                ))}
+              </div>
+            )}
+          </div>
+          <div className="article-detail-actions flex shrink-0 flex-wrap items-center gap-1 self-end" role="group" aria-label="记录操作">
+            <button type="button" onClick={copyContent} className="article-detail-action-button ui-button-ghost justify-center" aria-label={copied ? "已复制记录内容" : "复制记录内容"}>
+              {copied ? <Check size={14} /> : <Copy size={14} />}
+              <span className="article-detail-action-label">{copied ? "已复制" : "复制"}</span>
             </button>
-          )}
-          <button type="button" onClick={onClose} className="ui-icon-button h-11 w-11 md:h-9 md:w-9" title="关闭" aria-label="关闭详情">
-            <X size={16} />
-          </button>
+            <button type="button" onClick={() => onEdit(article.date)} className="article-detail-action-button ui-button-ghost justify-center" aria-label="编辑记录">
+              <Edit3 size={14} /> <span className="article-detail-action-label">编辑</span>
+            </button>
+            {onDelete && (
+              <button type="button" onClick={() => onDelete(article)} className="article-detail-action-button ui-button-danger justify-center" aria-label="删除记录">
+                <Trash2 size={14} /> <span className="article-detail-action-label">删除</span>
+              </button>
+            )}
+            <button type="button" onClick={onClose} className="article-detail-close-button ui-icon-button" title="关闭" aria-label="关闭详情">
+              <X size={16} />
+            </button>
           </div>
         </div>
       </div>
-      <div className="flex-1 overflow-y-auto px-4 py-5 md:px-6">
+      <div className="article-detail-body flex-1 overflow-y-auto px-4 py-4 md:px-6 md:py-5">
         <div className="ui-reader">
           <SourceExcerptMatch source={article.content} excerpt={highlight} />
           <MarkdownContent content={article.content} />
         </div>
       </div>
-      <div className="ui-soft-divider border-t px-4 py-3 text-xs text-[var(--ui-text-subtle)] md:px-6">
+      <div className="ui-modal-meta ui-soft-divider border-t px-4 py-3 text-xs text-[var(--ui-text-subtle)] md:px-6">
         <div className="ui-reader flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
           <div className="flex min-w-0 items-center justify-between gap-3">
             <span>共 {article.word_count} 字</span>

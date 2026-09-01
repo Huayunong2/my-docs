@@ -76,7 +76,7 @@ const mobileMoreNav: NavItem[] = [
   { id: "history", label: "历史", icon: CalendarDays, description: "浏览每日记录" },
   { id: "archive", label: "归档", icon: Archive, description: "管理归档内容" },
   { id: "search", label: "搜索", icon: Search, description: "搜索记录和卡片" },
-  { id: "settings", label: "设置", icon: Settings, description: "连接与外观" },
+  { id: "settings", label: "设置", icon: Settings, description: "连接、复习与数据安全" },
 ];
 
 const themeIcons: Record<ThemeMode, LucideIcon> = {
@@ -350,7 +350,7 @@ function DesktopSidebar({ page, onPrefetch, onOpenPalette, dark, onToggleDark, d
                             ? "bg-[var(--ui-accent-solid)] text-white"
                             : "ui-status-muted",
                         ].join(" ")}
-                        aria-label={`今日到期 ${dueCount} 张`}
+                        aria-label={`今日可复习 ${dueCount} 张`}
                       >
                         {dueCount > 99 ? "99+" : dueCount}
                       </span>
@@ -483,7 +483,7 @@ function MobileNavButton({
               ? "bg-[var(--ui-accent-solid)] text-white"
               : "ui-status-muted",
           ].join(" ")}
-          aria-label={`今日到期 ${badge} 张`}
+          aria-label={`今日可复习 ${badge} 张`}
         >
           {badge > 99 ? "99+" : badge}
         </span>

@@ -252,6 +252,10 @@ fn build_router(db: Database) -> Router {
         )
         .route("/export/md", axum::routing::post(exports::export_markdown))
         .route("/export/json", axum::routing::post(exports::export_json))
+        .route(
+            "/export/json/download",
+            axum::routing::post(exports::export_json_download),
+        )
         .route("/export/zip", axum::routing::post(exports::export_zip))
         .route("/export/pdf", axum::routing::post(exports::export_pdf))
         .route(
@@ -261,6 +265,10 @@ fn build_router(db: Database) -> Router {
         .route(
             "/backups/:name",
             axum::routing::delete(backups::delete_backup),
+        )
+        .route(
+            "/backups/:name/restore",
+            axum::routing::post(backups::restore_backup),
         )
         .route(
             "/backups/:name/download",

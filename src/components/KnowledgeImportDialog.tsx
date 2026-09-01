@@ -26,6 +26,7 @@ import {
 import { toast } from "sonner";
 import * as api from "../lib/api";
 import { cardTypeLabels } from "../lib/cardLabels";
+import { copyText } from "../lib/clipboard";
 import {
   parseKnowledgeCardImport,
   parseKnowledgeCardMarkdownImport,
@@ -135,6 +136,7 @@ export default function KnowledgeImportDialog({
   const [singleTitle, setSingleTitle] = useState("");
   const [defaultSpace, setDefaultSpace] = useState("");
   const [saving, setSaving] = useState(false);
+  const [copyingJsonExample, setCopyingJsonExample] = useState(false);
   const [fileName, setFileName] = useState("");
   const [aiRaw, setAiRaw] = useState("");
   const [aiStage, setAiStage] = useState<AiStage>("input");
@@ -226,6 +228,7 @@ export default function KnowledgeImportDialog({
       setSingleTitle("");
       setDefaultSpace("");
       setSaving(false);
+      setCopyingJsonExample(false);
       setFileName("");
       setAiRaw("");
       setAiStage("input");
@@ -318,11 +321,15 @@ export default function KnowledgeImportDialog({
   };
 
   const copyJsonExample = async () => {
+    if (copyingJsonExample) return;
+    setCopyingJsonExample(true);
     try {
-      await navigator.clipboard.writeText(knowledgeCardJsonExample);
+      await copyText(knowledgeCardJsonExample);
       toast.success("JSON 示例已复制。", { duration: 2200 });
     } catch {
-      toast.error("复制失败，请手动选中示例复制。", { duration: 2800 });
+      toast.error("复制失败，当前浏览器未允许访问剪贴板；请选中示例内容后复制。", { duration: 3200 });
+    } finally {
+      setCopyingJsonExample(false);
     }
   };
 
@@ -513,7 +520,7 @@ export default function KnowledgeImportDialog({
               <div className="min-w-0">
                 <Dialog.Title className="text-[15px] font-semibold leading-6 text-[var(--ui-text)]">导入知识条目</Dialog.Title>
                 <Dialog.Description className="mt-1 max-w-2xl text-[13px] leading-5 text-[var(--ui-text-muted)]">
-                  把一份文档变成待确认的知识条目；导入不会直接进入复习，确认前还需要关联可读取的来源。
+                  把一份文档变成待确认的知识条目；导入不会直接进入复习，有来源时会在确认前核验，手动导入可以留空。
                 </Dialog.Description>
               </div>
             </div>
@@ -541,7 +548,7 @@ export default function KnowledgeImportDialog({
             {mode === "ai" ? (
               aiStage === "input" ? (
                 <div className="grid gap-4 lg:grid-cols-[minmax(0,1.18fr)_minmax(270px,0.82fr)]">
-                  <section className="ui-editor-surface flex min-h-[420px] min-w-0 flex-col overflow-hidden">
+                  <section className="ui-editor-surface ui-code-editor flex min-h-[420px] min-w-0 flex-col overflow-hidden">
                     <div className="ui-soft-divider flex shrink-0 items-start justify-between gap-3 border-b px-3.5 py-3">
                       <div className="min-w-0">
                         <h2 className="flex items-center gap-2 text-xs font-semibold text-[var(--ui-text)]"><FileText size={14} className="text-[var(--ui-accent-text)]" /> 文档内容</h2>
@@ -562,7 +569,7 @@ export default function KnowledgeImportDialog({
                         />
                       </label>
                     </div>
-                    <div className="min-h-[300px] flex-1 overflow-auto" aria-label="待分析的文档内容">
+                    <div className="min-h-[300px] min-w-0 w-full flex-1 overflow-auto" aria-label="待分析的文档内容">
                       <CodeMirror
                         value={aiRaw}
                         onChange={updateAiSource}
@@ -793,7 +800,10 @@ export default function KnowledgeImportDialog({
                   </Tabs>
                   <div className="flex items-center gap-1.5">
                     {manualFormat === "json" && (
-                      <button type="button" onClick={() => void copyJsonExample()} className="ui-button-ghost h-11 min-h-11 gap-1.5 px-2 text-[11px] md:h-8 md:min-h-8"><Copy size={13} /> 复制 JSON 示例</button>
+                      <button type="button" onClick={() => void copyJsonExample()} disabled={copyingJsonExample} className="ui-button-ghost h-11 min-h-11 gap-1.5 px-2 text-[11px] md:h-8 md:min-h-8">
+                        {copyingJsonExample ? <LoaderCircle size={13} className="animate-spin" /> : <Copy size={13} />}
+                        {copyingJsonExample ? "复制中…" : "复制 JSON 示例"}
+                      </button>
                     )}
                     <label className="ui-button-secondary h-11 min-h-11 cursor-pointer gap-1.5 px-2.5 text-[11px] md:h-8 md:min-h-8">
                       <Upload size={13} /> 选择文件
@@ -813,7 +823,7 @@ export default function KnowledgeImportDialog({
                 </div>
 
                 <div className="grid gap-4 lg:grid-cols-[minmax(0,1.08fr)_minmax(280px,0.92fr)]">
-                  <section className="ui-editor-surface flex min-h-[420px] min-w-0 flex-col overflow-hidden">
+                  <section className="ui-editor-surface ui-code-editor flex min-h-[420px] min-w-0 flex-col overflow-hidden">
                     <div className="ui-soft-divider flex shrink-0 items-start justify-between gap-3 border-b px-3.5 py-3">
                       <div className="min-w-0">
                         <h2 className="flex items-center gap-2 text-xs font-semibold text-[var(--ui-text)]"><Clipboard size={14} className="text-[var(--ui-accent-text)]" /> {formatLabel} 内容</h2>
@@ -831,7 +841,7 @@ export default function KnowledgeImportDialog({
                       />
                     )}
                     {manualFormat === "json" ? (
-                      <div className="min-h-[260px] flex-1 overflow-auto">
+                      <div className="min-h-[260px] min-w-0 w-full flex-1 overflow-auto">
                         <CodeMirror
                           value={manualRaw}
                           onChange={setManualRaw}
@@ -890,7 +900,7 @@ export default function KnowledgeImportDialog({
 
           <footer className="ui-soft-divider mt-4 flex shrink-0 flex-col-reverse gap-2 border-t pt-3 sm:flex-row sm:items-center sm:justify-between">
             <p className="flex items-center gap-1.5 text-[11px] leading-4 text-[var(--ui-text-subtle)]">
-              {mode === "ai" && aiStage === "input" ? <><Sparkles size={12} className="text-[var(--ui-accent-text)]" /> 长文档会按章节和段落自动分批分析，导入前可逐条编辑。</> : mode === "ai" && aiStage === "progress" ? <><Layers3 size={12} className="text-[var(--ui-accent-text)]" /> 分析任务会在后台继续运行，关闭窗口后可重新打开查看。</> : <><Check size={12} className="text-[var(--ui-success-text)]" /> 导入结果只会保存为待确认草稿；关联来源并完成核验后，才会进入复习队列。</>}
+              {mode === "ai" && aiStage === "input" ? <><Sparkles size={12} className="text-[var(--ui-accent-text)]" /> 长文档会按章节和段落自动分批分析，导入前可逐条编辑。</> : mode === "ai" && aiStage === "progress" ? <><Layers3 size={12} className="text-[var(--ui-accent-text)]" /> 分析任务会在后台继续运行，关闭窗口后可重新打开查看。</> : <><Check size={12} className="text-[var(--ui-success-text)]" /> 导入结果只会保存为待确认草稿；确认后才会进入复习队列，有来源时会在确认前核验，手动导入可以留空。</>}
             </p>
             <div className="flex gap-2 sm:justify-end">
               <Dialog.Close asChild>
@@ -1066,7 +1076,7 @@ function ImportSpaceField({
         />
       </div>
       <p className="mt-1.5 text-[11px] leading-4 text-[var(--ui-text-subtle)]">已有空间会在输入时快速匹配，请从列表中选择；只会补到没有该空间的知识条目，不会覆盖文件里的空间。</p>
-      <p className="mt-1.5 text-[11px] leading-4 text-[var(--ui-text-subtle)]">JSON 中的来源日期、来源 ID、来源片段，以及 Markdown 中的来源日期和片段会保留；没有可读取来源的导入结果会继续保持待确认。</p>
+      <p className="mt-1.5 text-[11px] leading-4 text-[var(--ui-text-subtle)]">JSON 中的来源日期、来源 ID、来源片段，以及 Markdown 中的来源日期和片段会保留；没有来源的手动导入也可以在确认后进入复习。</p>
     </div>
   );
 }

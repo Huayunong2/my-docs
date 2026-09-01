@@ -53,6 +53,30 @@ pub(crate) async fn export_json(
     Ok(Json(path.to_string_lossy().to_string()))
 }
 
+pub(crate) async fn export_json_download(
+    State(db): State<AppState>,
+    Json(payload): Json<ExportPayload>,
+) -> Result<Response, HttpError> {
+    validate_export_ids(&payload.ids)?;
+    let articles = load_articles(&db, &payload.ids)?;
+    let json = serde_json::to_vec_pretty(&articles).map_err(internal_error)?;
+    let filename = format!(
+        "daily-summary-{}.json",
+        Local::now().format("%Y%m%d-%H%M%S")
+    );
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_static("application/json; charset=utf-8"),
+    );
+    headers.insert(
+        header::CONTENT_DISPOSITION,
+        HeaderValue::from_str(&format!("attachment; filename=\"{filename}\""))
+            .map_err(internal_error)?,
+    );
+    Ok((headers, json).into_response())
+}
+
 pub(crate) async fn export_zip(
     State(db): State<AppState>,
     Json(payload): Json<ExportPayload>,

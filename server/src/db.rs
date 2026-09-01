@@ -6,13 +6,14 @@ use crate::models::{
 use chrono::{Duration, Local, NaiveDate};
 use rusqlite::types::{Type, Value as SqlValue};
 use rusqlite::{
-    params, params_from_iter, Connection, OpenFlags, OptionalExtension, Result, Transaction,
+    params, params_from_iter, Connection, DatabaseName, OpenFlags, OptionalExtension, Result,
+    Transaction,
 };
 use serde::Deserialize;
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use uuid::Uuid;
 
 type LegacyCardReviewFields = (
@@ -684,7 +685,15 @@ impl Database {
         Ok(())
     }
 
-    pub(crate) fn verify_file(path: &std::path::Path) -> std::result::Result<(), String> {
+    pub(crate) fn restore_from_snapshot(&mut self, path: &Path) -> Result<()> {
+        self.conn.restore(
+            DatabaseName::Main,
+            path,
+            None::<fn(rusqlite::backup::Progress)>,
+        )
+    }
+
+    pub(crate) fn verify_file(path: &Path) -> std::result::Result<(), String> {
         // FTS5 participates in integrity_check through an internal write-style
         // validation command, so SQLite requires a read-write handle even though
         // this operation does not change application rows.
@@ -3873,19 +3882,20 @@ impl KnowledgePersistence<'_> {
                 && values.first().is_some_and(|status| status == "confirmed"));
         if confirms_cards {
             for id in &ids {
-                let has_source: bool = self.conn.query_row(
+                let source_shape_is_valid: bool = self.conn.query_row(
                     "SELECT EXISTS(
                         SELECT 1 FROM knowledge_cards
                         WHERE id=?1 AND deleted_at=''
-                          AND trim(source_excerpt)!=''
-                          AND (trim(source_article_id)!=''
-                               OR trim(source_review_id)!=''
-                               OR trim(source_date)!='')
+                          AND (
+                            (trim(source_article_id)='' AND trim(source_review_id)=''
+                             AND trim(source_date)='' AND trim(source_excerpt)='')
+                            OR trim(source_excerpt)!=''
+                          )
                     )",
                     params![id],
                     |row| Ok(row.get::<_, i64>(0)? != 0),
                 )?;
-                if !has_source {
+                if !source_shape_is_valid {
                     return Err(rusqlite::Error::InvalidQuery);
                 }
             }

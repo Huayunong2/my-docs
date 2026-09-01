@@ -100,6 +100,26 @@ fn category(name: &str) -> Option<BackupCategory> {
     }
 }
 
+pub(crate) fn backup_kind(name: &str) -> &'static str {
+    match category(name) {
+        Some(BackupCategory::Manual) => "manual",
+        Some(BackupCategory::Automated) => "automated",
+        Some(BackupCategory::PreUpgrade) => "pre_upgrade",
+        Some(BackupCategory::PreRestore) => "pre_restore",
+        None => "unknown",
+    }
+}
+
+pub(crate) fn backup_is_protected(name: &str) -> bool {
+    name == "daily-summary-latest.db"
+        || matches!(
+            category(name),
+            Some(
+                BackupCategory::Automated | BackupCategory::PreUpgrade | BackupCategory::PreRestore
+            )
+        )
+}
+
 pub(crate) fn prune_backups(dir: &Path, limits: RetentionLimits) -> io::Result<()> {
     let mut categories: BTreeMap<BackupCategory, Vec<_>> = BTreeMap::new();
     for entry in fs::read_dir(dir)? {
@@ -341,6 +361,27 @@ mod tests {
         );
 
         fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn system_backup_categories_are_protected_from_manual_deletion() {
+        assert_eq!(backup_kind("daily-summary-20260716-010101-a.db"), "manual");
+        assert_eq!(
+            backup_kind("daily-summary-auto-20260716-010101-a.db"),
+            "automated"
+        );
+        assert_eq!(backup_kind("pre-upgrade-20260716-010101.db"), "pre_upgrade");
+        assert_eq!(
+            backup_kind("pre-restore-20260716-010101-a.db"),
+            "pre_restore"
+        );
+        assert!(!backup_is_protected("daily-summary-20260716-010101-a.db"));
+        assert!(backup_is_protected(
+            "daily-summary-auto-20260716-010101-a.db"
+        ));
+        assert!(backup_is_protected("pre-upgrade-20260716-010101.db"));
+        assert!(backup_is_protected("pre-restore-20260716-010101-a.db"));
+        assert!(backup_is_protected("daily-summary-latest.db"));
     }
 
     #[test]
