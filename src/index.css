@@ -3122,3 +3122,8 @@
     color: CanvasText;
   }
 }
+
+/* Keep accent text readable and consistent across dark pages and portals. */
+:root.dark, :root.dark[data-theme], .dark {
+  --ui-accent-text: color-mix(in srgb, var(--color-accent) 55%, #ffffff);
+}

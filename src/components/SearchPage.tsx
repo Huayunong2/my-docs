@@ -1,17 +1,35 @@
 import { useEffect, useState, useCallback, useRef } from "react";
-import { motion, AnimatePresence } from "framer-motion";
-import { AlertTriangle, BookMarked, ChevronLeft, ChevronRight, FileText, Search, SearchX } from "lucide-react";
+import { Link } from "@tanstack/react-router";
+import WorkspaceHeader from "./workspace/WorkspaceHeader";
+import { ReviewViewerModal } from "./reviews/ReviewShared";
+import { knowledgeExcerpt } from "../lib/knowledgePresentation";
+import {
+  AlertTriangle,
+  BookMarked,
+  ChevronLeft,
+  ChevronRight,
+  FileText,
+  Search,
+  SearchX,
+  BookOpenText,
+  X,
+  LoaderCircle,
+  ArrowUpRight,
+} from "lucide-react";
 import * as api from "../lib/api";
 import type { Article, ArticleSummary, KnowledgeCard } from "../lib/api";
 import { offerArticleUndo } from "../lib/articleUndo";
 import { cardStatusLabels, cardTypeLabels } from "../lib/cardLabels";
 import ArticleDetail from "./ArticleDetail";
 import { useConfirmDialog } from "./ui/Feedback";
-import PageHeader from "./ui/PageHeader";
 import { Tabs, TabsList, TabsTrigger } from "./ui/tabs";
-import { keepPreviousData, useQuery, useQueryClient } from "@tanstack/react-query";
+import {
+  keepPreviousData,
+  useQuery,
+  useQueryClient,
+} from "@tanstack/react-query";
 
-type SearchTab = "articles" | "cards";
+type SearchTab = "articles" | "cards" | "reviews";
 const searchQueryStaleTime = 30_000;
 
 function escapeRegExp(value: string): string {
@@ -36,12 +54,11 @@ function HighlightText({ text, query }: { text: string; query: string }) {
   return (
     <>
       {text.split(pattern).map((part, index) => {
-        const matched = terms.some((term) => part.toLowerCase() === term.toLowerCase());
+        const matched = terms.some(
+          (term) => part.toLowerCase() === term.toLowerCase(),
+        );
         return matched ? (
-          <mark
-            key={`${part}-${index}`}
-            className="ui-mark px-0.5"
-          >
+          <mark key={`${part}-${index}`} className="ui-mark px-0.5">
             {part}
           </mark>
         ) : (
@@ -73,9 +90,18 @@ export default function SearchPage({
   onScopeChange?: (scope: SearchTab) => void;
   onPageChange?: (page: number) => void;
 }) {
+  const [reviewDetail, setReviewDetail] = useState<api.Review | null>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
+  const resultRef = useRef<HTMLDivElement>(null);
+  const detailTriggerRef = useRef<HTMLButtonElement | null>(null);
+  const detailRequest = useRef(0);
+  const [openingId, setOpeningId] = useState("");
+  const composing = useRef(false);
   const [tab, setTab] = useState<SearchTab>(initialScope || "articles");
   const [query, setQuery] = useState(initialQuery || "");
-  const [submittedQuery, setSubmittedQuery] = useState(initialQuery?.trim() || "");
+  const [submittedQuery, setSubmittedQuery] = useState(
+    initialQuery?.trim() || "",
+  );
   const [cardPage, setCardPage] = useState(initialPage || 1);
   const [detail, setDetail] = useState<Article | null>(null);
   const [activeTag, setActiveTag] = useState("");
@@ -94,49 +120,96 @@ export default function SearchPage({
   });
   const cardsQuery = useQuery({
     queryKey: api.knowledgeQueryKeys.search("cards", normalizedQuery, cardPage),
-    queryFn: ({ signal }) => api.queryKnowledgeCards({ q: normalizedQuery, page: cardPage, page_size: 24, sort: "updated" }, { signal }),
+    queryFn: ({ signal }) =>
+      api.queryKnowledgeCards(
+        { q: normalizedQuery, page: cardPage, page_size: 24, sort: "updated" },
+        { signal },
+      ),
     enabled: tab === "cards" && !!normalizedQuery,
     placeholderData: keepPreviousData,
     staleTime: searchQueryStaleTime,
   });
-  const results: ArticleSummary[] = normalizedQuery ? articlesQuery.data || [] : [];
-  const cardResults: KnowledgeCard[] = normalizedQuery ? cardsQuery.data?.cards || [] : [];
+  const results: ArticleSummary[] = normalizedQuery
+    ? articlesQuery.data || []
+    : [];
+  const cardResults: KnowledgeCard[] = normalizedQuery
+    ? cardsQuery.data?.cards || []
+    : [];
   const cardTotal = normalizedQuery ? cardsQuery.data?.total || 0 : 0;
-  const cardHasMore = normalizedQuery ? cardsQuery.data?.has_more || false : false;
+  const cardHasMore = normalizedQuery
+    ? cardsQuery.data?.has_more || false
+    : false;
   const cardPageLagging = cardsQuery.isPlaceholderData;
-  const activeQuery = tab === "articles" ? articlesQuery : cardsQuery;
+  const reviewsQuery = useQuery({
+    queryKey: ["unifiedSearch", "reviews", normalizedQuery, cardPage],
+    queryFn: ({ signal }) =>
+      api.queryReviews(
+        { q: normalizedQuery, page: cardPage, page_size: 24 },
+        { signal },
+      ),
+    enabled: tab === "reviews" && !!normalizedQuery,
+    placeholderData: keepPreviousData,
+    staleTime: searchQueryStaleTime,
+  });
+  const reviewResults = normalizedQuery ? reviewsQuery.data?.reviews || [] : [];
+  const activeQuery =
+    tab === "articles"
+      ? articlesQuery
+      : tab === "cards"
+        ? cardsQuery
+        : reviewsQuery;
   const loading = activeQuery.isFetching;
-  const queryError = activeQuery.error ? api.getErrorMessage(activeQuery.error) : "";
-  const error = actionError || queryError;
+  const queryError = activeQuery.error
+    ? api.getErrorMessage(activeQuery.error)
+    : "";
+  const error = queryError;
   const searched = !!normalizedQuery;
   const retrySearch = () => {
     setActionError("");
     void activeQuery.refetch();
   };
 
-  const prefetchCardPage = useCallback((q: string, page: number) => {
-    const normalizedQuery = q.trim();
-    if (!normalizedQuery || page < 1) return;
-    void queryClient.prefetchQuery({
-      queryKey: api.knowledgeQueryKeys.search("cards", normalizedQuery, page),
-      queryFn: ({ signal }) => api.queryKnowledgeCards({ q: normalizedQuery, page, page_size: 24, sort: "updated" }, { signal }),
-      staleTime: searchQueryStaleTime,
-    }).catch(() => { /* 预取失败不打扰当前结果 */ });
-  }, [queryClient]);
+  const prefetchCardPage = useCallback(
+    (q: string, page: number) => {
+      const normalizedQuery = q.trim();
+      if (!normalizedQuery || page < 1) return;
+      void queryClient
+        .prefetchQuery({
+          queryKey: api.knowledgeQueryKeys.search(
+            "cards",
+            normalizedQuery,
+            page,
+          ),
+          queryFn: ({ signal }) =>
+            api.queryKnowledgeCards(
+              { q: normalizedQuery, page, page_size: 24, sort: "updated" },
+              { signal },
+            ),
+          staleTime: searchQueryStaleTime,
+        })
+        .catch(() => {
+          /* 预取失败不打扰当前结果 */
+        });
+    },
+    [queryClient],
+  );
 
   useEffect(() => {
-    if (tab !== "cards" || !normalizedQuery || !cardsQuery.data?.has_more) return;
+    if (tab !== "cards" || !normalizedQuery || !cardsQuery.data?.has_more)
+      return;
     prefetchCardPage(normalizedQuery, cardPage + 1);
   }, [cardPage, cardsQuery.data, normalizedQuery, prefetchCardPage, tab]);
 
   useEffect(() => {
     setActiveTag("");
+    detailRequest.current += 1;
+    setOpeningId("");
   }, [normalizedQuery, tab]);
 
   const switchTab = (next: SearchTab) => {
     setTab(next);
     setActionError("");
-    if (next === "cards") {
+    if (next !== "articles") {
       setCardPage(1);
       onPageChange?.(1);
     }
@@ -150,7 +223,7 @@ export default function SearchPage({
     if (nextScope === tab) return;
     setTab(nextScope);
     setActionError("");
-  }, [initialScope, tab]);
+  }, [initialScope]);
 
   // 从搜索跳转携带的关键词只在 URL 发生变化时应用，切换 Tab 不应重置输入框。
   const initialQueryHandled = useRef<string | null>(null);
@@ -176,45 +249,49 @@ export default function SearchPage({
 
   useEffect(() => {
     const nextPage = initialPage || 1;
-    if (tab !== "cards" || !query.trim() || nextPage === cardPage) return;
+    if (tab === "articles" || !query.trim() || nextPage === cardPage) return;
     setCardPage(nextPage);
   }, [cardPage, initialPage, query, tab]);
 
-  const handleInput = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const v = e.target.value;
-    setQuery(v);
-    setCardPage(1);
-    onPageChange?.(1);
-    setActionError("");
+  const submit = (value: string) => {
     if (timer.current) clearTimeout(timer.current);
-    timer.current = setTimeout(() => {
-      const nextQuery = v.trim();
-      setSubmittedQuery(nextQuery);
-      onQueryChange?.(nextQuery);
-    }, 300);
+    setSubmittedQuery(value.trim());
+    setCardPage(1);
+    setActionError("");
+    onQueryChange?.(value.trim());
   };
-
-  const handleKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === "Enter") {
+  const handleInput = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const value = event.target.value;
+    setQuery(value);
+    if (timer.current) clearTimeout(timer.current);
+    if (!composing.current)
+      timer.current = setTimeout(() => submit(value), 300);
+  };
+  useEffect(
+    () => () => {
       if (timer.current) clearTimeout(timer.current);
-      setCardPage(1);
-      onPageChange?.(1);
-      setSubmittedQuery(query.trim());
-      setActionError("");
-      onQueryChange?.(query.trim());
-    }
-  };
-
-  const openDetail = async (id: string) => {
+      detailRequest.current += 1;
+    },
+    [],
+  );
+  useEffect(() => {
+    resultRef.current?.scrollTo({ top: 0 });
+  }, [normalizedQuery, tab, cardPage]);
+  const openDetail = async (id: string, trigger: HTMLButtonElement) => {
+    detailTriggerRef.current = trigger;
+    const request = ++detailRequest.current;
+    setOpeningId(id);
     setActionError("");
     try {
       const article = await api.getArticle(id);
-      setDetail(article);
-    } catch (e: any) {
-      setActionError(api.getErrorMessage(e));
+      if (request === detailRequest.current) setDetail(article);
+    } catch (error) {
+      if (request === detailRequest.current)
+        setActionError(api.getErrorMessage(error));
+    } finally {
+      if (request === detailRequest.current) setOpeningId("");
     }
   };
-
   const deleteDetail = async (article: Article) => {
     const ok = await confirm({
       title: "移入记录回收站",
@@ -225,11 +302,14 @@ export default function SearchPage({
     if (!ok) return;
     try {
       await api.deleteArticle(article.id);
-      await queryClient.invalidateQueries({ queryKey: ["knowledgeSearch", "articles"] });
+      await queryClient.invalidateQueries({
+        queryKey: ["knowledgeSearch", "articles"],
+      });
       setDetail(null);
-      offerArticleUndo(
-        { id: article.id, date: article.date },
-        () => queryClient.invalidateQueries({ queryKey: ["knowledgeSearch", "articles"] }).then(() => undefined),
+      offerArticleUndo({ id: article.id, date: article.date }, () =>
+        queryClient
+          .invalidateQueries({ queryKey: ["knowledgeSearch", "articles"] })
+          .then(() => undefined),
       );
     } catch (e) {
       setActionError(api.getErrorMessage(e));
@@ -241,295 +321,373 @@ export default function SearchPage({
     onEditDate(date);
   };
 
-  const availableTags = Array.from(new Set(results.flatMap((item) => item.tags)));
+  const availableTags = Array.from(
+    new Set(results.flatMap((item) => item.tags)),
+  );
   const visibleResults = activeTag
     ? results.filter((item) => item.tags.includes(activeTag))
     : results;
 
+  const currentCount =
+    tab === "articles"
+      ? visibleResults.length
+      : tab === "cards"
+        ? cardTotal
+        : reviewsQuery.data?.total || 0;
+  const currentItems =
+    tab === "articles"
+      ? visibleResults
+      : tab === "cards"
+        ? cardResults
+        : reviewResults;
+  const scopeLabels = { articles: "记录", cards: "知识", reviews: "复盘" };
+  const pageHasMore =
+    tab === "cards" ? cardHasMore : reviewsQuery.data?.has_more;
   return (
-    <motion.div
-      initial={{ opacity: 0, y: 10 }}
-      animate={{ opacity: 1, y: 0 }}
-      className="page-surface page-surface-search min-h-full flex flex-col px-4 pb-28 pt-5 sm:px-6 md:h-full md:px-8 md:py-6"
-    >
-      <PageHeader
-        icon={Search}
-        title="全文搜索"
-        description="在每日记录、AI 复盘和知识卡片之间快速定位。"
-      />
-
-      {/* Tab switch */}
-      <Tabs value={tab} onValueChange={(v) => switchTab(v as SearchTab)} className="mb-4">
-        <TabsList className="grid w-full max-w-xs grid-cols-2">
-          <TabsTrigger value="articles">
-            <FileText size={13} className="mr-1" /> 文章
-          </TabsTrigger>
-          <TabsTrigger value="cards">
-            <BookMarked size={13} className="mr-1" /> 知识卡片
-          </TabsTrigger>
-        </TabsList>
-      </Tabs>
-
-      {/* Search input */}
-      <motion.div
-        className="relative"
-        initial={false}
-        animate={query ? "focused" : "idle"}
-      >
-        <input
-          type="text"
-          value={query}
-          onChange={handleInput}
-          onKeyDown={handleKeyDown}
-          placeholder="搜索标题或内容..."
-          className="archive-search-input ui-field rounded-2xl px-5 py-3.5 text-base"
-        />
-        {loading && (
-          <div className="absolute right-4 top-1/2 -translate-y-1/2">
-            <motion.div
-              animate={{ rotate: 360 }}
-              transition={{ repeat: Infinity, duration: 0.8, ease: "linear" }}
-              className="h-5 w-5 rounded-full border-2 border-[var(--ui-accent-solid)] border-t-transparent"
-            />
+    <div className="ft-page ft-search">
+      <WorkspaceHeader icon={Search} title="搜索" description="" />
+      <section className="ft-search-shell" aria-label="全文搜索">
+        <form
+          className="ft-search-input"
+          onSubmit={(event) => {
+            event.preventDefault();
+            if (!composing.current) submit(query);
+          }}
+        >
+          <Search size={21} />
+          <input
+            ref={inputRef}
+            type="search"
+            value={query}
+            onChange={handleInput}
+            onCompositionStart={() => {
+              composing.current = true;
+              if (timer.current) clearTimeout(timer.current);
+            }}
+            onCompositionEnd={(event) => {
+              composing.current = false;
+              const value = event.currentTarget.value;
+              timer.current = setTimeout(() => submit(value), 300);
+            }}
+            onKeyDown={(event) => {
+              if (
+                event.key === "Enter" &&
+                (event.nativeEvent.isComposing || event.keyCode === 229)
+              )
+                event.preventDefault();
+            }}
+            aria-label="搜索记录、知识或复盘"
+            placeholder="搜索标题、正文或关键词"
+            autoComplete="off"
+          />
+          {loading ? (
+            <LoaderCircle size={17} className="animate-spin" />
+          ) : (
+            query && (
+              <button
+                type="button"
+                className="shell-icon"
+                onClick={() => {
+                  setQuery("");
+                  submit("");
+                  inputRef.current?.focus();
+                }}
+                aria-label="清除搜索"
+              >
+                <X size={17} />
+              </button>
+            )
+          )}
+          <button type="submit" className="ui-button-primary">
+            搜索
+          </button>
+        </form>
+        <div className="ft-search-toolbar">
+          <Tabs
+            value={tab}
+            onValueChange={(value) => switchTab(value as SearchTab)}
+            className="ft-tabs"
+          >
+            <TabsList aria-label="搜索范围">
+              <TabsTrigger value="articles">
+                <FileText size={14} />
+                记录
+              </TabsTrigger>
+              <TabsTrigger value="cards">
+                <BookMarked size={14} />
+                知识
+              </TabsTrigger>
+              <TabsTrigger value="reviews">
+                <BookOpenText size={14} />
+                复盘
+              </TabsTrigger>
+            </TabsList>
+          </Tabs>
+          <span className="ft-caption" role="status">
+            {searched ? (loading ? "检索中…" : `${currentCount} 项结果`) : ""}
+          </span>
+        </div>
+        {tab === "articles" && searched && availableTags.length > 0 && (
+          <div className="ft-search-tags">
+            <button
+              type="button"
+              aria-pressed={!activeTag}
+              onClick={() => setActiveTag("")}
+            >
+              全部标签
+            </button>
+            {availableTags.slice(0, 8).map((tag) => (
+              <button
+                key={tag}
+                type="button"
+                aria-pressed={activeTag === tag}
+                onClick={() => setActiveTag(activeTag === tag ? "" : tag)}
+              >
+                #{tag}
+              </button>
+            ))}
           </div>
         )}
-      </motion.div>
-
-      {/* Results */}
-      <div className="flex-1 overflow-y-auto mt-4" aria-busy={loading}>
-        <AnimatePresence mode="wait">
-          {!searched && (
-            <motion.div
-              key="empty"
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-              className="flex h-full items-center justify-center text-[var(--ui-text-subtle)]"
+        {actionError && (
+          <div
+            className="ui-alert-bad mt-3 flex items-center justify-between gap-3"
+            role="alert"
+          >
+            <span>{actionError}</span>
+            <button
+              type="button"
+              className="shell-icon"
+              onClick={() => setActionError("")}
+              aria-label="关闭操作错误"
             >
-              <div className="text-center">
-                <span className="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-2xl bg-[var(--ui-surface-inset)] text-[var(--ui-text-muted)]">
-                  <Search size={24} />
-                </span>
-                <p>输入关键词搜索你的记录</p>
-              </div>
-            </motion.div>
-          )}
-
-          {error && (
-            <div className="py-12 text-center" role="alert">
-              <AlertTriangle size={28} className="mx-auto mb-2 text-[var(--ui-danger-text)]" />
-              <p className="text-sm text-[var(--ui-danger-text)]">{error}</p>
-              {queryError && (
-                <button type="button" onClick={retrySearch} disabled={loading} className="ui-button-secondary mt-3 h-9 px-3 text-xs">
-                  {loading ? "重试中..." : "重试"}
-                </button>
-              )}
-            </div>
-          )}
-
-          {searched && !error && loading && ((tab === "articles" ? results.length : cardResults.length) === 0) && (
-            <div className="space-y-2 py-2" role="status" aria-label="正在加载搜索结果">
-              {["w-11/12", "w-3/4", "w-5/6"].map((width) => (
-                <div key={width} className="ui-panel-muted rounded-xl p-4">
-                  <div className={`ui-skeleton h-3 ${width}`} />
-                  <div className="ui-skeleton mt-3 h-3 w-full" />
-                  <div className="ui-skeleton mt-2 h-3 w-2/3" />
-                </div>
-              ))}
-            </div>
-          )}
-
-          {searched && !error && ((tab === "articles" ? results.length : cardResults.length) === 0) && !loading && (
-            <motion.div
-              key="no-results"
-              initial={{ opacity: 0, y: 8 }}
-              animate={{ opacity: 1, y: 0 }}
-              className="py-16 text-center text-[var(--ui-text-muted)]"
-            >
-              <SearchX size={30} className="mx-auto mb-2 text-[var(--ui-text-subtle)]" />
-              <p className="text-sm">没有找到匹配的{tab === "articles" ? "记录" : "知识卡片"}</p>
-              <p className="mt-1 text-xs text-[var(--ui-text-subtle)]">试试其他关键词</p>
-            </motion.div>
-          )}
-
-          {tab === "articles" && results.length > 0 && (
-            <motion.div
-              key="results"
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              className="space-y-2"
-            >
-              <p className="mb-3 text-sm text-[var(--ui-text-muted)]">
-                找到 {visibleResults.length} 条结果{activeTag ? ` · #${activeTag}` : ""}
-              </p>
-              {availableTags.length > 0 && (
-                <div className="mb-3 flex flex-wrap gap-1.5">
-                  <button
-                    type="button"
-                    onClick={() => setActiveTag("")}
-                    className={!activeTag ? "ui-button-primary h-7 rounded-full px-2.5 text-xs" : "ui-chip h-7 px-2.5 text-xs"}
-                  >
-                    全部
-                  </button>
-                  {availableTags.map((tag) => (
-                    <button
-                      key={tag}
-                      type="button"
-                      onClick={() => setActiveTag(tag)}
-                      className={activeTag === tag ? "ui-button-primary h-7 rounded-full px-2.5 text-xs" : "ui-chip h-7 px-2.5 text-xs"}
-                    >
-                      #{tag}
-                    </button>
-                  ))}
-                </div>
-              )}
-              {visibleResults.map((a, i) => (
-                <motion.div
-                  key={a.id}
-                  initial={{ opacity: 0, y: 8 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  transition={{ delay: i * 0.04 }}
-                  className="ui-panel card-interactive relative p-4"
-                >
-                  <button
-                    type="button"
-                    onClick={() => openDetail(a.id)}
-                    aria-label={`打开 ${a.date} 的记录`}
-                    className="block w-full rounded-lg pr-12 text-left outline-hidden focus-visible:ring-2 focus-visible:ring-[var(--ui-focus)]/40"
-                  >
-                    <div className="mb-1 flex items-center gap-2">
-                      <span className="font-mono text-xs text-[var(--ui-text-subtle)]">
-                        {a.date}
-                      </span>
-                      {a.mood && <span>{a.mood}</span>}
-                    </div>
-                    <h4 className="font-medium text-[var(--ui-text)]">
-                      <HighlightText text={a.title || "(无标题)"} query={query} />
-                    </h4>
-                    <p className="mt-1 line-clamp-2 text-sm text-[var(--ui-text-muted)]">
-                      <HighlightText text={a.preview} query={query} />
-                    </p>
-                    {a.tags.length > 0 && (
-                      <div className="mt-2 flex flex-wrap gap-1">
-                        {a.tags.map((tag) => (
-                          <span key={tag} className="ui-chip h-6 px-2 py-0 text-[11px]">
-                            #{tag}
-                          </span>
-                        ))}
-                      </div>
-                    )}
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => editDate(a.date)}
-                    className="ui-button-ghost absolute right-3 top-3 h-8 px-2 text-xs"
-                    aria-label={`编辑 ${a.date} 的记录`}
-                  >
-                    编辑
-                  </button>
-                </motion.div>
-              ))}
-            </motion.div>
-          )}
-
-          {tab === "cards" && cardResults.length > 0 && (
-            <motion.div
-              key="card-results"
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              className="space-y-2"
-            >
-              <p className="mb-3 text-sm text-[var(--ui-text-muted)]">
-                找到 {cardTotal} 张知识卡片{cardTotal > 0 ? ` · 第 ${cardPage} 页` : ""}
-              </p>
-              {cardResults.map((card, i) => (
-                <motion.div
-                  key={card.id}
-                  initial={{ opacity: 0, y: 8 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  transition={{ delay: i * 0.04 }}
-                  className="ui-panel card-interactive p-4"
-                >
-                  <button
-                    type="button"
-                    onClick={() => onOpenKnowledgeCard(card.id)}
-                    aria-label={`打开知识卡片：${card.title || "无标题"}`}
-                    className="block w-full rounded-lg text-left outline-hidden focus-visible:ring-2 focus-visible:ring-[var(--ui-focus)]/40"
-                  >
-                    <div className="mb-1 flex flex-wrap items-center gap-2">
-                      <span className="ui-status-accent rounded-md px-1.5 py-0.5 text-[11px] font-semibold">
-                        {cardTypeLabels[card.card_type]}
-                      </span>
-                      <span className="font-mono text-xs text-[var(--ui-text-subtle)]">
-                        {card.source_date || "无来源日期"}
-                      </span>
-                      <span className="text-xs text-[var(--ui-text-subtle)]">
-                        {cardStatusLabels[card.status] || card.status}
-                      </span>
-                    </div>
-                    <h4 className="font-medium text-[var(--ui-text)]">
-                      <HighlightText text={card.title || "(无标题)"} query={query} />
-                    </h4>
-                    <p className="mt-1 line-clamp-2 text-sm text-[var(--ui-text-muted)]">
-                      <HighlightText text={card.content} query={query} />
-                    </p>
-                    {card.tags.length > 0 && (
-                      <div className="mt-2 flex flex-wrap gap-1">
-                        {card.tags.map((tag) => (
-                          <span key={tag} className="ui-chip h-6 px-2 py-0 text-[11px]">
-                            #{tag}
-                          </span>
-                        ))}
-                      </div>
-                    )}
-                  </button>
-                </motion.div>
-              ))}
-              {(cardPage > 1 || cardHasMore) && (
-                <div className="flex items-center justify-between gap-3 border-t pt-3 ui-soft-divider">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      const nextPage = Math.max(1, cardPage - 1);
-                      setCardPage(nextPage);
-                      onPageChange?.(nextPage);
-                    }}
-                    disabled={loading || cardPageLagging || cardPage <= 1}
-                    className="ui-button-secondary h-9 px-2.5 text-xs"
-                  >
-                    <ChevronLeft size={14} /> 上一页
-                  </button>
-                  <span className="text-xs text-[var(--ui-text-subtle)]">第 {cardPage} 页 · 每页 24 张</span>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      const nextPage = cardPage + 1;
-                      setCardPage(nextPage);
-                      onPageChange?.(nextPage);
-                    }}
-                    disabled={loading || cardPageLagging || !cardHasMore}
-                    className="ui-button-secondary h-9 px-2.5 text-xs"
-                  >
-                    下一页 <ChevronRight size={14} />
-                  </button>
-                </div>
-              )}
-            </motion.div>
-          )}
-        </AnimatePresence>
-      </div>
-
-      <AnimatePresence>
-        {detail && (
-          <ArticleDetail
-            article={detail}
-            onClose={() => setDetail(null)}
-            onEdit={editDate}
-            onDelete={deleteDetail}
-          />
+              <X size={16} />
+            </button>
+          </div>
         )}
-      </AnimatePresence>
+        <div ref={resultRef} className="ft-search-results" aria-busy={loading}>
+          {!searched ? (
+            <div className="ft-search-empty">
+              <Search size={34} strokeWidth={1.3} />
+              <h2>找回需要的内容</h2>
+              <p>搜索记录、知识条目与周期复盘</p>
+            </div>
+          ) : error ? (
+            <div className="ft-search-empty" role="alert">
+              <AlertTriangle size={30} />
+              <h2>暂时无法完成搜索</h2>
+              <p>{error}</p>
+              <button
+                className="ui-button-secondary"
+                onClick={retrySearch}
+                disabled={loading}
+              >
+                重试
+              </button>
+            </div>
+          ) : loading && currentItems.length === 0 ? (
+            <div className="ft-search-skeleton" role="status">
+              {[0, 1, 2].map((i) => (
+                <div key={i}>
+                  <div className="ui-skeleton h-4 w-2/5" />
+                  <div className="ui-skeleton mt-4 h-3 w-4/5" />
+                </div>
+              ))}
+            </div>
+          ) : !currentItems.length ? (
+            <div className="ft-search-empty">
+              <SearchX size={32} />
+              <h2>没有匹配的{scopeLabels[tab]}</h2>
+              <p>换个关键词，或切换搜索范围。</p>
+            </div>
+          ) : (
+            <div className="ft-result-list" data-stale={loading}>
+              {tab === "articles" &&
+                visibleResults.map((article) => (
+                  <article className="ft-result" key={article.id}>
+                    <FileText size={19} className="ft-result-icon" />
+                    <button
+                      className="ft-result-main"
+                      onClick={(event) =>
+                        void openDetail(article.id, event.currentTarget)
+                      }
+                      disabled={!!openingId}
+                      aria-label={`打开 ${article.date} 的记录`}
+                    >
+                      <span className="ft-result-meta">
+                        <time>{article.date}</time>
+                        {article.spaces?.slice(0, 1).map((space) => (
+                          <span key={space}>{space}</span>
+                        ))}
+                      </span>
+                      <h2>
+                        <HighlightText
+                          text={article.title || "无标题"}
+                          query={normalizedQuery}
+                        />
+                      </h2>
+                      <p>
+                        <HighlightText
+                          text={knowledgeExcerpt(article.preview, 240)}
+                          query={normalizedQuery}
+                        />
+                      </p>
+                      <span className="ft-result-tags">
+                        {article.tags.slice(0, 3).map((tag) => (
+                          <span key={tag}>#{tag}</span>
+                        ))}
+                      </span>
+                    </button>
+                    <button
+                      className="shell-icon"
+                      onClick={() => editDate(article.date)}
+                      aria-label={`编辑 ${article.date} 的记录`}
+                      title="编辑记录"
+                    >
+                      <ArrowUpRight size={17} />
+                    </button>
+                  </article>
+                ))}
+              {tab === "cards" &&
+                cardResults.map((card) => (
+                  <article className="ft-result" key={card.id}>
+                    <BookMarked size={19} className="ft-result-icon" />
+                    <Link
+                      to="/knowledge/$cardId"
+                      params={{ cardId: card.id }}
+                      search={{ view: "detail" }}
+                      onClick={(event) => {
+                        if (
+                          event.ctrlKey ||
+                          event.metaKey ||
+                          event.shiftKey ||
+                          event.altKey
+                        )
+                          return;
+                        event.preventDefault();
+                        onOpenKnowledgeCard(card.id);
+                      }}
+                      className="ft-result-main"
+                    >
+                      <span className="ft-result-meta">
+                        <span>{cardTypeLabels[card.card_type]}</span>
+                        <span>{cardStatusLabels[card.status]}</span>
+                      </span>
+                      <h2>
+                        <HighlightText
+                          text={card.title || "无标题"}
+                          query={normalizedQuery}
+                        />
+                      </h2>
+                      <p>
+                        <HighlightText
+                          text={knowledgeExcerpt(card.content, 240)}
+                          query={normalizedQuery}
+                        />
+                      </p>
+                      <span className="ft-result-tags">
+                        {card.tags.slice(0, 3).map((tag) => (
+                          <span key={tag}>#{tag}</span>
+                        ))}
+                      </span>
+                    </Link>
+                    <ArrowUpRight size={17} />
+                  </article>
+                ))}
+              {tab === "reviews" &&
+                reviewResults.map((review) => (
+                  <article className="ft-result" key={review.id}>
+                    <BookOpenText size={19} className="ft-result-icon" />
+                    <button
+                      className="ft-result-main"
+                      onClick={(event) => {
+                        detailTriggerRef.current = event.currentTarget;
+                        setReviewDetail(review);
+                      }}
+                    >
+                      <span className="ft-result-meta">
+                        <span>
+                          {review.kind === "weekly" ? "周复盘" : "月复盘"}
+                        </span>
+                        <span>
+                          {review.period_start} — {review.period_end}
+                        </span>
+                        <span>v{review.version}</span>
+                      </span>
+                      <h2>
+                        <HighlightText
+                          text={review.title}
+                          query={normalizedQuery}
+                        />
+                      </h2>
+                      <p>
+                        <HighlightText
+                          text={knowledgeExcerpt(review.content, 240)}
+                          query={normalizedQuery}
+                        />
+                      </p>
+                    </button>
+                    <ArrowUpRight size={17} />
+                  </article>
+                ))}
+            </div>
+          )}
+        </div>
+        {searched && tab !== "articles" && (cardPage > 1 || pageHasMore) && (
+          <footer className="ft-search-pagination">
+            <button
+              className="ui-button-secondary"
+              disabled={
+                loading || cardPage <= 1 || (tab === "cards" && cardPageLagging)
+              }
+              onClick={() => {
+                setCardPage(cardPage - 1);
+                onPageChange?.(cardPage - 1);
+              }}
+            >
+              <ChevronLeft size={15} />
+              上一页
+            </button>
+            <span>第 {cardPage} 页</span>
+            <button
+              className="ui-button-secondary"
+              disabled={loading || !pageHasMore}
+              onClick={() => {
+                setCardPage(cardPage + 1);
+                onPageChange?.(cardPage + 1);
+              }}
+            >
+              下一页
+              <ChevronRight size={15} />
+            </button>
+          </footer>
+        )}
+      </section>
+      {detail && (
+        <ArticleDetail
+          article={detail}
+          onClose={() => setDetail(null)}
+          onEdit={editDate}
+          onDelete={deleteDetail}
+          returnFocusRef={detailTriggerRef}
+        />
+      )}
+      {reviewDetail && (
+        <ReviewViewerModal
+          review={reviewDetail}
+          title={reviewDetail.title}
+          content={reviewDetail.content}
+          saving={false}
+          readOnly
+          onTitleChange={() => {}}
+          onContentChange={() => {}}
+          onSave={() => false}
+          onConfirm={() => false}
+          onDelete={() => false}
+          onClose={() => setReviewDetail(null)}
+          onRestoreFocus={() => detailTriggerRef.current?.focus()}
+        />
+      )}
       {dialog}
-    </motion.div>
+    </div>
   );
 }

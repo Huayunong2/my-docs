@@ -1,7 +1,8 @@
-import { useEffect, useMemo, useRef, useState, type InputHTMLAttributes } from "react";
-import { motion } from "framer-motion";
+import { useEffect, useMemo, useRef, useState } from "react";
+import KnowledgeLibrary, { type LibraryFilter } from "./knowledge/KnowledgeLibrary";
+import KnowledgeReader from "./knowledge/KnowledgeReader";
+import "./knowledge/knowledge.css";
 import { Link } from "@tanstack/react-router";
-import { useAutoAnimate } from "@formkit/auto-animate/react";
 import CodeMirror from "@uiw/react-codemirror";
 import { EditorView } from "@codemirror/view";
 import { markdown } from "@codemirror/lang-markdown";
@@ -9,24 +10,23 @@ import { Line, LineChart, ResponsiveContainer, Tooltip } from "recharts";
 import { Command } from "cmdk";
 import {
   ArrowLeft,
+  BookOpen,
+  Maximize2,
+  Minimize2,
+  PencilLine,
+  Save,
   BookMarked,
   CalendarDays,
   CheckCircle2,
   ChevronDown,
-  ChevronLeft,
-  ChevronRight,
   ExternalLink,
   FileText,
   Folder,
   FolderCog,
-  LayoutList,
-  LoaderCircle,
   MoreHorizontal,
   Plus,
   Search,
   ShieldCheck,
-  Rows3,
-  SlidersHorizontal,
   Tags,
   Trash2,
   Upload,
@@ -37,7 +37,6 @@ import type { Page } from "../App";
 import type { Article, KnowledgeCard, KnowledgeCardStatus, KnowledgeCardType } from "../lib/api";
 import { cardStatusLabels as statusLabels, cardTypeLabels as typeLabels } from "../lib/cardLabels";
 import { normalizeSpaceNames, normalizeTags } from "../lib/tags";
-import MarkdownContent from "./MarkdownContent";
 import ArticleDetail from "./ArticleDetail";
 import ReviewSourceDetail from "./ReviewSourceDetail";
 import ReviewItemsPanel from "./ReviewItemsPanel";
@@ -50,14 +49,11 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
-  DropdownMenuLabel,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "./ui/dropdown-menu";
-import { Tabs, TabsList, TabsTrigger } from "./ui/tabs";
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "./ui/sheet";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "./ui/select";
-import PageHeader, { PageHeaderActions } from "./ui/PageHeader";
 import { toast } from "sonner";
 import { useQueryClient } from "@tanstack/react-query";
 import { connectionReturnStorageKey, readLocalStorage, writeLocalStorage, writeSessionStorage } from "../lib/storage";
@@ -172,17 +168,6 @@ function hasManualKnowledgeSource(value: { source_article_id?: string; source_re
 
 function hasKnowledgeEvidence(value: { source_article_id?: string; source_review_id?: string; source_date?: string; source_excerpt?: string }) {
   return hasKnowledgeLocator(value) && !!value.source_excerpt?.trim();
-}
-
-function knowledgeSourceLabel(value: { source_article_id?: string; source_review_id?: string; source_date?: string; source_excerpt?: string }) {
-  if (hasKnowledgeEvidence(value)) return "已附来源片段";
-  if (hasManualKnowledgeSource(value)) return "已填写片段";
-  return hasKnowledgeSourceData(value) ? "来源待完善" : "无来源";
-}
-
-function knowledgeSourceTone(value: { source_article_id?: string; source_review_id?: string; source_date?: string; source_excerpt?: string }) {
-  if (hasKnowledgeEvidence(value)) return "ui-status-success";
-  return hasKnowledgeSourceData(value) ? "ui-status-quote" : "ui-status-muted";
 }
 
 function sourceContent(article: Article | null, review: api.Review | null) {
@@ -328,7 +313,6 @@ export default function KnowledgePage({
   dark?: boolean;
   onWikiLink?: (title: string) => void;
 }) {
-  const [listParent] = useAutoAnimate();
   const [cards, setCards] = useState<KnowledgeCard[]>([]);
   const [detailCard, setDetailCard] = useState<KnowledgeCard | null>(null);
   const [summary, setSummary] = useState<api.KnowledgeSummary>({ total: 0, draft: 0, confirmed: 0, outdated: 0, missing_source: 0, missing_project: 0, missing_tags: 0, short_content: 0 });
@@ -361,7 +345,13 @@ export default function KnowledgePage({
   const [importOpen, setImportOpen] = useState(false);
   const [batchMode, setBatchMode] = useState<KnowledgeBatchMode>("");
   const [batchValue, setBatchValue] = useState("");
-  const [showFilters, setShowFilters] = useState(false);
+  const [readerTab, setReaderTab] = useState<"read" | "edit" | "review">(initialView === "detail" && !initialCardId ? "edit" : "read");
+  const [focused, setFocused] = useState(false);
+  const [sourceExpanded, setSourceExpanded] = useState(false);
+  const [detailError, setDetailError] = useState("");
+  const [detailReload, setDetailReload] = useState(0);
+  const detailScrollRef = useRef<HTMLDivElement>(null);
+  const sheetReturnFocusRef = useRef<HTMLElement | null>(null);
   const [mobileFiltersOpen, setMobileFiltersOpen] = useState(false);
   const [mobileBatchOpen, setMobileBatchOpen] = useState(false);
   const [density, setDensity] = useState<KnowledgeDensity>(() => {
@@ -370,7 +360,7 @@ export default function KnowledgePage({
   });
   const [query, setQuery] = useState(initialQuery || "");
   const [mobileView, setMobileView] = useState<KnowledgeView>(initialView || (initialCardId ? "detail" : "list"));
-  const [isMobile, setIsMobile] = useState(() => typeof window !== "undefined" && window.matchMedia("(max-width: 1279px)").matches);
+  const [isMobile, setIsMobile] = useState(() => typeof window !== "undefined" && window.matchMedia("(max-width: 767px)").matches);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [saveState, setSaveState] = useState<SaveState>("idle");
@@ -470,6 +460,9 @@ export default function KnowledgePage({
     .filter(([, message]) => !!message);
 
   const focusValidationField = (field: KnowledgeValidationField) => {
+    setReaderTab("edit");
+    if (field === "source") setSourceExpanded(true);
+    window.setTimeout(() => {
     const target = document.getElementById(validationFieldIds[field]);
     if (!target) return;
     target.scrollIntoView({ block: "center", behavior: "smooth" });
@@ -479,9 +472,12 @@ export default function KnowledgePage({
       return;
     }
     (target as HTMLElement).focus();
+    }, 0);
   };
 
   const reportValidation = (errors: KnowledgeValidationErrors) => {
+    setReaderTab("edit");
+    if (errors.source) setSourceExpanded(true);
     setFieldErrors(errors);
     showNotice(`还有 ${Object.keys(errors).length} 项需要处理。`, "bad");
     window.setTimeout(() => validationSummaryRef.current?.focus(), 0);
@@ -520,7 +516,7 @@ export default function KnowledgePage({
   };
 
   useEffect(() => {
-    const media = window.matchMedia("(max-width: 1279px)");
+    const media = window.matchMedia("(max-width: 767px)");
     const update = () => setIsMobile(media.matches);
     update();
     media.addEventListener?.("change", update);
@@ -561,12 +557,6 @@ export default function KnowledgePage({
     const nextQuality = initialQuality || "";
     if (nextQuality !== qualityFilter) setQualityFilter(nextQuality);
   }, [initialQuality, qualityFilter]);
-
-  useEffect(() => {
-    if (initialType || initialUsage || initialQuality || initialTag || initialProject || (initialStatus && initialStatus !== "all")) {
-      setShowFilters(true);
-    }
-  }, [initialProject, initialQuality, initialStatus, initialTag, initialType, initialUsage]);
 
   useEffect(() => {
     if (initialView && initialView !== mobileView) setMobileView(initialView);
@@ -925,15 +915,15 @@ export default function KnowledgePage({
         lastSavedSignature.current = "";
         return;
       }
-      if ((keepSelection || initialCardId) && selectedId && pageResult.cards.some((card) => card.id === selectedId)) return;
-      const next = pageResult.cards[0] || null;
+      // Browsing must not implicitly open a card or replace a deep-linked document.
+      if (initialCardId || (selectedId && (keepSelection || mobileView === "detail"))) return;
       editorGenerationRef.current += 1;
-      setSelectedId(next?.id || null);
-      setDraft(next ? toDraft(next) : emptyDraft);
-      setDraftRelatedIds(next ? declaredRelatedIds(next) : []);
-      setDetailCard(next);
+      setSelectedId(null);
+      setDraft(emptyDraft);
+      setDraftRelatedIds([]);
+      setDetailCard(null);
       setDirty(false);
-      lastSavedSignature.current = next ? JSON.stringify(payloadFromDraft(toDraft(next), declaredRelatedIds(next))) : "";
+      lastSavedSignature.current = "";
     } catch (e) {
       if (requestId === cardListRequestRef.current) setError(api.getErrorMessage(e));
     } finally {
@@ -1235,6 +1225,9 @@ export default function KnowledgePage({
   );
 
   const selectCard = (card: KnowledgeCard) => {
+    setReaderTab("read");
+    setDetailError("");
+    setSourceExpanded(false);
     editorGenerationRef.current += 1;
     setSelectedId(card.id);
     setDetailCard(card);
@@ -1302,7 +1295,7 @@ export default function KnowledgePage({
         }
       }
       if (selectedId !== card.id) selectCard(card);
-      if (isMobile) setMobileView("detail");
+      setMobileView("detail");
       onOpenCard?.(card.id);
     };
     void open();
@@ -1315,8 +1308,6 @@ export default function KnowledgePage({
     const target = cards.find((card) => card.id === initialCardId);
     if (target) {
       initialCardHandled.current = initialCardId;
-      setActiveStatus(target.status);
-      onSearchParamsChange?.({ status: target.status });
       selectCard(target);
       return;
     }
@@ -1329,13 +1320,11 @@ export default function KnowledgePage({
       .then((card) => {
         if (cancelled || initialCardHandled.current === initialCardId) return;
         initialCardHandled.current = initialCardId;
-        setActiveStatus(card.status);
-        onSearchParamsChange?.({ status: card.status });
         selectCard(card);
       })
-      .catch(() => { /* 深链接目标不存在时保持列表空态 */ });
+      .catch((error) => { if (!cancelled) setDetailError(api.getErrorMessage(error)); });
     return () => { cancelled = true; };
-  }, [cards, initialCardId, initialNonce, onSearchParamsChange, queryClient]);
+  }, [cards, detailReload, initialCardId, initialNonce, onSearchParamsChange, queryClient]);
 
   // 单卡复习历史（间隔趋势折线）
   useEffect(() => {
@@ -1462,6 +1451,7 @@ export default function KnowledgePage({
       removeKnowledgeDraft(null);
       setRecoverableDraft(null);
       setSelectedId(null);
+      setReaderTab("edit");
       setDraft({ ...emptyDraft, status: "draft" });
       setOrganizeOpen(false);
       setSourceDetailOpen(false);
@@ -1474,7 +1464,7 @@ export default function KnowledgePage({
       setDirty(false);
       setNotice("");
       setSaveState("idle");
-      if (isMobile) setMobileView("detail");
+      setMobileView("detail");
       onNewCard?.();
     };
     void open();
@@ -1502,6 +1492,12 @@ export default function KnowledgePage({
       discardStoredDraft(null);
     }
     setMobileView("list");
+    setFocused(false);
+    const returnId = selectedId;
+    window.setTimeout(() => {
+      const link = returnId ? document.querySelector<HTMLAnchorElement>(`[data-card-id="${CSS.escape(returnId)}"]`) : null;
+      (link || document.querySelector<HTMLInputElement>('.kl-search input'))?.focus();
+    }, 80);
     if (onBackToList) onBackToList();
     else onNavigate("knowledge");
   };
@@ -1646,7 +1642,7 @@ export default function KnowledgePage({
     }
   };
 
-  const restoreCards = async (ids: string[]) => {
+  const restoreCards = async (ids: string[], reopenId?: string) => {
     if (!ids.length) return;
     setSaving(true);
     try {
@@ -1655,6 +1651,7 @@ export default function KnowledgePage({
       await refreshMetadata().catch(() => undefined);
       setSelectedIds((current) => current.filter((id) => !ids.includes(id)));
       await loadCards(false, false);
+      if (reopenId) onOpenCard?.(reopenId);
       const message = `已恢复 ${result.updated} 个知识条目。`;
       showNotice(message, "good");
       toast.success(message);
@@ -1676,6 +1673,7 @@ export default function KnowledgePage({
       danger: true,
     });
     if (!ok) return;
+    const deletedCurrentId = selectedId && ids.includes(selectedId) ? selectedId : undefined;
     setSaving(true);
     try {
       if (!(await saveDirtyDraft())) {
@@ -1685,16 +1683,24 @@ export default function KnowledgePage({
       await invalidateKnowledgeQueries();
       await refreshMetadata().catch(() => undefined);
       setSelectedIds([]);
-      editorGenerationRef.current += 1;
-      setSelectedId(null);
-      setDraft(emptyDraft);
       await loadCards(false, false);
+      if (deletedCurrentId) {
+        editorGenerationRef.current += 1;
+        setSelectedId(null);
+        setDetailCard(null);
+        setDraft(emptyDraft);
+        setDraftRelatedIds([]);
+        setDirty(false);
+        setMobileView("list");
+        setFocused(false);
+        if (onBackToList) onBackToList(); else onNavigate("knowledge");
+      }
       const message = `已删除 ${ids.length} 个知识条目。`;
       showNotice(message, "good");
       toast.success(message, {
         action: {
           label: "撤销",
-          onClick: () => { void restoreCards(ids); },
+          onClick: () => { void restoreCards(ids, deletedCurrentId); },
         },
       });
     } catch (e) {
@@ -1715,9 +1721,6 @@ export default function KnowledgePage({
     [cards, selectedIds],
   );
   const allVisibleSelected = visibleCardIds.length > 0 && visibleCardIds.every((id) => selectedIds.includes(id));
-  const someVisibleSelected = visibleCardIds.some((id) => selectedIds.includes(id));
-  const visibleSelectedCount = visibleCardIds.filter((id) => selectedIds.includes(id)).length;
-  const hiddenSelectedCount = selectedIds.length - visibleSelectedCount;
   const selectAllVisible = () => {
     const visible = new Set(visibleCardIds);
     setSelectedIds((ids) => allVisibleSelected
@@ -1732,11 +1735,6 @@ export default function KnowledgePage({
     ]);
   };
   const clearSelection = () => setSelectedIds([]);
-  const clearHiddenSelection = () => {
-    const visible = new Set(visibleCardIds);
-    setSelectedIds((ids) => ids.filter((id) => visible.has(id)));
-  };
-
   const applyBatch = async () => {
     const values = batchMode === "tag" || batchMode === "remove_tag"
       ? batchValue.split(",").map((value) => value.trim()).filter(Boolean)
@@ -1903,7 +1901,6 @@ export default function KnowledgePage({
 
   const activeQuery = routeQueryRef.current.trim();
   const activeFilterCount = [activeQuery, typeFilter, usageFilter, qualityFilter, tagFilter, projectFilter, activeStatus !== "all" ? activeStatus : "", sort !== "updated" ? sort : ""].filter(Boolean).length;
-  const activeStatusLabel = activeStatus === "all" ? "全部状态" : statusLabels[activeStatus];
   const emptyStatusLabel = activeStatus === "all" ? "知识条目" : `${statusLabels[activeStatus]}知识条目`;
   const qualityScopeLabel = projectFilter ? "空间「" + projectFilter + "」" : "全库";
   const connectionError = /令牌|token|授权|认证|无法连接服务器|服务器地址|网络|服务状态/i.test(error);
@@ -1919,12 +1916,6 @@ export default function KnowledgePage({
   const sourceReferenceLabel = sourceArticle?.title
     || sourceReview?.title
     || (draft.source_date ? `${draft.source_date} · ${currentSourceType}` : currentSourceType);
-  const scrollToSource = () => {
-    const panel = document.getElementById("knowledge-source-panel");
-    if (!panel) return;
-    panel.scrollIntoView({ behavior: "smooth", block: "start" });
-    window.setTimeout(() => panel.querySelector<HTMLTextAreaElement>("textarea")?.focus(), 250);
-  };
   const mobileSaveLabel = saving
     ? "保存中"
     : saveState === "error"
@@ -1970,51 +1961,78 @@ export default function KnowledgePage({
           ? { label: "新建知识条目", onClick: startNew }
           : { label: "查看全部知识条目", onClick: () => changeStatus("all") };
 
+  const detailVisible = mobileView === "detail" || !!initialCardId || isNewRoute;
+  const awaitingDetail = Boolean(initialCardId && selectedId !== initialCardId);
+  const clearSearch = () => {
+    setQuery("");
+    routeQueryRef.current = "";
+    setPage(1);
+    onSearchParamsChange?.({ q: undefined, page: undefined });
+    void loadCards(false, true, "", undefined, 1);
+  };
+  const libraryFilters: LibraryFilter[] = [];
+  if (activeQuery) libraryFilters.push({ label: `搜索：${activeQuery}`, onRemove: clearSearch });
+  if (projectFilter) libraryFilters.push({ label: `空间：${projectFilter}`, onRemove: () => changeProject("") });
+  if (tagFilter) libraryFilters.push({ label: `标签：${tagFilter}`, onRemove: () => changeTag("") });
+  if (typeFilter) libraryFilters.push({ label: `类型：${typeLabels[typeFilter as KnowledgeCardType]}`, onRemove: () => changeType("") });
+  if (usageFilter) libraryFilters.push({ label: "从未使用", onRemove: () => changeUsage("") });
+  if (qualityFilter) libraryFilters.push({ label: qualityOptions.find(([value]) => value === qualityFilter)?.[1] || qualityFilter, onRemove: () => changeQuality("") });
+  useEffect(() => {
+    detailScrollRef.current?.scrollTo({ top: 0 });
+    if (!detailVisible || awaitingDetail) return;
+    const frame = window.requestAnimationFrame(() => {
+      document.getElementById(readerTab === "read" ? "knowledge-reading-title" : readerTab === "edit" ? "knowledge-card-title" : "knowledge-review-panel")?.focus({ preventScroll: true });
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [selectedId, readerTab, detailVisible, awaitingDetail]);
+  useEffect(() => {
+    const keydown = (event: KeyboardEvent) => {
+      if (!detailVisible || event.isComposing || event.defaultPrevented || document.querySelector('[role="dialog"], [role="alertdialog"], [role="menu"], [role="listbox"]')) return;
+      if (event.key === "Escape") { event.preventDefault(); void closeMobileDetail(); }
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "s" && readerTab === "edit") {
+        event.preventDefault();
+        if (!saving && saveState !== "saving") void (selectedId ? retrySaveDraft() : saveNewCard());
+      }
+    };
+    window.addEventListener("keydown", keydown);
+    return () => window.removeEventListener("keydown", keydown);
+  }, [detailVisible, readerTab, saving, saveState, selectedId, draft, dirty]);
   return (
-    <motion.div
-      initial={{ opacity: 0, y: 10 }}
-      animate={{ opacity: 1, y: 0 }}
-      className="page-surface page-surface-knowledge min-w-0 min-h-full overflow-x-hidden px-3 pb-24 pt-4 sm:px-4 md:px-8 md:py-6 xl:flex xl:h-full xl:min-h-0 xl:flex-col xl:overflow-hidden"
-    >
-      <PageHeader
-        className="knowledge-page-header"
-        icon={BookMarked}
-        title="知识工作台"
-        description={
-          <>
-            <span className="hidden xl:inline">把真实记录、Markdown 或 AI 整理的内容，沉淀成可追溯、可确认的知识条目</span>
-            <span className="xl:hidden">把记录、Markdown 或 AI 内容，沉淀成可追溯的知识条目</span>
-          </>
-        }
-        navigation={
-          <Tabs value={activeStatus} onValueChange={(v) => changeStatus(v as KnowledgeStatusFilter)} className="hidden min-w-0 md:block md:w-full md:max-w-[500px]">
-            <TabsList className="grid w-full grid-cols-4">
-              {statusFilterOptions.map(([status, label]) => (
-                <TabsTrigger key={status} value={status}>
-                  {label} <span className="font-mono text-[11px] opacity-70">{status === "all" ? counts.total : counts[status]}</span>
-                </TabsTrigger>
-              ))}
-            </TabsList>
-            </Tabs>
-        }
-        actions={
-          <PageHeaderActions
-            primary={
-              <button type="button" onClick={startNew} className="ui-button-primary hidden h-9 px-3 text-xs xl:inline-flex">
-                <Plus size={14} /> 新建知识条目
-              </button>
-            }
-            secondary={
-              <button type="button" onClick={() => setImportOpen(true)} className="ui-button-secondary h-11 min-h-11 px-3 text-xs md:h-9 md:min-h-9">
-                <Upload size={14} /> 导入知识条目
-              </button>
-            }
-          />
-        }
-      />
-
+    <div className="knowledge-hub">
+      <header className="kl-page-header">
+        <div className="kl-page-title">
+          <span className="kl-brand-mark">
+            <BookMarked size={23} strokeWidth={1.6} />
+          </span>
+          <div>
+            <h1>知识</h1>
+          </div>
+        </div>
+        <div className="kl-page-actions">
+          <button
+            type="button"
+            onClick={() => setImportOpen(true)}
+            aria-label="导入知识"
+            className="ui-button-secondary"
+          >
+            <Upload size={16} />
+            <span>导入知识</span>
+          </button>
+          <button
+            type="button"
+            onClick={startNew}
+            className="ui-button-primary"
+          >
+            <Plus size={17} />
+            <span>新建条目</span>
+          </button>
+        </div>
+      </header>
       {error && (
-        <div className="ui-alert-bad mb-4 flex flex-wrap items-center justify-between gap-3" role="alert">
+        <div
+          className="ui-alert-bad mb-4 flex flex-wrap items-center justify-between gap-3"
+          role="alert"
+        >
           <span className="min-w-0 flex-1">{error}</span>
           <div className="flex shrink-0 items-center gap-2">
             {connectionError && (
@@ -2026,7 +2044,12 @@ export default function KnowledgePage({
                 前往连接设置
               </button>
             )}
-            <button type="button" onClick={() => void loadCards(false, false)} disabled={loading} className="ui-button-ghost h-11 min-h-11 shrink-0 px-2.5 text-xs md:h-8 md:min-h-8">
+            <button
+              type="button"
+              onClick={() => void loadCards(false, false)}
+              disabled={loading}
+              className="ui-button-ghost h-11 min-h-11 shrink-0 px-2.5 text-xs md:h-8 md:min-h-8"
+            >
               {loading ? "重试中..." : "重试"}
             </button>
           </div>
@@ -2034,58 +2057,78 @@ export default function KnowledgePage({
       )}
 
       {recoverableDraft?.cardId === null && !isNewRoute && !selectedId && (
-        <div className="ui-alert-warn mb-4 flex flex-wrap items-center justify-between gap-3" role="status">
+        <div
+          className="ui-alert-warn mb-4 flex flex-wrap items-center justify-between gap-3"
+          role="status"
+        >
           <span className="min-w-0 flex-1 text-xs leading-5">
-            发现一份尚未创建的新知识草稿（{new Date(recoverableDraft.savedAt).toLocaleString()}）。
+            发现一份尚未创建的新知识草稿（
+            {new Date(recoverableDraft.savedAt).toLocaleString()}）。
           </span>
-          <button type="button" onClick={resumeStoredNewDraft} className="ui-button-primary h-11 min-h-11 px-2.5 text-xs md:h-8 md:min-h-8">
-            继续编辑
-          </button>
-        </div>
-      )}
-
-      {mobileView === "list" && (
-        <div className="knowledge-mobile-toolbar mb-5 grid gap-3 xl:hidden">
-          <button type="button" onClick={startNew} className="ui-button-primary h-11 min-h-11 w-full px-3">
-            <Plus size={15} /> <span>新建知识条目</span>
-          </button>
           <button
             type="button"
-            onClick={() => setMobileFiltersOpen(true)}
-            className="ui-mobile-control flex h-11 min-h-11 w-full min-w-0 items-center gap-2 text-left shadow-xs"
+            onClick={resumeStoredNewDraft}
+            className="ui-button-primary h-11 min-h-11 px-2.5 text-xs md:h-8 md:min-h-8"
           >
-            <Search size={16} className="shrink-0 text-[var(--ui-accent-text)]" />
-            <span className="min-w-0 flex-1 truncate">{query || "搜索标题、内容或来源"}</span>
-            {activeFilterCount > 0 && <span className="ui-status-accent inline-flex h-5 min-w-5 items-center justify-center rounded-full px-1.5 text-[10px] font-bold">{activeFilterCount}</span>}
-            <SlidersHorizontal size={15} className="shrink-0 text-[var(--ui-text-subtle)]" />
+            继续编辑
           </button>
         </div>
       )}
 
       <Sheet open={mobileFiltersOpen} onOpenChange={setMobileFiltersOpen}>
         <SheetContent
-          side="bottom"
-          className="px-0 pb-[calc(0.75rem+env(safe-area-inset-bottom,0px))]"
-          onOpenAutoFocus={(event) => event.preventDefault()}
+          side={isMobile ? "bottom" : "right"}
+          onCloseAutoFocus={(event) => {
+            event.preventDefault();
+            sheetReturnFocusRef.current?.focus();
+          }}
+          className="kl-filter-sheet px-0 pb-[calc(0.75rem+env(safe-area-inset-bottom,0px))]"
         >
           <SheetHeader>
             <div className="flex items-center justify-between gap-3">
               <SheetTitle>搜索与筛选</SheetTitle>
+              <button
+                type="button"
+                className="ui-icon-button"
+                onClick={() => setMobileFiltersOpen(false)}
+                aria-label="关闭筛选"
+              >
+                <X size={18} />
+              </button>
               {activeFilterCount > 0 && (
-                <button type="button" onClick={resetFilters} className="ui-button-ghost h-11 min-h-11 shrink-0 px-2 text-xs md:h-8 md:min-h-8">
+                <button
+                  type="button"
+                  onClick={resetFilters}
+                  className="ui-button-ghost h-11 min-h-11 shrink-0 px-2 text-xs md:h-8 md:min-h-8"
+                >
                   重置全部
                 </button>
               )}
             </div>
-            <SheetDescription>筛选结果会同步到地址栏，刷新后仍可恢复。</SheetDescription>
+            <SheetDescription>
+              筛选结果会同步到地址栏，刷新后仍可恢复。
+            </SheetDescription>
           </SheetHeader>
           <div className="min-h-0 flex-1 overflow-y-auto px-4">
             <div className="relative">
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-[var(--ui-text-subtle)]" size={16} />
+              <Search
+                className="absolute left-3 top-1/2 -translate-y-1/2 text-[var(--ui-text-subtle)]"
+                size={16}
+              />
               <input
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
-                onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); searchCards(); setMobileFiltersOpen(false); } }}
+                onKeyDown={(e) => {
+                  if (
+                    e.key === "Enter" &&
+                    !e.nativeEvent.isComposing &&
+                    e.keyCode !== 229
+                  ) {
+                    e.preventDefault();
+                    searchCards();
+                    setMobileFiltersOpen(false);
+                  }
+                }}
                 placeholder="搜索标题、内容或来源"
                 aria-label="搜索标题、内容或来源"
                 className="ui-field h-11 pl-10"
@@ -2102,11 +2145,15 @@ export default function KnowledgePage({
                       onClick={() => changeStatus(status)}
                       className={[
                         "ui-filter-button w-full min-h-12 flex-col items-center justify-center",
-                        activeStatus === status ? "ui-filter-button-active" : "",
+                        activeStatus === status
+                          ? "ui-filter-button-active"
+                          : "",
                       ].join(" ")}
                     >
                       <div className="text-xs font-medium">{label}</div>
-                      <div className="mt-0.5 font-mono text-sm font-bold">{status === "all" ? counts.total : counts[status]}</div>
+                      <div className="mt-0.5 font-mono text-sm font-bold">
+                        {status === "all" ? counts.total : counts[status]}
+                      </div>
                     </button>
                   ))}
                 </div>
@@ -2127,10 +2174,15 @@ export default function KnowledgePage({
                 </div>
                 {projectCounts.length > 6 && (
                   <label className="relative mb-2 block">
-                    <Search className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-[var(--ui-text-subtle)]" size={15} />
+                    <Search
+                      className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-[var(--ui-text-subtle)]"
+                      size={15}
+                    />
                     <input
                       value={spaceFilterQuery}
-                      onChange={(event) => setSpaceFilterQuery(event.target.value)}
+                      onChange={(event) =>
+                        setSpaceFilterQuery(event.target.value)
+                      }
                       placeholder="筛选空间"
                       aria-label="筛选空间"
                       className="ui-field h-11 min-h-11 pl-9 text-xs"
@@ -2138,20 +2190,37 @@ export default function KnowledgePage({
                   </label>
                 )}
                 <div className="flex flex-wrap gap-2">
-                  <FilterButton active={!projectFilter} onClick={() => changeProject("")}>全部空间</FilterButton>
-                  {visibleProjectCounts.map(({ name, count, article_count = 0 }) => (
-                    <button
-                      key={name}
-                      type="button"
-                      onClick={() => changeProject(projectFilter === name ? "" : name)}
-                      className={[
-                        "ui-filter-button min-h-11 gap-1 px-2.5 md:min-h-8",
-                        projectFilter === name ? "ui-filter-button-active" : "",
-                      ].join(" ")}
-                    >
-                      <Folder size={12} /> {name} <span className="opacity-60">{count} 个条目{article_count > 0 ? ` · ${article_count} 篇记录` : ""}</span>
-                    </button>
-                  ))}
+                  <FilterButton
+                    active={!projectFilter}
+                    onClick={() => changeProject("")}
+                  >
+                    全部空间
+                  </FilterButton>
+                  {visibleProjectCounts.map(
+                    ({ name, count, article_count = 0 }) => (
+                      <button
+                        key={name}
+                        type="button"
+                        onClick={() =>
+                          changeProject(projectFilter === name ? "" : name)
+                        }
+                        className={[
+                          "ui-filter-button min-h-11 gap-1 px-2.5 md:min-h-8",
+                          projectFilter === name
+                            ? "ui-filter-button-active"
+                            : "",
+                        ].join(" ")}
+                      >
+                        <Folder size={12} /> {name}{" "}
+                        <span className="opacity-60">
+                          {count} 个条目
+                          {article_count > 0
+                            ? ` · ${article_count} 篇记录`
+                            : ""}
+                        </span>
+                      </button>
+                    ),
+                  )}
                   {projectCounts.length > 6 && !normalizedSpaceFilterQuery && (
                     <button
                       type="button"
@@ -2159,13 +2228,22 @@ export default function KnowledgePage({
                       aria-expanded={spacesExpanded}
                       className="ui-button-ghost h-11 min-h-11 gap-1 px-2 text-[11px] md:h-8 md:min-h-8"
                     >
-                      {spacesExpanded ? "收起空间" : `显示全部 ${projectCounts.length} 个空间`}
-                      <ChevronDown size={13} className={spacesExpanded ? "rotate-180" : ""} />
+                      {spacesExpanded
+                        ? "收起空间"
+                        : `显示全部 ${projectCounts.length} 个空间`}
+                      <ChevronDown
+                        size={13}
+                        className={spacesExpanded ? "rotate-180" : ""}
+                      />
                     </button>
                   )}
-                  {projectCounts.length > 6 && normalizedSpaceFilterQuery && visibleProjectCounts.length === 0 && (
-                    <span className="w-full px-1 text-xs text-[var(--ui-text-subtle)]">没有匹配的空间</span>
-                  )}
+                  {projectCounts.length > 6 &&
+                    normalizedSpaceFilterQuery &&
+                    visibleProjectCounts.length === 0 && (
+                      <span className="w-full px-1 text-xs text-[var(--ui-text-subtle)]">
+                        没有匹配的空间
+                      </span>
+                    )}
                 </div>
               </div>
               <div>
@@ -2175,51 +2253,121 @@ export default function KnowledgePage({
               <div>
                 <div className="ui-section-kicker mb-2">使用情况</div>
                 <div className="grid grid-cols-2 gap-2">
-                  <FilterButton active={!usageFilter} onClick={() => changeUsage("")}>全部条目</FilterButton>
-                  <FilterButton active={usageFilter === "never_used"} onClick={() => changeUsage(usageFilter === "never_used" ? "" : "never_used")}>从未使用</FilterButton>
+                  <FilterButton
+                    active={!usageFilter}
+                    onClick={() => changeUsage("")}
+                  >
+                    全部条目
+                  </FilterButton>
+                  <FilterButton
+                    active={usageFilter === "never_used"}
+                    onClick={() =>
+                      changeUsage(
+                        usageFilter === "never_used" ? "" : "never_used",
+                      )
+                    }
+                  >
+                    从未使用
+                  </FilterButton>
                 </div>
               </div>
               <div>
                 <div className="mb-2 flex items-center justify-between gap-2">
                   <div className="ui-section-kicker">数据质量</div>
-                  {qualityFilter && <button type="button" onClick={() => changeQuality("")} className="ui-button-ghost h-11 min-h-11 px-1 text-[11px] md:h-8 md:min-h-8">清除</button>}
+                  {qualityFilter && (
+                    <button
+                      type="button"
+                      onClick={() => changeQuality("")}
+                      className="ui-button-ghost h-11 min-h-11 px-1 text-[11px] md:h-8 md:min-h-8"
+                    >
+                      清除
+                    </button>
+                  )}
                 </div>
                 <div className="grid grid-cols-2 gap-2">
-                  <FilterButton active={!qualityFilter} onClick={() => changeQuality("")}>全部质量</FilterButton>
+                  <FilterButton
+                    active={!qualityFilter}
+                    onClick={() => changeQuality("")}
+                  >
+                    全部质量
+                  </FilterButton>
                   {qualityOptions.map(([value, label]) => (
-                    <FilterButton key={value} active={qualityFilter === value} onClick={() => changeQuality(qualityFilter === value ? "" : value)}>
+                    <FilterButton
+                      key={value}
+                      active={qualityFilter === value}
+                      onClick={() =>
+                        changeQuality(qualityFilter === value ? "" : value)
+                      }
+                    >
                       <span className="flex items-center justify-between gap-1.5">
                         <span className="truncate">{label}</span>
-                        <span className="shrink-0 font-mono text-[11px] opacity-60">{counts[value]}</span>
+                        <span className="shrink-0 font-mono text-[11px] opacity-60">
+                          {counts[value]}
+                        </span>
                       </span>
                     </FilterButton>
                   ))}
                 </div>
-                <p className="mt-2 text-[11px] leading-4 text-[var(--ui-text-subtle)]">数量为{qualityScopeLabel}活跃知识条目，可继续叠加状态、标签或质量筛选。</p>
-                {qualityFilter && <p className="mt-2 text-[11px] leading-4 text-[var(--ui-text-subtle)]">{qualityOptions.find(([value]) => value === qualityFilter)?.[2]}</p>}
+                <p className="mt-2 text-[11px] leading-4 text-[var(--ui-text-subtle)]">
+                  数量为{qualityScopeLabel}
+                  活跃知识条目，可继续叠加状态、标签或质量筛选。
+                </p>
+                {qualityFilter && (
+                  <p className="mt-2 text-[11px] leading-4 text-[var(--ui-text-subtle)]">
+                    {
+                      qualityOptions.find(
+                        ([value]) => value === qualityFilter,
+                      )?.[2]
+                    }
+                  </p>
+                )}
               </div>
               <div>
                 <div className="ui-section-kicker mb-2">排序</div>
                 <div className="grid grid-cols-2 gap-2">
                   {sortOptions.map(([value, label]) => (
-                    <FilterButton key={value} active={sort === value} onClick={() => changeSort(value)}>{label}</FilterButton>
+                    <FilterButton
+                      key={value}
+                      active={sort === value}
+                      onClick={() => changeSort(value)}
+                    >
+                      {label}
+                    </FilterButton>
                   ))}
                 </div>
               </div>
               <div>
                 <div className="ui-section-kicker mb-2 flex items-center justify-between">
                   <span>标签</span>
-                  {tagFilter && <button type="button" onClick={() => changeTag("")} className="ui-button-ghost h-11 min-h-11 px-1 text-[11px] md:h-8 md:min-h-8">清除</button>}
+                  {tagFilter && (
+                    <button
+                      type="button"
+                      onClick={() => changeTag("")}
+                      className="ui-button-ghost h-11 min-h-11 px-1 text-[11px] md:h-8 md:min-h-8"
+                    >
+                      清除
+                    </button>
+                  )}
                 </div>
-                <TagFilterPicker tags={tagCounts} selectedTag={tagFilter} onChange={changeTag} inputId="knowledge-mobile-tag-filter" compact />
+                <TagFilterPicker
+                  tags={tagCounts}
+                  selectedTag={tagFilter}
+                  onChange={changeTag}
+                  inputId="knowledge-mobile-tag-filter"
+                  compact
+                />
               </div>
             </div>
           </div>
           <div className="ui-soft-divider border-t px-4 pt-3">
             <div className="mb-3 flex items-center justify-between gap-3">
               <div className="min-w-0">
-                <div className="text-xs font-semibold text-[var(--ui-text)]">知识条目回收站</div>
-                <p className="mt-0.5 text-[11px] text-[var(--ui-text-subtle)]">已删除知识条目可恢复，关系和复习进度会保留。</p>
+                <div className="text-xs font-semibold text-[var(--ui-text)]">
+                  知识条目回收站
+                </div>
+                <p className="mt-0.5 text-[11px] text-[var(--ui-text-subtle)]">
+                  已删除知识条目可恢复，关系和复习进度会保留。
+                </p>
               </div>
               <Link
                 to="/knowledge/trash"
@@ -2230,8 +2378,16 @@ export default function KnowledgePage({
                 <Trash2 size={14} /> 查看回收站
               </Link>
             </div>
-            <button type="button" onClick={() => { searchCards(); setMobileFiltersOpen(false); }} className="ui-button-primary h-11 w-full text-sm">
-              应用筛选{activeFilterCount > 0 ? ` · ${activeFilterCount} 项条件` : ""}
+            <button
+              type="button"
+              onClick={() => {
+                searchCards();
+                setMobileFiltersOpen(false);
+              }}
+              className="ui-button-primary h-11 w-full text-sm"
+            >
+              应用筛选
+              {activeFilterCount > 0 ? ` · ${activeFilterCount} 项条件` : ""}
             </button>
           </div>
         </SheetContent>
@@ -2247,10 +2403,31 @@ export default function KnowledgePage({
           }
         }}
       >
-        <SheetContent side="bottom" className="px-0 pb-[calc(0.75rem+env(safe-area-inset-bottom,0px))] xl:hidden">
+        <SheetContent
+          side={isMobile ? "bottom" : "right"}
+          onCloseAutoFocus={(event) => {
+            event.preventDefault();
+            sheetReturnFocusRef.current?.focus();
+          }}
+          className="kl-filter-sheet px-0 pb-[calc(0.75rem+env(safe-area-inset-bottom,0px))]"
+        >
           <SheetHeader>
-            <SheetTitle>批量处理 · {selectedIds.length} 个知识条目</SheetTitle>
-            <SheetDescription>选择一个动作，目标输入会在这里完成；删除仍可撤销。</SheetDescription>
+            <div className="flex items-center justify-between">
+              <SheetTitle>
+                批量处理 · {selectedIds.length} 个知识条目
+              </SheetTitle>
+              <button
+                type="button"
+                className="ui-icon-button"
+                onClick={() => setMobileBatchOpen(false)}
+                aria-label="关闭批量处理"
+              >
+                <X size={18} />
+              </button>
+            </div>
+            <SheetDescription>
+              选择一个动作，目标输入会在这里完成；删除仍可撤销。
+            </SheetDescription>
           </SheetHeader>
           <div className="min-h-0 flex-1 overflow-y-auto px-4">
             <div className="grid gap-2 pb-2">
@@ -2262,8 +2439,16 @@ export default function KnowledgePage({
                   batchMode === "tag" ? "ui-bulk-action-active" : "",
                 ].join(" ")}
               >
-                <Tags size={17} className="shrink-0 text-[var(--ui-accent-text)]" />
-                <span><span className="block text-sm font-semibold">添加标签</span><span className="mt-0.5 block text-xs text-[var(--ui-text-subtle)]">给选中的知识条目增加一个或多个标签</span></span>
+                <Tags
+                  size={17}
+                  className="shrink-0 text-[var(--ui-accent-text)]"
+                />
+                <span>
+                  <span className="block text-sm font-semibold">添加标签</span>
+                  <span className="mt-0.5 block text-xs text-[var(--ui-text-subtle)]">
+                    给选中的知识条目增加一个或多个标签
+                  </span>
+                </span>
               </button>
               <button
                 type="button"
@@ -2273,8 +2458,16 @@ export default function KnowledgePage({
                   batchMode === "remove_tag" ? "ui-bulk-action-active" : "",
                 ].join(" ")}
               >
-                <Tags size={17} className="shrink-0 text-[var(--ui-text-muted)]" />
-                <span><span className="block text-sm font-semibold">移除标签</span><span className="mt-0.5 block text-xs text-[var(--ui-text-subtle)]">从选中的知识条目中移除指定标签</span></span>
+                <Tags
+                  size={17}
+                  className="shrink-0 text-[var(--ui-text-muted)]"
+                />
+                <span>
+                  <span className="block text-sm font-semibold">移除标签</span>
+                  <span className="mt-0.5 block text-xs text-[var(--ui-text-subtle)]">
+                    从选中的知识条目中移除指定标签
+                  </span>
+                </span>
               </button>
               <button
                 type="button"
@@ -2284,8 +2477,16 @@ export default function KnowledgePage({
                   batchMode === "add_project" ? "ui-bulk-action-active" : "",
                 ].join(" ")}
               >
-                <Folder size={17} className="shrink-0 text-[var(--ui-accent-text)]" />
-                <span><span className="block text-sm font-semibold">加入空间</span><span className="mt-0.5 block text-xs text-[var(--ui-text-subtle)]">保留已有空间，再添加一个空间</span></span>
+                <Folder
+                  size={17}
+                  className="shrink-0 text-[var(--ui-accent-text)]"
+                />
+                <span>
+                  <span className="block text-sm font-semibold">加入空间</span>
+                  <span className="mt-0.5 block text-xs text-[var(--ui-text-subtle)]">
+                    保留已有空间，再添加一个空间
+                  </span>
+                </span>
               </button>
               <button
                 type="button"
@@ -2295,8 +2496,18 @@ export default function KnowledgePage({
                   batchMode === "move_project" ? "ui-bulk-action-active" : "",
                 ].join(" ")}
               >
-                <Folder size={17} className="shrink-0 text-[var(--ui-accent-text)]" />
-                <span><span className="block text-sm font-semibold">移动到空间</span><span className="mt-0.5 block text-xs text-[var(--ui-text-subtle)]">用目标空间替换知识条目已有空间</span></span>
+                <Folder
+                  size={17}
+                  className="shrink-0 text-[var(--ui-accent-text)]"
+                />
+                <span>
+                  <span className="block text-sm font-semibold">
+                    移动到空间
+                  </span>
+                  <span className="mt-0.5 block text-xs text-[var(--ui-text-subtle)]">
+                    用目标空间替换知识条目已有空间
+                  </span>
+                </span>
               </button>
               <button
                 type="button"
@@ -2306,8 +2517,16 @@ export default function KnowledgePage({
                   batchMode === "remove_project" ? "ui-bulk-action-active" : "",
                 ].join(" ")}
               >
-                <Folder size={17} className="shrink-0 text-[var(--ui-text-muted)]" />
-                <span><span className="block text-sm font-semibold">移出空间</span><span className="mt-0.5 block text-xs text-[var(--ui-text-subtle)]">从指定空间中移除这些知识条目</span></span>
+                <Folder
+                  size={17}
+                  className="shrink-0 text-[var(--ui-text-muted)]"
+                />
+                <span>
+                  <span className="block text-sm font-semibold">移出空间</span>
+                  <span className="mt-0.5 block text-xs text-[var(--ui-text-subtle)]">
+                    从指定空间中移除这些知识条目
+                  </span>
+                </span>
               </button>
               <button
                 type="button"
@@ -2318,7 +2537,14 @@ export default function KnowledgePage({
                 className="ui-button-danger min-h-12 justify-start px-3"
               >
                 <Trash2 size={17} className="shrink-0" />
-                <span><span className="block text-sm font-semibold">移入回收站</span><span className="mt-0.5 block text-xs opacity-75">可从回收站恢复，不会立即永久删除</span></span>
+                <span>
+                  <span className="block text-sm font-semibold">
+                    移入回收站
+                  </span>
+                  <span className="mt-0.5 block text-xs opacity-75">
+                    可从回收站恢复，不会立即永久删除
+                  </span>
+                </span>
               </button>
             </div>
 
@@ -2326,9 +2552,25 @@ export default function KnowledgePage({
               <div className="ui-status-accent mb-2 rounded-xl p-3">
                 <div className="mb-2 flex items-center justify-between gap-2">
                   <span className="text-xs font-semibold text-[var(--ui-accent-text)]">
-                    {batchMode === "tag" ? "添加标签" : batchMode === "remove_tag" ? "移除标签" : batchMode === "add_project" ? "加入空间" : batchMode === "move_project" ? "移动到空间" : "移出空间"}
+                    {batchMode === "tag"
+                      ? "添加标签"
+                      : batchMode === "remove_tag"
+                        ? "移除标签"
+                        : batchMode === "add_project"
+                          ? "加入空间"
+                          : batchMode === "move_project"
+                            ? "移动到空间"
+                            : "移出空间"}
                   </span>
-          <button type="button" onClick={() => { setBatchMode(""); setBatchValue(""); }} className="ui-icon-button h-11 w-11 md:h-9 md:w-9" aria-label="关闭批量编辑">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setBatchMode("");
+                      setBatchValue("");
+                    }}
+                    className="ui-icon-button h-11 w-11 md:h-9 md:w-9"
+                    aria-label="关闭批量编辑"
+                  >
                     <X size={14} />
                   </button>
                 </div>
@@ -2337,9 +2579,20 @@ export default function KnowledgePage({
                     <input
                       value={batchValue}
                       onChange={(e) => setBatchValue(e.target.value)}
-                      onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); void applyBatch(); } }}
+                      onKeyDown={(e) => {
+                        if (
+                          e.key === "Enter" &&
+                          !e.nativeEvent.isComposing &&
+                          e.keyCode !== 229
+                        ) {
+                          e.preventDefault();
+                          void applyBatch();
+                        }
+                      }}
                       placeholder="标签，逗号分隔多个"
-                      aria-label={batchMode === "tag" ? "要添加的标签" : "要移除的标签"}
+                      aria-label={
+                        batchMode === "tag" ? "要添加的标签" : "要移除的标签"
+                      }
                       className="ui-field h-11 min-w-0 flex-1"
                     />
                   ) : (
@@ -2348,1247 +2601,1160 @@ export default function KnowledgePage({
                       value={batchValue}
                       onChange={setBatchValue}
                       onEnter={() => void applyBatch()}
-                      placeholder={batchMode === "move_project" ? "选择目标空间" : "选择空间"}
-                      ariaLabel={batchMode === "move_project" ? "批量移动的目标空间" : "批量操作的空间"}
+                      placeholder={
+                        batchMode === "move_project"
+                          ? "选择目标空间"
+                          : "选择空间"
+                      }
+                      ariaLabel={
+                        batchMode === "move_project"
+                          ? "批量移动的目标空间"
+                          : "批量操作的空间"
+                      }
                       inputClassName="ui-field h-11 pl-9 text-sm"
                       containerClassName="min-w-0 flex-1"
                     />
                   )}
-                  <button type="button" onClick={() => void applyBatch()} disabled={saving || !batchValue.trim()} className="ui-button-primary h-11 shrink-0 px-3 text-xs">
+                  <button
+                    type="button"
+                    onClick={() => void applyBatch()}
+                    disabled={saving || !batchValue.trim()}
+                    className="ui-button-primary h-11 shrink-0 px-3 text-xs"
+                  >
                     应用
                   </button>
                 </div>
                 <div className="mt-2 flex max-h-20 flex-wrap gap-1.5 overflow-y-auto">
-                  {(batchMode === "tag" || batchMode === "remove_tag" ? tagCounts.map(({ tag }) => tag) : projectCounts.map(({ name }) => name)).slice(0, 10).map((value) => (
-                    <button
-                      key={value}
-                      type="button"
-                      onClick={() => setBatchValue((current) => batchMode === "tag" || batchMode === "remove_tag" ? current ? `${current}, ${value}` : value : value)}
-                      className="ui-chip h-7 border-[var(--ui-selected-border)] bg-[var(--ui-surface-raised)] text-[var(--ui-accent-text)] hover:bg-[var(--ui-surface-hover)]"
-                    >
-                      {batchMode === "tag" || batchMode === "remove_tag" ? `#${value}` : value}
-                    </button>
-                  ))}
+                  {(batchMode === "tag" || batchMode === "remove_tag"
+                    ? tagCounts.map(({ tag }) => tag)
+                    : projectCounts.map(({ name }) => name)
+                  )
+                    .slice(0, 10)
+                    .map((value) => (
+                      <button
+                        key={value}
+                        type="button"
+                        onClick={() =>
+                          setBatchValue((current) =>
+                            batchMode === "tag" || batchMode === "remove_tag"
+                              ? current
+                                ? `${current}, ${value}`
+                                : value
+                              : value,
+                          )
+                        }
+                        className="ui-chip h-7 border-[var(--ui-selected-border)] bg-[var(--ui-surface-raised)] text-[var(--ui-accent-text)] hover:bg-[var(--ui-surface-hover)]"
+                      >
+                        {batchMode === "tag" || batchMode === "remove_tag"
+                          ? `#${value}`
+                          : value}
+                      </button>
+                    ))}
                 </div>
-                {batchMode === "move_project" && <p className="mt-2 text-[11px] leading-4 text-[var(--ui-text-subtle)]">目标空间不存在时会自动创建。</p>}
+                {batchMode === "move_project" && (
+                  <p className="mt-2 text-[11px] leading-4 text-[var(--ui-text-subtle)]">
+                    目标空间不存在时会自动创建。
+                  </p>
+                )}
               </div>
             )}
           </div>
         </SheetContent>
       </Sheet>
 
-      <div className="knowledge-workspace grid min-w-0 gap-4 xl:min-h-0 xl:flex-1 xl:grid-cols-[minmax(320px,430px)_minmax(0,1fr)] 2xl:grid-cols-[244px_minmax(360px,430px)_minmax(0,1fr)] xl:items-stretch xl:overflow-hidden">
-        <aside className="knowledge-project-index ui-panel hidden flex-col p-3 2xl:flex 2xl:h-full 2xl:min-h-0 2xl:overflow-hidden">
-          <div className="flex shrink-0 gap-2">
-            <div className="relative min-w-0 flex-1">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-[var(--ui-text-subtle)]" size={15} />
-            <input
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-              onKeyDown={(e) => { if (e.key === "Enter") searchCards(); }}
-              placeholder="搜索知识条目"
-              aria-label="搜索知识条目"
-              className="ui-field h-10 pl-9"
-            />
-            </div>
-            <button type="button" onClick={searchCards} className="ui-button-secondary h-10 shrink-0 px-3">
-              搜索
-            </button>
-          </div>
-
-          <div className="mt-4 min-h-0 2xl:flex-1 2xl:overflow-y-auto 2xl:overscroll-contain 2xl:pr-1">
-          {/* 空间导航（一级，突出） */}
-          <div>
-            <div className="mb-2 flex items-center justify-between gap-2 px-1">
-              <div className="ui-section-kicker">空间</div>
-              {projectFilter && (
-                <button type="button" onClick={() => changeProject("")} className="text-[11px] font-medium text-[var(--ui-accent-text)] hover:underline">显示全部</button>
-              )}
-            </div>
-            <div className="mb-2">
-              <button type="button" onClick={openSpaceManager} className="ui-button-secondary h-8 min-h-8 w-full gap-1 px-2 text-[11px]">
-                <FolderCog size={13} /> 空间管理
-              </button>
-            </div>
-            {projectCounts.length > 6 && (
-              <label className="relative mb-2 block">
-                <Search className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-[var(--ui-text-subtle)]" size={13} />
-                <input
-                  value={spaceFilterQuery}
-                  onChange={(event) => setSpaceFilterQuery(event.target.value)}
-                  placeholder="筛选空间"
-                  aria-label="筛选空间"
-                  className="ui-field h-8 min-h-8 pl-8 text-[11px]"
-                />
-              </label>
-            )}
-            <div className="flex flex-col gap-0.5">
+      <KnowledgeLibrary
+        cards={sortedCards}
+        summary={summary}
+        spaces={projectCounts}
+        tags={tagCounts}
+        total={totalCards}
+        loading={loading}
+        error={!!error}
+        status={activeStatus}
+        project={projectFilter}
+        tag={tagFilter}
+        query={query}
+        sort={sort}
+        density={density}
+        selectedIds={selectedIds}
+        activeId={selectedId}
+        filters={libraryFilters}
+        page={page}
+        pageCount={pageCount}
+        detailVisible={detailVisible}
+        focused={focused}
+        onStatus={changeStatus}
+        onProject={changeProject}
+        onTag={changeTag}
+        onQuery={setQuery}
+        onSearch={searchCards}
+        onClearSearch={clearSearch}
+        onFilters={() => {
+          sheetReturnFocusRef.current = document.activeElement as HTMLElement;
+          setMobileFiltersOpen(true);
+        }}
+        onReset={resetFilters}
+        onSort={changeSort}
+        onDensity={changeDensity}
+        onSelect={toggleSelected}
+        onSelectAll={selectAllVisible}
+        onInvert={invertVisibleSelection}
+        onOpen={openCard}
+        onCardStatus={(card) =>
+          void updateStatus(nextKnowledgeCardStatus(card.status), [card.id])
+        }
+        onDelete={(card) => void deleteCards([card.id])}
+        onPage={changePage}
+        onNew={startNew}
+        onManageSpaces={openSpaceManager}
+        emptyTitle={emptyStateTitle}
+        emptyDescription={emptyStateDescription}
+        emptyAction={emptyStateAction}
+        busy={saving}
+        cardSearch={{
+          q: activeQuery || undefined,
+          project: projectFilter || undefined,
+          tag: tagFilter || undefined,
+          status: activeStatus,
+          type: typeFilter || undefined,
+          sort: sort === "updated" ? undefined : sort,
+          usage: usageFilter || undefined,
+          quality: qualityFilter || undefined,
+          page: page > 1 ? page : undefined,
+        }}
+        spaceOverview={
+          projectFilter ? (
+            <details className="kl-space-overview">
+              <summary>
+                <Folder size={14} />
+                空间概览与最近记录
+                <ChevronDown size={14} />
+              </summary>
+              <SpaceOverview
+                name={projectFilter}
+                space={selectedSpace}
+                articles={spaceArticles}
+                loading={spaceArticlesLoading}
+                error={spaceArticlesError}
+                onEditDate={onEditDate}
+              />
+            </details>
+          ) : null
+        }
+        batchBar={
+          selectedIds.length > 0 ? (
+            <div
+              className="kl-batchbar"
+              role="toolbar"
+              aria-label="知识条目批量操作"
+            >
+              <span>
+                已选 <strong>{selectedIds.length}</strong> 项
+              </span>
               <button
                 type="button"
-                onClick={() => changeProject("")}
-                className={[
-                  "ui-filter-button w-full justify-between gap-2 px-2.5 py-2 text-left text-[13px]",
-                  !projectFilter ? "ui-filter-button-active" : "",
-                ].join(" ")}
+                className="ui-button-success"
+                disabled={saving || selectedDraftCount === 0}
+                onClick={() =>
+                  void updateStatus(
+                    "confirmed",
+                    selectedIds.filter((id) =>
+                      cards.some(
+                        (card) => card.id === id && card.status === "draft",
+                      ),
+                    ),
+                  )
+                }
               >
-                <span className="flex min-w-0 flex-1 items-center gap-2">
-                  <span className="ui-status-muted flex h-7 w-7 shrink-0 items-center justify-center rounded-md"><Folder size={14} /></span>
-                  <span className="truncate font-medium">全部知识条目</span>
-                </span>
-                <span className={`shrink-0 rounded-full px-1.5 py-1 text-[11px] font-semibold leading-none ${!projectFilter ? "ui-status-accent" : "ui-status-muted"}`}>{projectFilter ? "全库" : String(summary.total) + " 条"}</span>
+                <CheckCircle2 size={14} />
+                确认沉淀
               </button>
-              {visibleProjectCounts.map(({ name, count, article_count = 0, kind }) => (
-                <button
-                  key={name}
-                  type="button"
-                  onClick={() => changeProject(projectFilter === name ? "" : name)}
-                  className={[
-                    "ui-filter-button w-full justify-between gap-2 px-2.5 py-2 text-left text-[13px]",
-                    projectFilter === name ? "ui-filter-button-active" : "",
-                  ].join(" ")}
-                >
-                  <span className="flex min-w-0 flex-1 items-center gap-2">
-                    <span className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-md ${projectFilter === name ? "ui-status-accent" : "ui-status-muted"}`}>
-                      <Folder size={14} />
-                    </span>
-                    <span className="min-w-0 flex-1">
-                      <span className="block truncate font-medium">{name}</span>
-                      {kind && <span className="mt-0.5 block text-[10px] leading-3 text-[var(--ui-text-subtle)]">{kind === "topic" ? "长期主题" : "项目空间"}</span>}
-                    </span>
-                  </span>
-                  <span className={`flex shrink-0 flex-col items-end gap-0.5 rounded-lg px-1.5 py-1 text-[11px] font-semibold leading-none ${projectFilter === name ? "ui-status-accent" : "ui-status-muted"}`} title={`${count} 个知识条目 · ${article_count} 篇每日记录`}>
-                    <span>{count} 个条目</span>
-                    {article_count > 0 && <span className="text-[10px] font-normal opacity-70">{article_count} 篇记录</span>}
-                  </span>
-                </button>
-              ))}
-              {projectCounts.length > 6 && !normalizedSpaceFilterQuery && (
-                <button
-                  type="button"
-                  onClick={() => setSpacesExpanded((expanded) => !expanded)}
-                  aria-expanded={spacesExpanded}
-                  className="ui-button-ghost mt-1 h-8 min-h-8 w-full justify-between px-2 text-[11px]"
-                >
-                  {spacesExpanded ? "收起空间" : `显示全部 ${projectCounts.length} 个空间`}
-                  <ChevronDown size={13} className={spacesExpanded ? "rotate-180" : ""} />
-                </button>
-              )}
-              {projectCounts.length > 6 && normalizedSpaceFilterQuery && visibleProjectCounts.length === 0 && (
-                <p className="px-2 py-1 text-xs text-[var(--ui-text-subtle)]">没有匹配的空间</p>
-              )}
-              {projectCounts.length === 0 && (
-                <p className="px-2 py-1 text-xs text-[var(--ui-text-subtle)]">暂无空间，创建一个</p>
-              )}
+              <button
+                type="button"
+                className="ui-button-secondary"
+                disabled={saving}
+                onClick={() => {
+                  sheetReturnFocusRef.current =
+                    document.activeElement as HTMLElement;
+                  setMobileBatchOpen(true);
+                }}
+              >
+                批量操作
+                <MoreHorizontal size={15} />
+              </button>
+              <button
+                className="kl-icon"
+                type="button"
+                onClick={clearSelection}
+                aria-label="清空选择"
+              >
+                <X size={16} />
+              </button>
             </div>
-          </div>
-
-          {/* 筛选与状态（折叠） */}
-          <div className="ui-soft-divider mt-4 border-t pt-2">
-            <button
-              type="button"
-              onClick={() => setShowFilters(!showFilters)}
-              aria-expanded={showFilters}
-              aria-controls="knowledge-filters"
-              className="flex w-full items-center justify-between rounded-lg px-1 py-1.5 text-[11px] font-semibold tracking-[0.06em] text-[var(--ui-text-subtle)] transition-colors hover:text-[var(--ui-text)]"
+          ) : null
+        }
+        detail={
+          <section className="kl-detail" aria-label="知识条目详情">
+            <div className="kl-detail-toolbar">
+              <button
+                type="button"
+                className="kl-back"
+                onClick={() => void closeMobileDetail()}
+              >
+                <ArrowLeft size={16} />
+                <span>返回知识库</span>
+              </button>
+              <div>
+                <span
+                  className="kl-save-state"
+                  data-error={saveState === "error"}
+                  role="status"
+                >
+                  {selectedId ? mobileSaveLabel : "新建草稿"}
+                </span>
+                <button
+                  type="button"
+                  className="kl-icon kl-focus-button"
+                  onClick={() => setFocused((value) => !value)}
+                  aria-label={focused ? "退出专注阅读" : "专注阅读"}
+                  title={focused ? "退出专注阅读" : "专注阅读"}
+                >
+                  {focused ? <Minimize2 size={16} /> : <Maximize2 size={16} />}
+                </button>
+              </div>
+            </div>
+            <div
+              className="kl-detail-tabs"
+              role="group"
+              aria-label="知识条目视图"
             >
-              <span className="flex items-center gap-2">
-                <span>筛选与状态</span>
-                {activeFilterCount > 0 && <span className="ui-status-accent inline-flex h-4 min-w-4 items-center justify-center rounded-full px-1 font-mono text-[10px]">{activeFilterCount}</span>}
-              </span>
-              <ChevronDown size={14} className={`transition-transform ${showFilters ? "rotate-180" : ""}`} />
-            </button>
-            {showFilters && (
-              <div id="knowledge-filters" className="mt-2 space-y-4">
-                <div className="grid grid-cols-3 gap-1.5">
-                  {statusFilterOptions.map(([status, label]) => (
-                    <button
-                      key={status}
-                      type="button"
-                      onClick={() => changeStatus(status)}
-                      className={[
-                        "ui-filter-button w-full min-h-12 flex-col items-center justify-center",
-                        activeStatus === status ? "ui-filter-button-active" : "",
-                      ].join(" ")}
-                    >
-                      <div className="text-[10px] leading-none">{label}</div>
-                      <div className="mt-1 font-mono text-sm font-bold">{status === "all" ? counts.total : counts[status]}</div>
-                    </button>
-                  ))}
-                </div>
-                <div>
-                  <div className="ui-section-kicker mb-2">类型</div>
-                  <TypeFilterSelect value={typeFilter} onChange={changeType} compact />
-                </div>
-                <div>
-                  <div className="ui-section-kicker mb-2">使用</div>
-                  <div className="grid grid-cols-2 gap-1.5 xl:grid-cols-1">
-                    <FilterButton active={!usageFilter} onClick={() => changeUsage("")}>全部条目</FilterButton>
-                    <FilterButton active={usageFilter === "never_used"} onClick={() => changeUsage(usageFilter === "never_used" ? "" : "never_used")}>从未使用</FilterButton>
-                  </div>
-                </div>
-                <div>
-                  <div className="mb-2 flex items-center justify-between gap-2">
-                    <div className="ui-section-kicker">数据质量</div>
-                    {qualityFilter && <button type="button" onClick={() => changeQuality("")} className="ui-button-ghost h-6 px-1 text-[11px]">清除</button>}
-                  </div>
-                  <div className="grid grid-cols-2 gap-1.5 xl:grid-cols-1">
-                    <FilterButton active={!qualityFilter} onClick={() => changeQuality("")}>全部质量</FilterButton>
-                    {qualityOptions.map(([value, label]) => (
-                      <FilterButton key={value} active={qualityFilter === value} onClick={() => changeQuality(qualityFilter === value ? "" : value)}>
-                        <span className="flex items-center justify-between gap-1.5">
-                          <span className="truncate">{label}</span>
-                          <span className="shrink-0 font-mono text-[11px] opacity-60">{counts[value]}</span>
-                        </span>
-                      </FilterButton>
-                    ))}
-                  </div>
-                  <p className="mt-2 text-[11px] leading-4 text-[var(--ui-text-subtle)]">数量为{qualityScopeLabel}活跃知识条目，可继续叠加其他筛选。</p>
-                  {qualityFilter && <p className="mt-2 text-[11px] leading-4 text-[var(--ui-text-subtle)]">{qualityOptions.find(([value]) => value === qualityFilter)?.[2]}</p>}
-                </div>
-                <div>
-                  <div className="mb-2 flex items-center justify-between">
-                    <div className="ui-section-kicker">标签</div>
-                    {tagFilter && (
-                      <button type="button" onClick={() => changeTag("")} className="ui-button-ghost h-6 px-1 text-[11px]">清除</button>
-                    )}
-                  </div>
-                  <TagFilterPicker tags={tagCounts} selectedTag={tagFilter} onChange={changeTag} inputId="knowledge-desktop-tag-filter" />
-                </div>
-              </div>
-            )}
-          </div>
-
-          </div>
-          <div className="ui-soft-divider mt-3 shrink-0 border-t pt-3">
-            <div className="grid grid-cols-[minmax(0,1fr)_auto] gap-2">
-              <button type="button" onClick={startNew} className="ui-button-primary">
-                <Plus size={14} /> 新建知识条目
-              </button>
-              <Link
-                to="/knowledge/trash"
-                search={{} as never}
-                className="ui-button-secondary inline-flex h-9 items-center gap-1.5 px-2.5 text-xs"
+              <button
+                type="button"
+                aria-pressed={readerTab === "read"}
+                disabled={!selectedId || awaitingDetail}
+                onClick={() => setReaderTab("read")}
               >
-                <Trash2 size={14} />
-                <span>回收站</span>
-              </Link>
-            </div>
-            <p className="mt-2 px-1 text-[11px] leading-4 text-[var(--ui-text-subtle)]">
-              新知识条目默认保存为草稿，可在右侧补充来源、标签和空间。
-            </p>
-          </div>
-        </aside>
-
-        <section className={["knowledge-card-index ui-panel flex min-w-0 flex-col overflow-visible p-2.5 xl:h-full xl:min-h-0 xl:overflow-hidden", mobileView === "list" ? "" : "hidden", "xl:flex"].join(" ")}>
-          <div className="shrink-0 px-2 pt-2">
-            <div className="flex min-h-10 items-center justify-between gap-3 border-b border-[var(--ui-border)] pb-2">
-              <div className="flex min-w-0 items-center gap-2">
-                <span className="ui-status-accent flex h-7 w-7 shrink-0 items-center justify-center rounded-lg">
-                  <SlidersHorizontal size={14} />
-                </span>
-                <div className="min-w-0">
-                  <div className="truncate text-xs font-semibold text-[var(--ui-text)]">{activeStatusLabel}</div>
-                  <div className="mt-0.5 truncate text-[10px] leading-3 text-[var(--ui-text-subtle)]">{projectFilter ? "当前空间 · " + projectFilter : "当前筛选结果"}</div>
-                </div>
-              </div>
-              <span className="ui-status-accent inline-flex h-7 min-w-8 shrink-0 items-center justify-center rounded-lg px-2 font-mono text-xs font-bold" aria-label={activeStatusLabel + " " + totalCards + " 个知识条目"}>
-                {totalCards}
-              </span>
-            </div>
-            <div className="hidden grid-cols-[minmax(0,1fr)_auto] gap-2 pt-2 xl:grid 2xl:hidden">
-              <label className="relative min-w-0">
-                <Search className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-[var(--ui-text-subtle)]" size={15} />
-                <span className="sr-only">搜索知识条目</span>
-                <input
-                  value={query}
-                  onChange={(event) => setQuery(event.target.value)}
-                  onKeyDown={(event) => {
-                    if (event.key === "Enter") {
-                      event.preventDefault();
-                      searchCards();
-                    }
-                  }}
-                  placeholder="搜索标题、内容或来源"
-                  aria-label="搜索标题、内容或来源"
-                  className="ui-field h-10 w-full pl-9 text-xs"
-                />
-              </label>
-              <button type="button" onClick={searchCards} className="ui-button-secondary h-10 min-h-10 px-3 text-xs">
-                搜索
+                <BookOpen size={15} />
+                阅读
+              </button>
+              <button
+                type="button"
+                aria-pressed={readerTab === "edit"}
+                disabled={awaitingDetail}
+                onClick={() => setReaderTab("edit")}
+              >
+                <PencilLine size={15} />
+                编辑
+              </button>
+              <button
+                type="button"
+                aria-pressed={readerTab === "review"}
+                disabled={!selectedId || awaitingDetail}
+                onClick={() => setReaderTab("review")}
+              >
+                <CheckCircle2 size={15} />
+                复习
               </button>
             </div>
-            <div className="hidden min-h-11 items-center justify-end gap-3 pb-1 pt-2 xl:flex">
-              {cards.length > 0 && (
-                <div className="flex flex-wrap items-center justify-end gap-2">
-                  <div className="hidden 2xl:hidden xl:block">
+            <div className="kl-detail-scroll" ref={detailScrollRef}>
+              {validationEntries.length > 0 && (
+                <div
+                  ref={validationSummaryRef}
+                  id="knowledge-validation-summary"
+                  tabIndex={-1}
+                  role="alert"
+                  aria-labelledby="knowledge-validation-summary-title"
+                  className="ui-alert-bad mb-4 outline-hidden focus-visible:ring-2 focus-visible:ring-[var(--ui-focus)]/50"
+                >
+                  <div
+                    id="knowledge-validation-summary-title"
+                    className="font-semibold"
+                  >
+                    提交前需要处理 {validationEntries.length} 项
+                  </div>
+                  <ul className="mt-1.5 space-y-1 text-xs">
+                    {validationEntries.map(([field, message]) => (
+                      <li key={field}>
+                        <a
+                          href={`#${validationFieldIds[field]}`}
+                          onClick={(event) => {
+                            event.preventDefault();
+                            focusValidationField(field);
+                          }}
+                          className="underline decoration-[var(--ui-danger-border)] underline-offset-2 hover:decoration-current"
+                        >
+                          {validationFieldLabels[field]}：{message}
+                        </a>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+
+              {recoverableDraft && (
+                <div
+                  className="ui-alert-warn mb-4 flex flex-wrap items-center justify-between gap-3"
+                  role="status"
+                >
+                  <span className="min-w-0 flex-1 text-xs leading-5">
+                    发现一份较旧的本地草稿（
+                    {new Date(recoverableDraft.savedAt).toLocaleString()}
+                    ）。服务器内容可能已经更新。
+                  </span>
+                  <span className="flex shrink-0 items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => restoreLocalDraft(recoverableDraft)}
+                      className="ui-button-primary h-11 min-h-11 px-2.5 text-xs md:h-8 md:min-h-8"
+                    >
+                      恢复本地草稿
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        discardStoredDraft(recoverableDraft.cardId)
+                      }
+                      className="ui-button-ghost h-11 min-h-11 px-2.5 text-xs md:h-8 md:min-h-8"
+                    >
+                      丢弃
+                    </button>
+                  </span>
+                </div>
+              )}
+
+              {notice && validationEntries.length === 0 && (
+                <div
+                  className={[
+                    "kl-notice",
+                    noticeTone === "good"
+                      ? "ui-alert-good"
+                      : noticeTone === "bad"
+                        ? "ui-alert-bad"
+                        : "ui-alert-warn",
+                  ].join(" ")}
+                  role={noticeTone === "bad" ? "alert" : "status"}
+                >
+                  {notice}
+                </div>
+              )}
+              {awaitingDetail ? (
+                <div
+                  className="kl-empty"
+                  role={detailError ? "alert" : "status"}
+                >
+                  <BookOpen size={28} />
+                  <h3>
+                    {detailError ? "暂时无法打开这条知识" : "正在打开知识条目…"}
+                  </h3>
+                  {detailError && (
+                    <>
+                      <p>{detailError}</p>
+                      <button
+                        className="ui-button-secondary"
+                        onClick={() => {
+                          setDetailError("");
+                          setDetailReload((value) => value + 1);
+                        }}
+                      >
+                        重试
+                      </button>
+                    </>
+                  )}
+                </div>
+              ) : (
+                <>
+                  {readerTab === "read" && selectedCard && (
+                    <KnowledgeReader
+                      card={{
+                        ...selectedCard,
+                        ...payloadFromDraft(draft, draftRelatedIds),
+                      }}
+                      related={relatedChips}
+                      sourceLabel={
+                        hasManualKnowledgeSource(draft)
+                          ? "手动来源片段"
+                          : hasSourceReference
+                            ? sourceReferenceLabel
+                            : "尚未关联来源记录"
+                      }
+                      sourceState={sourceStateLabel[sourceState]}
+                      sourceAvailable={hasSourceReference}
+                      sourceLoading={sourceLoading}
+                      onSource={() => {
+                        sourceTriggerRef.current =
+                          document.activeElement as HTMLButtonElement;
+                        openSource();
+                      }}
+                      onEdit={() => setReaderTab("edit")}
+                      onOpen={openCard}
+                      onWikiLink={onWikiLink}
+                    />
+                  )}
+                  {readerTab === "edit" && (
+                    <div className="kl-edit knowledge-inspector">
+                      <div className="knowledge-editor-fields grid gap-4">
+                        <div>
+                          <label
+                            htmlFor="knowledge-card-title"
+                            className="knowledge-field-label mb-1.5 block"
+                          >
+                            知识标题
+                          </label>
+                          <input
+                            id="knowledge-card-title"
+                            value={draft.title}
+                            onChange={(e) =>
+                              updateDraft({ title: e.target.value })
+                            }
+                            placeholder="用一句话回答：这条知识是什么？"
+                            aria-required="true"
+                            aria-invalid={!!fieldErrors.title}
+                            aria-describedby={[
+                              "knowledge-card-title-help",
+                              fieldErrors.title ? validationErrorIds.title : "",
+                            ]
+                              .filter(Boolean)
+                              .join(" ")}
+                            className="knowledge-title-field ui-field h-11"
+                          />
+                          <p
+                            id="knowledge-card-title-help"
+                            className="mt-1.5 text-[11px] leading-4 text-[var(--ui-text-subtle)]"
+                          >
+                            一句话说清这条知识解决什么问题。
+                          </p>
+                          {fieldErrors.title && (
+                            <p
+                              id={validationErrorIds.title}
+                              className="mt-1.5 text-xs font-medium text-[var(--ui-danger-text)]"
+                              role="alert"
+                            >
+                              {fieldErrors.title}
+                            </p>
+                          )}
+                        </div>
+                        <div>
+                          <div
+                            id="knowledge-card-content-label"
+                            className="knowledge-field-label mb-1.5"
+                          >
+                            知识正文
+                          </div>
+                          <div
+                            id="knowledge-card-content"
+                            className="knowledge-body-editor ui-editor-surface ui-code-editor w-full min-w-0 overflow-hidden"
+                            role="group"
+                            tabIndex={-1}
+                            aria-labelledby="knowledge-card-content-label"
+                          >
+                            <CodeMirror
+                              value={draft.content}
+                              onChange={(value) =>
+                                updateDraft({ content: value })
+                              }
+                              extensions={[markdown(), EditorView.lineWrapping]}
+                              placeholder="写下结论、方法或值得复用的内容，支持 Markdown…"
+                              onCreateEditor={(view) => {
+                                knowledgeEditorRef.current = view;
+                                syncEditorAccessibility();
+                              }}
+                              theme={dark ? "dark" : "light"}
+                              minHeight="360px"
+                              basicSetup={{
+                                lineNumbers: false,
+                                foldGutter: false,
+                                highlightActiveLine: false,
+                              }}
+                            />
+                          </div>
+                          <p
+                            id="knowledge-card-content-help"
+                            className="mt-1.5 text-[11px] leading-4 text-[var(--ui-text-subtle)]"
+                          >
+                            支持 Markdown。已有条目的修改会自动保存。
+                          </p>
+                          {fieldErrors.content && (
+                            <p
+                              id={validationErrorIds.content}
+                              className="mt-1.5 text-xs font-medium text-[var(--ui-danger-text)]"
+                              role="alert"
+                            >
+                              {fieldErrors.content}
+                            </p>
+                          )}
+                        </div>
+
+                        <div className="ui-panel-muted rounded-xl p-3">
+                          <button
+                            type="button"
+                            onClick={() => setOrganizeOpen((open) => !open)}
+                            aria-expanded={organizeOpen}
+                            aria-controls="knowledge-card-organization"
+                            className="flex w-full items-center justify-between gap-3 text-left"
+                          >
+                            <span className="min-w-0">
+                              <span className="block text-xs font-semibold text-[var(--ui-text)]">
+                                整理知识条目
+                              </span>
+                              <span className="mt-1 block truncate text-[11px] text-[var(--ui-text-subtle)]">
+                                {organizeSummary}
+                              </span>
+                            </span>
+                            <ChevronDown
+                              size={15}
+                              className={`shrink-0 transition-transform ${organizeOpen ? "rotate-180" : ""}`}
+                            />
+                          </button>
+                          {organizeOpen && (
+                            <div
+                              id="knowledge-card-organization"
+                              className="mt-3 grid gap-4 border-t border-[var(--ui-border)] pt-3"
+                            >
+                              <div className="grid gap-3 2xl:grid-cols-[1fr_auto]">
+                                <Picker
+                                  label="类型"
+                                  value={draft.card_type}
+                                  options={typeOptions}
+                                  primaryValues={[
+                                    "fact",
+                                    "method",
+                                    "concept",
+                                    "principle",
+                                  ]}
+                                  onChange={(value) =>
+                                    updateDraft({
+                                      card_type: value as KnowledgeCardType,
+                                    })
+                                  }
+                                />
+                                {selectedId ? (
+                                  <Picker
+                                    label="状态"
+                                    value={draft.status}
+                                    options={statusOptions}
+                                    onChange={(value) => {
+                                      // 状态变更统一经过服务端事务；尤其是“已沉淀”，
+                                      // 不能在整理区通过普通字段保存绕过来源核验。
+                                      void updateStatus(
+                                        value as KnowledgeCardStatus,
+                                      );
+                                    }}
+                                  />
+                                ) : (
+                                  <div className="min-w-0">
+                                    <div className="ui-section-kicker mb-1.5">
+                                      状态
+                                    </div>
+                                    <div className="ui-status-accent inline-flex min-h-8 items-center rounded-lg px-3 text-xs font-semibold">
+                                      待确认
+                                    </div>
+                                    <p className="mt-1.5 text-[11px] leading-4 text-[var(--ui-text-subtle)]">
+                                      新知识条目会先保存为草稿；来源可选，填写后会在确认时核验。
+                                    </p>
+                                  </div>
+                                )}
+                              </div>
+                              <div>
+                                <div className="mb-1.5 flex items-center justify-between gap-2">
+                                  <label
+                                    htmlFor="knowledge-card-tags"
+                                    className="ui-section-kicker"
+                                  >
+                                    标签
+                                  </label>
+                                  {parsedTags.length > 0 && (
+                                    <span className="text-[11px] text-[var(--ui-text-subtle)]">
+                                      已添加 {parsedTags.length} 个
+                                    </span>
+                                  )}
+                                </div>
+                                <div className="ui-token-input max-h-32 overflow-y-auto pr-1">
+                                  {parsedTags.map((tag) => (
+                                    <button
+                                      key={tag}
+                                      type="button"
+                                      onClick={() => removeTag(tag)}
+                                      className="ui-chip border-[var(--ui-selected-border)] bg-[var(--ui-surface-selected)] text-[var(--ui-accent-text)] hover:bg-[var(--ui-surface-hover)]"
+                                      title="点击移除标签"
+                                      aria-label={`移除标签：${tag}`}
+                                    >
+                                      #{tag} <X size={12} />
+                                    </button>
+                                  ))}
+                                  <input
+                                    id="knowledge-card-tags"
+                                    value={tagInput}
+                                    onChange={(e) =>
+                                      setTagInput(e.target.value)
+                                    }
+                                    onKeyDown={(e) => {
+                                      if (
+                                        !e.nativeEvent.isComposing &&
+                                        e.keyCode !== 229 &&
+                                        (e.key === "Enter" || e.key === ",")
+                                      ) {
+                                        e.preventDefault();
+                                        addTag();
+                                      }
+                                      if (
+                                        e.key === "Backspace" &&
+                                        !tagInput &&
+                                        parsedTags.length
+                                      ) {
+                                        removeTag(
+                                          parsedTags[parsedTags.length - 1],
+                                        );
+                                      }
+                                    }}
+                                    onBlur={() => addTag()}
+                                    placeholder={
+                                      parsedTags.length
+                                        ? "添加标签"
+                                        : "添加标签"
+                                    }
+                                    className="h-8 min-w-[120px] flex-1 border-0 bg-transparent px-1 text-sm text-[var(--ui-text)] outline-hidden placeholder:text-[var(--ui-text-subtle)]"
+                                  />
+                                </div>
+                                {tagSuggestions.length > 0 && (
+                                  <div className="mt-2 flex flex-wrap items-center gap-1.5">
+                                    <span className="text-[11px] text-[var(--ui-text-subtle)]">
+                                      建议
+                                    </span>
+                                    {tagSuggestions.map(({ tag }) => (
+                                      <button
+                                        key={tag}
+                                        type="button"
+                                        onClick={() => addTag(tag)}
+                                        className="ui-chip h-7 px-2 py-0.5 text-[11px]"
+                                      >
+                                        #{tag}
+                                      </button>
+                                    ))}
+                                  </div>
+                                )}
+                              </div>
+                              <div>
+                                <div className="mb-1.5 flex items-center justify-between gap-2">
+                                  <div className="ui-section-kicker">
+                                    空间（主题或项目）
+                                  </div>
+                                  {parsedProjects.length > 0 && (
+                                    <span className="text-[11px] text-[var(--ui-text-subtle)]">
+                                      已添加 {parsedProjects.length} 个
+                                    </span>
+                                  )}
+                                </div>
+                                <div className="ui-token-input items-start pr-1">
+                                  <div className="flex max-h-24 min-w-0 w-full flex-wrap content-start gap-1.5 overflow-y-auto">
+                                    {parsedProjects.map((project) => (
+                                      <button
+                                        key={project}
+                                        type="button"
+                                        onClick={() => removeProject(project)}
+                                        className="ui-chip border-[var(--ui-selected-border)] bg-[var(--ui-surface-selected)] text-[var(--ui-accent-text)] hover:bg-[var(--ui-surface-hover)]"
+                                        title="点击移除空间"
+                                        aria-label={`移除空间：${project}`}
+                                      >
+                                        <Folder size={12} /> {project}{" "}
+                                        <X size={12} />
+                                      </button>
+                                    ))}
+                                  </div>
+                                  <SpaceAutocomplete
+                                    spaces={projectCounts}
+                                    value={projectInput}
+                                    onChange={setProjectInput}
+                                    onSelect={(name) => addProject(name)}
+                                    onEnter={addProject}
+                                    onComma={addProject}
+                                    onKeyDown={(event) => {
+                                      if (
+                                        event.key === "Backspace" &&
+                                        !projectInput &&
+                                        parsedProjects.length
+                                      ) {
+                                        removeProject(
+                                          parsedProjects[
+                                            parsedProjects.length - 1
+                                          ],
+                                        );
+                                      }
+                                    }}
+                                    onBlurCommit={addProject}
+                                    placeholder="选择或输入空间"
+                                    ariaLabel="知识条目所属空间"
+                                    inputClassName="h-8 min-w-[120px] flex-1 border-0 bg-transparent px-1 pr-7 text-sm text-[var(--ui-text)] outline-hidden placeholder:text-[var(--ui-text-subtle)]"
+                                    containerClassName="basis-full min-w-0"
+                                    showIcon={false}
+                                  />
+                                </div>
+                              </div>
+                              <div>
+                                <div className="ui-section-kicker mb-1.5">
+                                  关联知识条目
+                                </div>
+                                <Command
+                                  shouldFilter={false}
+                                  className="relative"
+                                >
+                                  <Command.Input
+                                    value={relatedQuery}
+                                    onValueChange={setRelatedQuery}
+                                    placeholder="搜索并添加关联知识条目…"
+                                    aria-label="关联知识条目"
+                                    className="ui-field h-10 w-full"
+                                  />
+                                  {relatedQuery.trim() && (
+                                    <Command.List className="ui-floating-surface absolute left-0 right-0 top-full z-30 mt-1 max-h-48 overflow-y-auto rounded-xl p-1">
+                                      <Command.Empty className="px-3 py-2 text-sm text-[var(--ui-text-subtle)]">
+                                        无匹配知识条目
+                                      </Command.Empty>
+                                      {relatedCandidates.map((card) => (
+                                        <Command.Item
+                                          key={card.id}
+                                          value={card.title}
+                                          onSelect={() => {
+                                            editorGenerationRef.current += 1;
+                                            setDraftRelatedIds((ids) =>
+                                              ids.includes(card.id)
+                                                ? ids
+                                                : [...ids, card.id],
+                                            );
+                                            setRelatedQuery("");
+                                            setDirty(true);
+                                            setSaveState("idle");
+                                          }}
+                                          className="ui-command-item flex cursor-pointer items-center rounded-lg px-3 py-2 text-sm"
+                                        >
+                                          <span className="truncate">
+                                            {card.title}
+                                          </span>
+                                        </Command.Item>
+                                      ))}
+                                    </Command.List>
+                                  )}
+                                </Command>
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+
+                      <details
+                        className="kl-source-editor"
+                        open={sourceExpanded}
+                        onToggle={(event) =>
+                          setSourceExpanded(event.currentTarget.open)
+                        }
+                      >
+                        <summary>
+                          <ShieldCheck size={16} />
+                          来源与依据<span>{sourceStateLabel[sourceState]}</span>
+                          <ChevronDown size={14} />
+                        </summary>
+                        <div className="flex min-w-0 flex-col">
+                          <div className="knowledge-source-heading mb-2 flex items-center justify-between gap-2">
+                            <div className="knowledge-field-label flex items-center gap-1.5">
+                              <ShieldCheck
+                                size={14}
+                                className="text-[var(--ui-quote-text)]"
+                              />{" "}
+                              来源（可选）
+                            </div>
+                            <div className="flex shrink-0 items-center gap-2">
+                              <span
+                                className="knowledge-source-state"
+                                data-state={sourceState}
+                              >
+                                {sourceStateLabel[sourceState]}
+                              </span>
+                              {hasSourceReference && (
+                                <button
+                                  type="button"
+                                  onClick={openSource}
+                                  ref={sourceTriggerRef}
+                                  disabled={sourceLoading}
+                                  aria-label={`${sourceActionLabel}：${sourceReferenceLabel}`}
+                                  className="ui-button-ghost h-11 min-h-11 gap-1 px-2 text-xs font-semibold text-[var(--ui-quote-text)] disabled:cursor-wait disabled:opacity-60 md:h-9 md:min-h-9"
+                                >
+                                  <ExternalLink size={12} /> {sourceActionLabel}
+                                </button>
+                              )}
+                            </div>
+                          </div>
+                          <div
+                            id="knowledge-source-panel"
+                            className="knowledge-source-panel ui-editor-surface flex min-h-[280px] flex-1 scroll-mt-4 flex-col overflow-hidden"
+                            data-source-state={sourceState}
+                            aria-busy={sourceLoading}
+                          >
+                            <div
+                              className="knowledge-source-titlebar ui-soft-divider flex items-center gap-2 border-b px-4 py-3"
+                              role="status"
+                              aria-live="polite"
+                            >
+                              <FileText
+                                size={13}
+                                className="shrink-0 text-[var(--ui-text-subtle)]"
+                              />
+                              <div className="min-w-0 flex-1 truncate text-xs font-medium text-[var(--ui-text-muted)]">
+                                {sourceLoading
+                                  ? "加载来源..."
+                                  : sourceError
+                                    ? "来源暂时无法加载"
+                                    : sourceArticle?.title ||
+                                      sourceReview?.title ||
+                                      (hasManualKnowledgeSource(draft)
+                                        ? "手动来源片段"
+                                        : draft.source_date
+                                          ? `${draft.source_date} · ${currentSourceType}`
+                                          : "暂无来源")}
+                              </div>
+                            </div>
+                            {sourceError && (
+                              <div
+                                className="ui-alert-warn m-3 mb-0 flex items-start justify-between gap-3 text-xs leading-5"
+                                role="alert"
+                              >
+                                <span className="min-w-0">
+                                  {sourceError}
+                                  。如果这是一条手动导入且不需要来源，可以清空来源字段后确认。
+                                </span>
+                                <span className="flex shrink-0 items-center gap-1">
+                                  {sourceConnectionError && (
+                                    <button
+                                      type="button"
+                                      onClick={openConnectionSettings}
+                                      className="ui-button-ghost h-11 min-h-11 px-2 text-[11px] md:h-9 md:min-h-9"
+                                    >
+                                      连接设置
+                                    </button>
+                                  )}
+                                  <button
+                                    type="button"
+                                    onClick={retrySourceLoad}
+                                    disabled={sourceLoading}
+                                    className="ui-button-ghost h-11 min-h-11 px-2 text-[11px] md:h-9 md:min-h-9"
+                                  >
+                                    {sourceLoading ? "重试中..." : "重试加载"}
+                                  </button>
+                                </span>
+                              </div>
+                            )}
+                            {fieldErrors.source && (
+                              <p
+                                id={validationErrorIds.source}
+                                className="ui-alert-bad m-3 mb-0 text-xs leading-5"
+                                role="alert"
+                              >
+                                {fieldErrors.source}
+                              </p>
+                            )}
+                            <div className="knowledge-source-excerpt px-4 pt-4">
+                              <label
+                                htmlFor="knowledge-source-excerpt"
+                                className="knowledge-field-label mb-1.5 block"
+                              >
+                                证据片段（可选）
+                              </label>
+                              <p
+                                id="knowledge-source-excerpt-help"
+                                className="mb-1.5 text-[11px] leading-4 text-[var(--ui-text-subtle)]"
+                              >
+                                有来源时，粘贴能直接支撑正文的连续片段，方便以后复核；手动导入可以留空。
+                              </p>
+                              <p
+                                className={[
+                                  "mb-2 text-[11px] leading-4",
+                                  sourceState === "verified"
+                                    ? "text-[var(--ui-success-text)]"
+                                    : sourceState === "mismatch" ||
+                                        sourceState === "error"
+                                      ? "text-[var(--ui-danger-text)]"
+                                      : "text-[var(--ui-text-subtle)]",
+                                ].join(" ")}
+                                role="status"
+                                aria-live="polite"
+                              >
+                                {sourceState === "empty" &&
+                                  "未填写来源；手动导入的知识条目可以直接确认。"}
+                                {sourceState === "manual" &&
+                                  "已填写手动来源片段；不关联记录也可以直接确认。"}
+                                {sourceState === "incomplete" &&
+                                  "关联来源还不完整；请补齐定位和连续片段，或清空关联字段。"}
+                                {sourceState === "locator" &&
+                                  "已记录来源定位；打开原文后再粘贴可匹配的连续片段。"}
+                                {sourceState === "loading" &&
+                                  "正在读取来源，请稍候。"}
+                                {sourceState === "ready" &&
+                                  "原文已读取；还需要一段能直接支撑正文的连续片段。"}
+                                {sourceState === "verified" &&
+                                  "片段已在当前原文中找到，可以进入确认沉淀。"}
+                                {sourceState === "mismatch" &&
+                                  "片段未在当前原文中找到，请从原文重新复制，避免把推断写成证据。"}
+                                {sourceState === "error" &&
+                                  "来源读取失败；可以修复连接后重试，也可以清空来源字段。"}
+                              </p>
+                              <textarea
+                                id="knowledge-source-excerpt"
+                                aria-label="支撑知识条目的来源片段"
+                                aria-invalid={!!fieldErrors.source}
+                                aria-describedby={[
+                                  "knowledge-source-excerpt-help",
+                                  fieldErrors.source
+                                    ? validationErrorIds.source
+                                    : "",
+                                ]
+                                  .filter(Boolean)
+                                  .join(" ")}
+                                value={draft.source_excerpt}
+                                onChange={(e) =>
+                                  updateDraft({
+                                    source_excerpt: e.target.value,
+                                  })
+                                }
+                                placeholder="有来源时粘贴连续原文片段"
+                                className="min-h-[120px] w-full resize-none rounded-sm border-0 bg-transparent px-0 py-1 text-xs leading-5 text-[var(--ui-text)] outline-none placeholder:text-[var(--ui-text-subtle)] focus-visible:ring-2 focus-visible:ring-[var(--ui-focus)]/40"
+                              />
+                            </div>
+                            <div className="grid gap-2 p-3 pt-3">
+                              <label
+                                className="ui-section-kicker"
+                                htmlFor="knowledge-source-date"
+                              >
+                                来源日期（可选）
+                              </label>
+                              <input
+                                id="knowledge-source-date"
+                                type="date"
+                                value={draft.source_date}
+                                onChange={(e) =>
+                                  updateDraft({ source_date: e.target.value })
+                                }
+                                aria-invalid={!!fieldErrors.source}
+                                aria-describedby={[
+                                  "knowledge-source-date-help",
+                                  fieldErrors.source
+                                    ? validationErrorIds.source
+                                    : "",
+                                ]
+                                  .filter(Boolean)
+                                  .join(" ")}
+                                className="ui-field h-11 min-h-11 text-xs"
+                              />
+                              <p
+                                id="knowledge-source-date-help"
+                                className="text-[11px] leading-4 text-[var(--ui-text-subtle)]"
+                              >
+                                有来源时可填写原文日期，格式为 YYYY-MM-DD。
+                              </p>
+                              <label
+                                className="ui-section-kicker"
+                                htmlFor="knowledge-source-id"
+                              >
+                                关联来源 ID（只读）
+                              </label>
+                              <p
+                                id="knowledge-source-id-help"
+                                className="text-[11px] leading-4 text-[var(--ui-text-subtle)]"
+                              >
+                                有可读取来源时自动带入；手动来源片段可以留空。
+                              </p>
+                              <input
+                                id="knowledge-source-id"
+                                value={
+                                  draft.source_article_id ||
+                                  draft.source_review_id
+                                }
+                                readOnly
+                                placeholder="没有关联记录（可选）"
+                                aria-describedby="knowledge-source-id-help"
+                                className="ui-field h-11 min-h-11 text-xs text-[var(--ui-text-muted)]"
+                              />
+                            </div>
+                          </div>
+                        </div>
+                      </details>
+                      {duplicateHint && (
+                        <div className="ui-alert-warn mt-4" role="status">
+                          {duplicateHint}
+                        </div>
+                      )}
+                    </div>
+                  )}
+                  {readerTab === "review" && (
+                    <div
+                      className="kl-review"
+                      id="knowledge-review-panel"
+                      tabIndex={-1}
+                    >
+                      {selectedCard && (
+                        <ReviewItemsPanel
+                          cardId={selectedCard.id}
+                          cardStatus={draft.status}
+                          contentVersion={selectedCard.content_version}
+                        />
+                      )}
+
+                      {selectedCard &&
+                        (relatedChips.length > 0 ||
+                          reviewHistory.length > 1) && (
+                          <div className="mt-4 grid gap-3">
+                            {relatedChips.length > 0 && (
+                              <div className="flex flex-wrap items-center gap-1.5">
+                                <span className="ui-section-kicker">关联</span>
+                                {relatedChips.map((chip) => (
+                                  <span
+                                    key={chip.id}
+                                    className="ui-status-accent inline-flex max-w-[220px] items-center gap-1 rounded-md px-2 py-0.5 text-[11px] font-medium"
+                                  >
+                                    <button
+                                      type="button"
+                                      onClick={() => openCard(chip)}
+                                      className="truncate transition-colors hover:underline"
+                                    >
+                                      {chip.title}
+                                    </button>
+                                    {draftRelatedIds.includes(chip.id) ? (
+                                      <button
+                                        type="button"
+                                        onClick={() => {
+                                          editorGenerationRef.current += 1;
+                                          setDraftRelatedIds((ids) =>
+                                            ids.filter((id) => id !== chip.id),
+                                          );
+                                          setDirty(true);
+                                          setSaveState("idle");
+                                        }}
+                                        className="text-[var(--ui-accent-text)] opacity-50 transition-opacity hover:opacity-100"
+                                        title="移除关联"
+                                        aria-label={`移除关联：${chip.title}`}
+                                      >
+                                        <X size={11} />
+                                      </button>
+                                    ) : (
+                                      <span
+                                        className="shrink-0 text-[var(--ui-accent-text)] opacity-60"
+                                        title="这是来自另一个知识条目的关联，请打开对方条目后移除"
+                                        aria-label="来自另一个知识条目的关联"
+                                      >
+                                        ↔
+                                      </span>
+                                    )}
+                                  </span>
+                                ))}
+                              </div>
+                            )}
+                            {reviewHistory.length > 1 && (
+                              <div>
+                                <div className="mb-1 flex items-center justify-between">
+                                  <span className="ui-section-kicker">
+                                    复习间隔趋势
+                                  </span>
+                                  <span className="text-[11px] text-[var(--ui-text-subtle)]">
+                                    最近{" "}
+                                    {reviewHistory[
+                                      reviewHistory.length - 1
+                                    ].interval_days.toFixed(0)}{" "}
+                                    天
+                                  </span>
+                                </div>
+                                <IntervalChart history={reviewHistory} />
+                              </div>
+                            )}
+                          </div>
+                        )}
+                    </div>
+                  )}
+                </>
+              )}
+            </div>
+            {!awaitingDetail && (
+              <footer className="kl-detail-footer">
+                <span>
+                  {readerTab === "edit"
+                    ? selectedId
+                      ? "修改自动保存 · Ctrl / ⌘ S 立即保存"
+                      : "先创建草稿，再确认沉淀"
+                    : "知识条目 · 持续积累与复用"}
+                </span>
+                <div>
+                  {selectedId && (
                     <DropdownMenu>
                       <DropdownMenuTrigger asChild>
                         <button
                           type="button"
-                          className="ui-button-ghost h-8 min-h-8 max-w-[8.5rem] gap-1 px-2 text-xs"
-                          aria-label="选择空间"
-                          title={projectFilter ? `当前空间：${projectFilter}` : "选择空间"}
+                          className="kl-icon"
+                          aria-label="当前条目更多操作"
+                          disabled={saving}
                         >
-                          <Folder size={13} className="shrink-0" />
-                          <span className="truncate">{projectFilter || "全部空间"}</span>
-                          <ChevronDown size={12} className="shrink-0 opacity-70" />
+                          <MoreHorizontal size={18} />
                         </button>
                       </DropdownMenuTrigger>
-                      <DropdownMenuContent align="start" className="w-56">
-                        <DropdownMenuLabel>空间</DropdownMenuLabel>
-                        <DropdownMenuItem onSelect={() => changeProject("")}>
-                          <Folder size={14} />
-                          <span className="flex-1">全部空间</span>
-                          {!projectFilter && <span className="text-[var(--ui-accent-text)]">当前</span>}
+                      <DropdownMenuContent align="end">
+                        <DropdownMenuItem
+                          onSelect={() =>
+                            void updateStatus(
+                              draft.status === "outdated"
+                                ? "confirmed"
+                                : "outdated",
+                            )
+                          }
+                        >
+                          {draft.status === "outdated"
+                            ? "恢复为已确认"
+                            : "标记为过时"}
                         </DropdownMenuItem>
-                        {projectCounts.map((space) => (
-                          <DropdownMenuItem key={space.name} onSelect={() => changeProject(space.name)}>
-                            <Folder size={14} />
-                            <span className="min-w-0 flex-1 truncate">{space.name}</span>
-                            {projectFilter === space.name && <span className="text-[var(--ui-accent-text)]">当前</span>}
-                          </DropdownMenuItem>
-                        ))}
-                        {projectCounts.length === 0 && <DropdownMenuLabel className="font-normal text-[var(--ui-text-subtle)]">暂无空间</DropdownMenuLabel>}
                         <DropdownMenuSeparator />
-                        <DropdownMenuItem onSelect={openSpaceManager}>
-                          <FolderCog size={14} /> 空间管理
+                        <DropdownMenuItem
+                          onSelect={() => void deleteCards()}
+                          className="text-[var(--ui-danger-text)]"
+                        >
+                          <Trash2 size={14} />
+                          移入回收站
                         </DropdownMenuItem>
                       </DropdownMenuContent>
                     </DropdownMenu>
-                  </div>
-                  <div className="ui-segment min-h-9 gap-1 p-1" role="group" aria-label="列表密度">
-                    <button
-                      type="button"
-                      onClick={() => changeDensity("comfortable")}
-                      aria-pressed={density === "comfortable"}
-                      title="舒适视图"
-                      className={density === "comfortable" ? "ui-segment-item ui-segment-item-active h-7 w-7 px-0" : "ui-segment-item h-7 w-7 px-0"}
-                    >
-                      <Rows3 size={14} />
-                      <span className="sr-only">舒适视图</span>
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => changeDensity("compact")}
-                      aria-pressed={density === "compact"}
-                      title="紧凑视图"
-                      className={density === "compact" ? "ui-segment-item ui-segment-item-active h-7 w-7 px-0" : "ui-segment-item h-7 w-7 px-0"}
-                    >
-                      <LayoutList size={14} />
-                      <span className="sr-only">紧凑视图</span>
-                    </button>
-                  </div>
-                  <Select value={sort} onValueChange={changeSort}>
-                    <SelectTrigger className="h-9 min-h-9 w-auto min-w-[104px] justify-between gap-2 rounded-lg px-3 py-0 text-left text-xs font-medium" aria-label="知识条目排序">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent align="end" className="min-w-[124px]">
-                      {sortOptions.map(([value, label]) => <SelectItem key={value} value={value} className="justify-start px-2 pr-8 text-xs">{label}</SelectItem>)}
-                    </SelectContent>
-                  </Select>
-                  <div className="flex items-center gap-2 border-l border-[var(--ui-border)] pl-3">
-                    <label className="ui-button-ghost h-9 min-h-9 gap-2 whitespace-nowrap px-3 text-xs">
-                      <TriStateCheckbox
-                        checked={allVisibleSelected}
-                        indeterminate={someVisibleSelected && !allVisibleSelected}
-                        onChange={selectAllVisible}
-                        aria-label={allVisibleSelected ? "取消选择当前列表" : "选择当前列表"}
-                        className="h-4 w-4 rounded border-[var(--ui-border-strong)] accent-[var(--ui-accent-solid)] focus:ring-2 focus:ring-[var(--ui-focus)]/30"
-                      />
-                      <span>{allVisibleSelected ? "取消全选" : someVisibleSelected ? "部分选中" : "全选当前列表"}</span>
-                    </label>
-                    <button type="button" onClick={invertVisibleSelection} className="ui-button-ghost h-9 min-h-9 px-3 text-xs">
-                      反选
-                    </button>
-                  </div>
-                </div>
-              )}
-            </div>
-            {cards.length > 0 && (
-              <div className="mt-3 grid gap-3 xl:hidden">
-                <div className="grid min-w-0 grid-cols-[minmax(0,1fr)_auto] gap-3">
-                  <Select value={sort} onValueChange={changeSort}>
-                    <SelectTrigger className="h-11 min-h-11 w-full min-w-0 justify-between gap-2 rounded-xl px-3 py-0 text-left text-xs font-medium" aria-label="知识条目排序">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent align="start" className="min-w-[160px]">
-                      {sortOptions.map(([value, label]) => <SelectItem key={value} value={value} className="justify-start px-2 pr-8 text-xs">{label}</SelectItem>)}
-                    </SelectContent>
-                  </Select>
-                  <label className="ui-button-ghost h-11 min-h-11 min-w-0 max-w-[8.5rem] gap-1.5 px-3 text-xs">
-                    <TriStateCheckbox
-                      checked={allVisibleSelected}
-                      indeterminate={someVisibleSelected && !allVisibleSelected}
-                      onChange={selectAllVisible}
-                      aria-label={allVisibleSelected ? "取消选择当前列表" : "选择当前列表"}
-                      className="h-5 w-5 shrink-0 rounded border-[var(--ui-border-strong)] accent-[var(--ui-accent-solid)] focus:ring-2 focus:ring-[var(--ui-focus)]/30"
-                    />
-                    <span className="truncate">{allVisibleSelected ? "取消全选" : someVisibleSelected ? "部分选中" : "全选当前"}</span>
-                  </label>
-                </div>
-                <div className="flex min-h-7 items-center justify-between gap-3 px-2">
-                  <span className="min-w-0 truncate text-[11px] leading-4 text-[var(--ui-text-subtle)]">
-                    {visibleSelectedCount > 0 ? `已选 ${visibleSelectedCount} 个` : "点击知识条目打开详情 · 勾选可批量处理"}
-                  </span>
-                  <button type="button" onClick={invertVisibleSelection} className="ui-button-ghost h-11 min-h-11 shrink-0 px-3 text-xs md:h-9 md:min-h-9">
-                    反选
-                  </button>
-                </div>
-              </div>
-            )}
-            {selectedIds.length > 0 && (
-              <div role="toolbar" aria-label="知识条目批量操作" className="ui-status-accent ui-mobile-fixed-toolbar mt-3 flex flex-col gap-2 rounded-xl px-2.5 py-2 shadow-md max-xl:sticky max-xl:z-30 max-xl:mx-0 max-xl:max-w-none xl:mt-1 xl:shadow-none">
-                <div className="flex flex-col gap-2 xl:flex-row xl:items-center xl:justify-between">
-                  <span className="text-xs font-semibold text-[var(--ui-accent-text)]">
-                    已选 {selectedIds.length} 个
-                    {hiddenSelectedCount > 0 ? ` · 当前列表可见 ${visibleSelectedCount} 个` : " · 当前列表"}
-                  </span>
-                  <div className="grid grid-cols-2 gap-1.5 xl:flex xl:flex-wrap xl:items-center xl:justify-end xl:gap-1">
-                    <button
-                      type="button"
-                      onClick={() => updateStatus("confirmed", selectedIds.filter((id) => cards.some((card) => card.id === id && card.status === "draft")))}
-                      disabled={saving || selectedDraftCount === 0}
-                      title={selectedDraftCount > 0 ? "确认选中的草稿并沉淀入库" : "当前选择中没有待沉淀草稿"}
-                      className="ui-button-success h-11 min-h-11 min-w-0 gap-1 whitespace-nowrap px-2 text-xs xl:h-8 xl:min-h-8"
-                    >
-                      <CheckCircle2 size={13} className="shrink-0" /> <span className="truncate">一键沉淀{selectedDraftCount > 0 ? " " + selectedDraftCount : ""}</span>
-                    </button>
-                    <button type="button" onClick={() => setMobileBatchOpen(true)} disabled={saving} className="ui-button-ghost h-11 min-h-11 min-w-0 gap-1 px-2 text-xs font-semibold xl:hidden">
-                      批量操作 <MoreHorizontal size={14} />
-                    </button>
-                    <div className="hidden xl:block">
-                      <DropdownMenu>
-                        <DropdownMenuTrigger asChild>
-                          <button type="button" disabled={saving} className="ui-button-ghost h-8 min-h-8 gap-1 px-2 text-xs font-semibold">
-                            批量操作 <ChevronDown size={13} />
-                          </button>
-                        </DropdownMenuTrigger>
-                        <DropdownMenuContent align="end" className="w-44">
-                          <DropdownMenuLabel>修改选中的知识条目</DropdownMenuLabel>
-                          <DropdownMenuItem onSelect={() => toggleBatchMode("tag")}>添加标签</DropdownMenuItem>
-                          <DropdownMenuItem onSelect={() => toggleBatchMode("remove_tag")}>移除标签</DropdownMenuItem>
-                          <DropdownMenuItem onSelect={() => toggleBatchMode("add_project")}>加入空间</DropdownMenuItem>
-                          <DropdownMenuItem onSelect={() => toggleBatchMode("move_project")}>移动到空间</DropdownMenuItem>
-                          <DropdownMenuItem onSelect={() => toggleBatchMode("remove_project")}>移出空间</DropdownMenuItem>
-                          <DropdownMenuSeparator />
-                        <DropdownMenuItem onSelect={() => void deleteCards(selectedIds)} className="text-[var(--ui-danger-text)] focus:bg-[var(--ui-danger-surface)] focus:text-[var(--ui-danger-text)]">
-                            批量删除
-                          </DropdownMenuItem>
-                        </DropdownMenuContent>
-                      </DropdownMenu>
-                    </div>
-                    <button type="button" onClick={clearSelection} className="ui-button-ghost h-11 min-h-11 min-w-0 px-2 text-xs xl:h-8 xl:min-h-8">
-                      清空
-                    </button>
-                    {hiddenSelectedCount > 0 && (
-                      <button type="button" onClick={clearHiddenSelection} className="ui-button-ghost col-span-2 h-11 min-h-11 min-w-0 px-2 text-xs xl:col-span-1 xl:h-8 xl:min-h-8">
-                        清除不可见项
-                      </button>
-                    )}
-                  </div>
-                </div>
-                {batchMode && (
-                  <div className="ui-panel-muted hidden rounded-lg p-2 xl:block">
-                    <div className="mb-1.5 flex items-center justify-between gap-2">
-                      <span className="text-[11px] font-semibold text-[var(--ui-accent-text)]">
-                        {batchMode === "tag" ? "添加标签" : batchMode === "remove_tag" ? "移除标签" : batchMode === "add_project" ? "加入空间" : batchMode === "move_project" ? "移动到空间" : "移出空间"}
-                      </span>
-                      <button type="button" onClick={() => { setBatchMode(""); setBatchValue(""); }} className="ui-icon-button h-7 w-7" aria-label="关闭批量编辑">
-                        <X size={13} />
-                      </button>
-                    </div>
-                    <div className="flex w-full items-center gap-1.5">
-                      {batchMode === "tag" || batchMode === "remove_tag" ? (
-                        <input
-                          value={batchValue}
-                          onChange={(e) => setBatchValue(e.target.value)}
-                          onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); void applyBatch(); } }}
-                          placeholder="标签，逗号分隔多个"
-                          aria-label={batchMode === "tag" ? "要添加的标签" : "要移除的标签"}
-                          className="ui-field h-9 min-w-0 flex-1 rounded-lg px-2.5 text-xs"
-                          autoFocus
-                        />
-                      ) : (
-                        <SpaceAutocomplete
-                          spaces={projectCounts}
-                          value={batchValue}
-                          onChange={setBatchValue}
-                          onEnter={() => void applyBatch()}
-                          placeholder={batchMode === "move_project" ? "选择目标空间" : "选择空间"}
-                          ariaLabel={batchMode === "move_project" ? "批量移动的目标空间" : "批量操作的空间"}
-                          inputClassName="ui-field h-9 pl-8 text-xs"
-                          containerClassName="min-w-0 flex-1"
-                          autoFocus
-                        />
-                      )}
-                      <button type="button" onClick={() => void applyBatch()} disabled={saving || !batchValue.trim()} className="ui-button-primary h-9 shrink-0 px-3 text-xs">
-                        应用
-                      </button>
-                    </div>
-                    {batchMode === "move_project" && <p className="mt-1.5 text-[11px] leading-4 text-[var(--ui-text-subtle)]">移动会替换知识条目已有空间；目标空间不存在时会自动创建。</p>}
-                  </div>
-                )}
-              </div>
-            )}
-          </div>
-          {loading && cards.length === 0 ? (
-            <KnowledgeListSkeleton />
-          ) : cards.length === 0 ? (
-            <div className="p-3 xl:min-h-0 xl:flex-1 xl:overflow-y-auto">
-              <div className="ui-panel-muted rounded-xl border-dashed p-4 text-center">
-                <span className="ui-status-muted mx-auto flex h-10 w-10 items-center justify-center rounded-xl">
-                  <FileText size={22} />
-                </span>
-                <p className="mt-3 text-sm font-medium text-[var(--ui-text)]">{emptyStateTitle}</p>
-                <p className="mt-1 text-xs leading-5 text-[var(--ui-text-muted)]">{emptyStateDescription}</p>
-                {emptyStateAction && (
-                  <button type="button" onClick={emptyStateAction.onClick} className="ui-button-primary mt-4 h-11 min-h-11 px-3 text-xs md:h-9 md:min-h-9">
-                    {emptyStateAction.label}
-                  </button>
-                )}
-              </div>
-            </div>
-          ) : (
-            <div
-              ref={listParent}
-              aria-busy={loading}
-              className={["relative min-w-0 pr-1 pb-[calc(var(--ui-mobile-nav-total-height)+1rem)] xl:min-h-0 xl:flex-1 xl:overflow-y-auto xl:pb-0", density === "comfortable" ? "space-y-1.5" : "space-y-1", loading ? "opacity-60 transition-opacity" : ""].join(" ")}
-            >
-              {loading && (
-                <div className="ui-status-accent sticky top-0 z-10 mb-1 flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-[11px] font-medium shadow-xs backdrop-blur" role="status" aria-live="polite">
-                  <LoaderCircle size={12} className="animate-spin" /> 更新列表中...
-                </div>
-              )}
-              {sortedCards.map((card) => (
-                <div
-                  key={card.id}
-                  data-state={selectedIds.includes(card.id) ? "selected" : selectedId === card.id ? "active" : "idle"}
-                  data-active={selectedId === card.id ? "true" : undefined}
-                  className={[
-                    "knowledge-card-row group relative flex w-full min-w-0 items-start gap-1.5",
-                    density === "comfortable" ? "rounded-xl p-1.5" : "rounded-lg p-1",
-                  ].join(" ")}
-                >
-                  <label
-                    className={[
-                      "relative z-[1] mt-0.5 flex h-11 w-11 shrink-0 cursor-pointer items-center justify-center rounded-lg transition-colors xl:h-8 xl:w-8 xl:rounded-md",
-                      selectedIds.includes(card.id) ? "ui-status-accent" : "hover:bg-[var(--ui-surface-hover)]",
-                    ].join(" ")}
-                  >
-                    <input
-                      type="checkbox"
-                      checked={selectedIds.includes(card.id)}
-                      onChange={() => toggleSelected(card.id)}
-                      aria-label={`${selectedIds.includes(card.id) ? "取消选择" : "选择"}：${card.title}`}
-                      className="h-5 w-5 cursor-pointer rounded border-[var(--ui-border-strong)] accent-[var(--ui-accent-solid)] focus:ring-2 focus:ring-[var(--ui-focus)]/40 xl:h-4 xl:w-4"
-                    />
-                  </label>
-                  <Link
-                    to="/knowledge/$cardId"
-                    params={{ cardId: card.id }}
-                    search={{
-                      q: query || undefined,
-                      project: projectFilter || undefined,
-                      tag: tagFilter || undefined,
-                      status: activeStatus,
-                      type: typeFilter || undefined,
-                      sort: sort === "updated" ? undefined : sort,
-                      usage: usageFilter || undefined,
-                      quality: qualityFilter || undefined,
-                      page: page > 1 ? page : undefined,
-                      view: "detail",
-                    }}
-                    aria-label={`${card.title}，${statusLabels[card.status]}，${knowledgeSourceLabel(card)}${hasKnowledgeSourceData(card) ? "" : "（可选）"}`}
-                    onClick={(event) => {
-                      if (!onOpenCard || event.defaultPrevented || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
-                      event.preventDefault();
-                      openCard(card);
-                    }}
-                    className={[
-                      "min-w-0 flex-1 rounded-lg text-left outline-hidden transition-colors focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--ui-focus)]/30",
-                      density === "comfortable" ? "px-2 py-2" : "px-1.5 py-1.5",
-                    ].join(" ")}
-                  >
-                    <div className="flex items-start justify-between gap-2">
-                      <span className="min-w-0 flex-1 line-clamp-2 break-words text-sm font-semibold leading-5 text-[var(--ui-text)] xl:truncate">{card.title}</span>
-                      <span
-                        className={[
-                          "shrink-0 rounded-md px-1.5 py-0.5 text-[10px] font-medium",
-                          card.status === "confirmed" ? "ui-status-success" : card.status === "outdated" ? "ui-status-warning" : "ui-status-muted",
-                        ].join(" ")}
-                        data-status={card.status}
-                      >
-                        {statusLabels[card.status]}
-                      </span>
-                      <ChevronRight size={16} className="mt-0.5 shrink-0 text-[var(--ui-text-disabled)] group-hover:text-[var(--ui-text-subtle)]" />
-                    </div>
-                    <div className={[
-                      "flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-[11px] leading-5 text-[var(--ui-text-subtle)]",
-                      density === "comfortable" ? "mt-1.5" : "mt-1",
-                    ].join(" ")}>
-                      <span>{typeLabels[card.card_type]}</span>
-                      <span
-                        className={[
-                          "rounded-md px-1.5 py-0.5 text-[10px] font-medium",
-                          knowledgeSourceTone(card),
-                        ].join(" ")}
-                        data-source-state={hasKnowledgeEvidence(card) ? "attached" : hasManualKnowledgeSource(card) ? "manual" : hasKnowledgeSourceData(card) ? "incomplete" : "empty"}
-                      >
-                        {knowledgeSourceLabel(card)}
-                      </span>
-                      {card.source_date && <span className="knowledge-source-line">{card.source_date} · {card.source_review_id ? "AI 复盘" : "每日记录"}</span>}
-                      {card.usage_count ? `· 用过 ${card.usage_count} 次` : ""}
-                      {card.tags.slice(0, density === "comfortable" ? 4 : 2).map((tag) => <span key={tag}>#{tag}</span>)}
-                    </div>
-                    {density === "comfortable" && card.content.trim() && (
-                      <p className="mt-1 line-clamp-2 text-xs leading-5 text-[var(--ui-text-muted)] xl:line-clamp-1">{card.content}</p>
-                    )}
-                  </Link>
-                  {selectedIds.length === 0 && (
-                    <div className="flex shrink-0 items-center self-stretch opacity-100 transition-opacity md:opacity-0 md:group-focus-within:opacity-100 md:group-hover:opacity-100">
-                      <DropdownMenu>
-                        <DropdownMenuTrigger asChild>
-                          <button
-                            type="button"
-                            className="ui-icon-button h-11 w-11 xl:h-8 xl:w-8"
-                            aria-label={`知识条目操作：${card.title}`}
-                            title="知识条目操作"
-                          >
-                            <MoreHorizontal size={15} />
-                          </button>
-                        </DropdownMenuTrigger>
-                        <DropdownMenuContent align="end" className="w-40">
-                          <DropdownMenuLabel>知识条目操作</DropdownMenuLabel>
-                          <DropdownMenuItem onSelect={() => void updateStatus(nextKnowledgeCardStatus(card.status), [card.id])}>
-                            {card.status === "draft" ? "确认沉淀" : card.status === "outdated" ? "恢复为已确认" : "标记为过时"}
-                          </DropdownMenuItem>
-                          <DropdownMenuSeparator />
-                        <DropdownMenuItem onSelect={() => void deleteCards([card.id])} className="text-[var(--ui-danger-text)] focus:bg-[var(--ui-danger-surface)] focus:text-[var(--ui-danger-text)]">
-                            移入回收站
-                          </DropdownMenuItem>
-                        </DropdownMenuContent>
-                      </DropdownMenu>
-                    </div>
                   )}
-                </div>
-              ))}
-            </div>
-          )}
-          {totalCards > 0 && (
-            <div className="ui-soft-divider mt-2 flex shrink-0 items-center justify-between gap-2 border-t px-2 pt-2">
-              <div className="min-w-0 truncate text-[11px] text-[var(--ui-text-subtle)]">
-                共 {totalCards} 个 · 第 {page}/{pageCount} 页
-              </div>
-              <div className="flex shrink-0 items-center gap-1">
-                <button
-                  type="button"
-                  onClick={() => changePage(page - 1)}
-                  disabled={page <= 1 || loading}
-                  className="ui-icon-button h-11 w-11 disabled:cursor-not-allowed disabled:opacity-40 md:h-9 md:w-9"
-                  aria-label="上一页"
-                  title="上一页"
-                >
-                  <ChevronLeft size={15} />
-                </button>
-                <button
-                  type="button"
-                  onClick={() => changePage(page + 1)}
-                  disabled={!hasMore || page >= pageCount || loading}
-                  className="ui-icon-button h-11 w-11 disabled:cursor-not-allowed disabled:opacity-40 md:h-9 md:w-9"
-                  aria-label="下一页"
-                  title="下一页"
-                >
-                  <ChevronRight size={15} />
-                </button>
-              </div>
-            </div>
-          )}
-        </section>
-
-        <section aria-label="知识条目编辑" className={["knowledge-inspector ui-panel flex scroll-pb-[calc(var(--ui-mobile-nav-total-height)+5rem)] flex-col overflow-visible p-4 max-xl:pb-[calc(var(--ui-mobile-nav-total-height)+5rem)] xl:h-full xl:min-h-0 xl:overflow-y-auto xl:pb-4", mobileView === "detail" ? "" : "hidden", "xl:flex"].join(" ")}>
-          <div className="mb-3 flex items-center gap-2 xl:hidden">
-            <button type="button" onClick={() => void closeMobileDetail()} className="ui-button-ghost h-11 min-h-11 px-2.5 text-sm md:h-10 md:min-h-0">
-              <ArrowLeft size={16} /> 知识条目
-            </button>
-            <span className="text-xs text-[var(--ui-text-subtle)]">详情与编辑</span>
-          </div>
-          {projectFilter && (
-            <SpaceOverview
-              name={projectFilter}
-              space={selectedSpace}
-              articles={spaceArticles}
-              loading={spaceArticlesLoading}
-              error={spaceArticlesError}
-              onEditDate={onEditDate}
-            />
-          )}
-          <div className="knowledge-inspector-header mb-4 flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
-            <div className="min-w-0">
-              <div className="flex items-center gap-2">
-                <h3 className="truncate text-base font-bold tracking-[-0.02em] text-[var(--ui-text)]">{selectedId ? "核验知识条目" : "新建知识条目"}</h3>
-                {saveState === "saving" && <span className="inline-flex items-center gap-1 text-xs text-[var(--ui-accent-text)]" role="status" aria-live="polite"><LoaderCircle size={12} className="animate-spin" /> 正在保存</span>}
-                {saveState === "saved" && <span className="text-xs text-[var(--ui-success-text)]" role="status" aria-live="polite">已保存</span>}
-                {saveState === "error" && (
-                  <button
-                    type="button"
-                    onClick={() => void retrySaveDraft()}
-                    disabled={saving || !dirty || !selectedId}
-                    className="text-xs font-semibold text-[var(--ui-danger-text)] underline-offset-2 hover:underline disabled:cursor-not-allowed disabled:opacity-50"
-                  >
-                    保存失败 · 重试
-                  </button>
-                )}
-              </div>
-              <p className="mt-1 text-xs text-[var(--ui-text-subtle)]">
-                {hasManualKnowledgeSource(draft)
-                  ? "手动来源片段"
-                  : hasKnowledgeSourceData(draft)
-                    ? `${draft.source_date || "已填写"} · ${currentSourceType}`
-                    : "来源可选"}
-                {selectedCard?.usage_count ? ` · 用过 ${selectedCard.usage_count} 次` : ""}
-                {selectedCard?.last_used_at ? ` · 最近使用 ${selectedCard.last_used_at}` : ""}
-              </p>
-            </div>
-            <div className="flex flex-wrap gap-2 max-xl:hidden">
-              {hasSourceReference && (
-                <button
-                  type="button"
-                  onClick={(event) => {
-                    sourceTriggerRef.current = event.currentTarget;
-                    openSource();
-                  }}
-                  disabled={sourceLoading}
-                  className="ui-button-secondary"
-                >
-                  <ExternalLink size={14} /> {sourceActionLabel}
-                </button>
-              )}
-              {selectedId && draft.status === "draft" && (
-                <button type="button" onClick={() => updateStatus("confirmed")} disabled={saving} className="ui-button-primary">
-                  <CheckCircle2 size={14} /> 确认沉淀
-                </button>
-              )}
-              {selectedId && (
-                <>
-                  <button type="button" onClick={() => updateStatus(draft.status === "outdated" ? "confirmed" : "outdated")} disabled={saving} className="ui-button-secondary">
-                    <MoreHorizontal size={14} /> {draft.status === "outdated" ? "恢复" : "过时"}
-                  </button>
-                  <button type="button" onClick={() => deleteCards()} disabled={saving} className="ui-button-danger">
-                    <Trash2 size={14} /> 删除
-                  </button>
-                </>
-              )}
-              {!selectedId && (
-                <button type="button" onClick={saveNewCard} disabled={saving} className="ui-button-primary">
-                  <Plus size={14} /> 创建草稿
-                </button>
-              )}
-            </div>
-          </div>
-
-          {validationEntries.length > 0 && (
-            <div
-              ref={validationSummaryRef}
-              id="knowledge-validation-summary"
-              tabIndex={-1}
-              role="alert"
-              aria-labelledby="knowledge-validation-summary-title"
-              className="ui-alert-bad mb-4 outline-hidden focus-visible:ring-2 focus-visible:ring-[var(--ui-focus)]/50"
-            >
-              <div id="knowledge-validation-summary-title" className="font-semibold">
-                提交前需要处理 {validationEntries.length} 项
-              </div>
-              <ul className="mt-1.5 space-y-1 text-xs">
-                {validationEntries.map(([field, message]) => (
-                  <li key={field}>
-                    <a
-                      href={`#${validationFieldIds[field]}`}
-                      onClick={(event) => {
-                        event.preventDefault();
-                        focusValidationField(field);
-                      }}
-                      className="underline decoration-[var(--ui-danger-border)] underline-offset-2 hover:decoration-current"
-                    >
-                      {validationFieldLabels[field]}：{message}
-                    </a>
-                  </li>
-                ))}
-              </ul>
-            </div>
-          )}
-
-          {recoverableDraft && (
-            <div className="ui-alert-warn mb-4 flex flex-wrap items-center justify-between gap-3" role="status">
-              <span className="min-w-0 flex-1 text-xs leading-5">
-                发现一份较旧的本地草稿（{new Date(recoverableDraft.savedAt).toLocaleString()}）。服务器内容可能已经更新。
-              </span>
-              <span className="flex shrink-0 items-center gap-2">
-                <button type="button" onClick={() => restoreLocalDraft(recoverableDraft)} className="ui-button-primary h-11 min-h-11 px-2.5 text-xs md:h-8 md:min-h-8">
-                  恢复本地草稿
-                </button>
-                <button type="button" onClick={() => discardStoredDraft(recoverableDraft.cardId)} className="ui-button-ghost h-11 min-h-11 px-2.5 text-xs md:h-8 md:min-h-8">
-                  丢弃
-                </button>
-              </span>
-            </div>
-          )}
-
-          <div className="knowledge-editor-fields grid gap-4">
-            <div>
-              <label htmlFor="knowledge-card-title" className="knowledge-field-label mb-1.5 block">知识标题</label>
-              <input
-                id="knowledge-card-title"
-                value={draft.title}
-                onChange={(e) => updateDraft({ title: e.target.value })}
-                placeholder="用一句话回答：这条知识是什么？"
-                aria-required="true"
-                aria-invalid={!!fieldErrors.title}
-                aria-describedby={["knowledge-card-title-help", fieldErrors.title ? validationErrorIds.title : ""].filter(Boolean).join(" ")}
-                className="knowledge-title-field ui-field h-11"
-              />
-              <p id="knowledge-card-title-help" className="mt-1.5 text-[11px] leading-4 text-[var(--ui-text-subtle)]">一句话说清这条知识解决什么问题。</p>
-              {fieldErrors.title && <p id={validationErrorIds.title} className="mt-1.5 text-xs font-medium text-[var(--ui-danger-text)]" role="alert">{fieldErrors.title}</p>}
-            </div>
-            <div>
-              <div id="knowledge-card-content-label" className="knowledge-field-label mb-1.5">可复习正文</div>
-              <div id="knowledge-card-content" className="knowledge-body-editor ui-editor-surface ui-code-editor w-full min-w-0 overflow-hidden" role="group" tabIndex={-1} aria-labelledby="knowledge-card-content-label">
-                <CodeMirror
-                  value={draft.content}
-                  onChange={(value) => updateDraft({ content: value })}
-                  extensions={[markdown(), EditorView.lineWrapping]}
-                  placeholder="先写清可复习的结论，再补充判断依据或方法..."
-                  onCreateEditor={(view) => {
-                    knowledgeEditorRef.current = view;
-                    syncEditorAccessibility();
-                  }}
-                  theme={dark ? "dark" : "light"}
-                  height="220px"
-                  basicSetup={{ lineNumbers: false, foldGutter: false, highlightActiveLine: false }}
-                />
-              </div>
-              <p id="knowledge-card-content-help" className="mt-1.5 text-[11px] leading-4 text-[var(--ui-text-subtle)]">先写可复习的结论，再补充判断依据或方法。</p>
-              {fieldErrors.content && <p id={validationErrorIds.content} className="mt-1.5 text-xs font-medium text-[var(--ui-danger-text)]" role="alert">{fieldErrors.content}</p>}
-            </div>
-
-            <div className="ui-panel-muted rounded-xl p-3">
-              <button
-                type="button"
-                onClick={() => setOrganizeOpen((open) => !open)}
-                aria-expanded={organizeOpen}
-                aria-controls="knowledge-card-organization"
-                className="flex w-full items-center justify-between gap-3 text-left"
-              >
-                  <span className="min-w-0">
-                    <span className="block text-xs font-semibold text-[var(--ui-text)]">整理知识条目</span>
-                    <span className="mt-1 block truncate text-[11px] text-[var(--ui-text-subtle)]">
-                    {organizeSummary}
-                    </span>
-                </span>
-                <ChevronDown size={15} className={`shrink-0 transition-transform ${organizeOpen ? "rotate-180" : ""}`} />
-              </button>
-              {organizeOpen && (
-                <div id="knowledge-card-organization" className="mt-3 grid gap-4 border-t border-[var(--ui-border)] pt-3">
-                  <div className="grid gap-3 2xl:grid-cols-[1fr_auto]">
-                    <Picker
-                      label="类型"
-                      value={draft.card_type}
-                      options={typeOptions}
-                      primaryValues={["fact", "method", "concept", "principle"]}
-                      onChange={(value) => updateDraft({ card_type: value as KnowledgeCardType })}
-                    />
-                    {selectedId ? (
-                      <Picker
-                        label="状态"
-                        value={draft.status}
-                        options={statusOptions}
-                        onChange={(value) => {
-                          // 状态变更统一经过服务端事务；尤其是“已沉淀”，
-                          // 不能在整理区通过普通字段保存绕过来源核验。
-                          void updateStatus(value as KnowledgeCardStatus);
-                        }}
-                      />
-                    ) : (
-                      <div className="min-w-0">
-                        <div className="ui-section-kicker mb-1.5">状态</div>
-                        <div className="ui-status-accent inline-flex min-h-8 items-center rounded-lg px-3 text-xs font-semibold">待确认</div>
-                        <p className="mt-1.5 text-[11px] leading-4 text-[var(--ui-text-subtle)]">新知识条目会先保存为草稿；来源可选，填写后会在确认时核验。</p>
-                      </div>
-                    )}
-                  </div>
-              <div>
-              <div className="mb-1.5 flex items-center justify-between gap-2">
-                <label htmlFor="knowledge-card-tags" className="ui-section-kicker">标签</label>
-                {parsedTags.length > 0 && <span className="text-[11px] text-[var(--ui-text-subtle)]">已添加 {parsedTags.length} 个</span>}
-              </div>
-              <div className="ui-token-input max-h-32 overflow-y-auto pr-1">
-                {parsedTags.map((tag) => (
-                  <button
-                    key={tag}
-                    type="button"
-                    onClick={() => removeTag(tag)}
-                    className="ui-chip border-[var(--ui-selected-border)] bg-[var(--ui-surface-selected)] text-[var(--ui-accent-text)] hover:bg-[var(--ui-surface-hover)]"
-                    title="点击移除标签"
-                    aria-label={`移除标签：${tag}`}
-                  >
-                    #{tag} <X size={12} />
-                  </button>
-                ))}
-                <input
-                  id="knowledge-card-tags"
-                  value={tagInput}
-                  onChange={(e) => setTagInput(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter" || e.key === ",") {
-                      e.preventDefault();
-                      addTag();
-                    }
-                    if (e.key === "Backspace" && !tagInput && parsedTags.length) {
-                      removeTag(parsedTags[parsedTags.length - 1]);
-                    }
-                  }}
-                  onBlur={() => addTag()}
-                  placeholder={parsedTags.length ? "添加标签" : "添加标签"}
-                  className="h-8 min-w-[120px] flex-1 border-0 bg-transparent px-1 text-sm text-[var(--ui-text)] outline-hidden placeholder:text-[var(--ui-text-subtle)]"
-                />
-              </div>
-              {tagSuggestions.length > 0 && (
-                <div className="mt-2 flex flex-wrap items-center gap-1.5">
-                  <span className="text-[11px] text-[var(--ui-text-subtle)]">建议</span>
-                  {tagSuggestions.map(({ tag }) => (
+                  {selectedId && draft.status === "draft" && (
                     <button
-                      key={tag}
                       type="button"
-                      onClick={() => addTag(tag)}
-                      className="ui-chip h-7 px-2 py-0.5 text-[11px]"
+                      className="ui-button-primary"
+                      disabled={saving}
+                      onClick={() => void updateStatus("confirmed")}
                     >
-                      #{tag}
+                      <CheckCircle2 size={15} />
+                      确认沉淀
                     </button>
-                  ))}
-                </div>
-              )}
-                  </div>
-              <div>
-              <div className="mb-1.5 flex items-center justify-between gap-2">
-                <div className="ui-section-kicker">空间（主题或项目）</div>
-                {parsedProjects.length > 0 && <span className="text-[11px] text-[var(--ui-text-subtle)]">已添加 {parsedProjects.length} 个</span>}
-              </div>
-              <div className="ui-token-input items-start pr-1">
-                <div className="flex max-h-24 min-w-0 w-full flex-wrap content-start gap-1.5 overflow-y-auto">
-                  {parsedProjects.map((project) => (
+                  )}
+                  {selectedId && readerTab === "edit" && (
                     <button
-                      key={project}
                       type="button"
-                      onClick={() => removeProject(project)}
-                      className="ui-chip border-[var(--ui-selected-border)] bg-[var(--ui-surface-selected)] text-[var(--ui-accent-text)] hover:bg-[var(--ui-surface-hover)]"
-                      title="点击移除空间"
-                      aria-label={`移除空间：${project}`}
+                      className="ui-button-secondary"
+                      disabled={saving || saveState === "saving" || !dirty}
+                      onClick={() => void retrySaveDraft()}
                     >
-                      <Folder size={12} /> {project} <X size={12} />
+                      <Save size={15} />
+                      {saveState === "error" ? "重试保存" : "保存"}
                     </button>
-                  ))}
-                </div>
-                <SpaceAutocomplete
-                  spaces={projectCounts}
-                  value={projectInput}
-                  onChange={setProjectInput}
-                  onSelect={(name) => addProject(name)}
-                  onEnter={addProject}
-                  onComma={addProject}
-                  onKeyDown={(event) => {
-                    if (event.key === "Backspace" && !projectInput && parsedProjects.length) {
-                      removeProject(parsedProjects[parsedProjects.length - 1]);
-                    }
-                  }}
-                  onBlurCommit={addProject}
-                  placeholder="选择或输入空间"
-                  ariaLabel="知识条目所属空间"
-                  inputClassName="h-8 min-w-[120px] flex-1 border-0 bg-transparent px-1 pr-7 text-sm text-[var(--ui-text)] outline-hidden placeholder:text-[var(--ui-text-subtle)]"
-                  containerClassName="basis-full min-w-0"
-                  showIcon={false}
-                />
-              </div>
-                  </div>
-                  <div>
-                    <div className="ui-section-kicker mb-1.5">关联知识条目</div>
-                    <Command shouldFilter={false} className="relative">
-              <Command.Input
-                value={relatedQuery}
-                onValueChange={setRelatedQuery}
-                placeholder="搜索并添加关联知识条目…"
-                aria-label="关联知识条目"
-                className="ui-field h-10 w-full"
-              />
-              {relatedQuery.trim() && (
-                <Command.List className="ui-floating-surface absolute left-0 right-0 top-full z-30 mt-1 max-h-48 overflow-y-auto rounded-xl p-1">
-                  <Command.Empty className="px-3 py-2 text-sm text-[var(--ui-text-subtle)]">无匹配知识条目</Command.Empty>
-                  {relatedCandidates.map((card) => (
-                    <Command.Item
-                      key={card.id}
-                      value={card.title}
-                      onSelect={() => {
-                        editorGenerationRef.current += 1;
-                        setDraftRelatedIds((ids) => (ids.includes(card.id) ? ids : [...ids, card.id]));
-                        setRelatedQuery("");
-                        setDirty(true);
-                        setSaveState("idle");
-                      }}
-                      className="ui-command-item flex cursor-pointer items-center rounded-lg px-3 py-2 text-sm"
-                    >
-                      <span className="truncate">{card.title}</span>
-                    </Command.Item>
-                  ))}
-                </Command.List>
-              )}
-                    </Command>
-                  </div>
-                </div>
-              )}
-            </div>
-          </div>
-
-          <div className="knowledge-reading-grid mt-5 grid min-w-0 items-stretch gap-4 xl:flex-1">
-            <div className="flex min-w-0 flex-col">
-              <div className="knowledge-field-label mb-2">复习预览</div>
-              <div className="knowledge-preview-panel ui-panel-muted min-h-[280px] flex-1 p-5">
-                {draft.content ? (
-                  <MarkdownContent content={draft.content} onWikiLink={onWikiLink} onRepairContent={(fixedContent) => updateDraft({ content: fixedContent })} />
-                ) : (
-                  <KnowledgeEmptyPreview />
-                )}
-              </div>
-            </div>
-            <div className="flex min-w-0 flex-col">
-              <div className="knowledge-source-heading mb-2 flex items-center justify-between gap-2">
-                <div className="knowledge-field-label flex items-center gap-1.5">
-                  <ShieldCheck size={14} className="text-[var(--ui-quote-text)]" /> 来源（可选）
-                </div>
-                <div className="flex shrink-0 items-center gap-2">
-                  <span className="knowledge-source-state" data-state={sourceState}>
-                    {sourceStateLabel[sourceState]}
-                  </span>
-                  {hasSourceReference && (
+                  )}
+                  {!selectedId && (
                     <button
                       type="button"
-                      onClick={openSource}
-                      ref={sourceTriggerRef}
-                      disabled={sourceLoading}
-                      aria-label={`${sourceActionLabel}：${sourceReferenceLabel}`}
-                      className="ui-button-ghost h-11 min-h-11 gap-1 px-2 text-xs font-semibold text-[var(--ui-quote-text)] disabled:cursor-wait disabled:opacity-60 md:h-9 md:min-h-9 xl:hidden"
+                      className="ui-button-primary"
+                      disabled={saving}
+                      onClick={() => void saveNewCard()}
                     >
-                      <ExternalLink size={12} /> {sourceActionLabel}
+                      <Plus size={15} />
+                      {saving ? "创建中…" : "创建草稿"}
                     </button>
                   )}
                 </div>
-              </div>
-              <div id="knowledge-source-panel" className="knowledge-source-panel ui-editor-surface flex min-h-[280px] flex-1 scroll-mt-4 flex-col overflow-hidden" data-source-state={sourceState} aria-busy={sourceLoading}>
-                <div className="knowledge-source-titlebar ui-soft-divider flex items-center gap-2 border-b px-4 py-3" role="status" aria-live="polite">
-                  <FileText size={13} className="shrink-0 text-[var(--ui-text-subtle)]" />
-                  <div className="min-w-0 flex-1 truncate text-xs font-medium text-[var(--ui-text-muted)]">
-                    {sourceLoading
-                      ? "加载来源..."
-                      : sourceError
-                        ? "来源暂时无法加载"
-                        : sourceArticle?.title
-                          || sourceReview?.title
-                          || (hasManualKnowledgeSource(draft)
-                            ? "手动来源片段"
-                            : draft.source_date ? `${draft.source_date} · ${currentSourceType}` : "暂无来源")}
-                  </div>
-                </div>
-                {sourceError && (
-                  <div className="ui-alert-warn m-3 mb-0 flex items-start justify-between gap-3 text-xs leading-5" role="alert">
-                    <span className="min-w-0">{sourceError}。如果这是一条手动导入且不需要来源，可以清空来源字段后确认。</span>
-                    <span className="flex shrink-0 items-center gap-1">
-                      {sourceConnectionError && (
-                        <button
-                          type="button"
-                          onClick={openConnectionSettings}
-                          className="ui-button-ghost h-11 min-h-11 px-2 text-[11px] md:h-9 md:min-h-9"
-                        >
-                          连接设置
-                        </button>
-                      )}
-                      <button type="button" onClick={retrySourceLoad} disabled={sourceLoading} className="ui-button-ghost h-11 min-h-11 px-2 text-[11px] md:h-9 md:min-h-9">
-                        {sourceLoading ? "重试中..." : "重试加载"}
-                      </button>
-                    </span>
-                  </div>
-                )}
-                {fieldErrors.source && (
-                  <p id={validationErrorIds.source} className="ui-alert-bad m-3 mb-0 text-xs leading-5" role="alert">
-                    {fieldErrors.source}
-                  </p>
-                )}
-                <div className="knowledge-source-excerpt px-4 pt-4">
-                  <label htmlFor="knowledge-source-excerpt" className="knowledge-field-label mb-1.5 block">证据片段（可选）</label>
-                  <p id="knowledge-source-excerpt-help" className="mb-1.5 text-[11px] leading-4 text-[var(--ui-text-subtle)]">有来源时，粘贴能直接支撑正文的连续片段，方便以后复核；手动导入可以留空。</p>
-                  <p className={[
-                    "mb-2 text-[11px] leading-4",
-                    sourceState === "verified" ? "text-[var(--ui-success-text)]" : sourceState === "mismatch" || sourceState === "error" ? "text-[var(--ui-danger-text)]" : "text-[var(--ui-text-subtle)]",
-                  ].join(" ")} role="status" aria-live="polite">
-                    {sourceState === "empty" && "未填写来源；手动导入的知识条目可以直接确认。"}
-                    {sourceState === "manual" && "已填写手动来源片段；不关联记录也可以直接确认。"}
-                    {sourceState === "incomplete" && "关联来源还不完整；请补齐定位和连续片段，或清空关联字段。"}
-                    {sourceState === "locator" && "已记录来源定位；打开原文后再粘贴可匹配的连续片段。"}
-                    {sourceState === "loading" && "正在读取来源，请稍候。"}
-                    {sourceState === "ready" && "原文已读取；还需要一段能直接支撑正文的连续片段。"}
-                    {sourceState === "verified" && "片段已在当前原文中找到，可以进入确认沉淀。"}
-                    {sourceState === "mismatch" && "片段未在当前原文中找到，请从原文重新复制，避免把推断写成证据。"}
-                    {sourceState === "error" && "来源读取失败；可以修复连接后重试，也可以清空来源字段。"}
-                  </p>
-                  <textarea
-                    id="knowledge-source-excerpt"
-                    aria-label="支撑知识条目的来源片段"
-                    aria-invalid={!!fieldErrors.source}
-                    aria-describedby={["knowledge-source-excerpt-help", fieldErrors.source ? validationErrorIds.source : ""].filter(Boolean).join(" ")}
-                    value={draft.source_excerpt}
-                    onChange={(e) => updateDraft({ source_excerpt: e.target.value })}
-                    placeholder="有来源时粘贴连续原文片段"
-                    className="min-h-[120px] w-full resize-none rounded-sm border-0 bg-transparent px-0 py-1 text-xs leading-5 text-[var(--ui-text)] outline-none placeholder:text-[var(--ui-text-subtle)] focus-visible:ring-2 focus-visible:ring-[var(--ui-focus)]/40"
-                  />
-                </div>
-                <div className="grid gap-2 p-3 pt-3">
-                  <label className="ui-section-kicker" htmlFor="knowledge-source-date">来源日期（可选）</label>
-                  <input
-                    id="knowledge-source-date"
-                    type="date"
-                    value={draft.source_date}
-                    onChange={(e) => updateDraft({ source_date: e.target.value })}
-                    aria-invalid={!!fieldErrors.source}
-                    aria-describedby={["knowledge-source-date-help", fieldErrors.source ? validationErrorIds.source : ""].filter(Boolean).join(" ")}
-                    className="ui-field h-11 min-h-11 text-xs"
-                  />
-                  <p id="knowledge-source-date-help" className="text-[11px] leading-4 text-[var(--ui-text-subtle)]">有来源时可填写原文日期，格式为 YYYY-MM-DD。</p>
-                  <label className="ui-section-kicker" htmlFor="knowledge-source-id">关联来源 ID（只读）</label>
-                  <p id="knowledge-source-id-help" className="text-[11px] leading-4 text-[var(--ui-text-subtle)]">有可读取来源时自动带入；手动来源片段可以留空。</p>
-                  <input
-                    id="knowledge-source-id"
-                    value={draft.source_article_id || draft.source_review_id}
-                    readOnly
-                    placeholder="没有关联记录（可选）"
-                    aria-describedby="knowledge-source-id-help"
-                    className="ui-field h-11 min-h-11 text-xs text-[var(--ui-text-muted)]"
-                  />
-                </div>
-              </div>
-            </div>
-          </div>
-
-          <div className="knowledge-review-stack">
-            {selectedCard && (
-              <ReviewItemsPanel
-                cardId={selectedCard.id}
-                cardStatus={draft.status}
-                contentVersion={selectedCard.content_version}
-              />
+              </footer>
             )}
-
-          {selectedCard && (relatedChips.length > 0 || reviewHistory.length > 1) && (
-            <div className="mt-4 grid gap-3">
-              {relatedChips.length > 0 && (
-                <div className="flex flex-wrap items-center gap-1.5">
-                  <span className="ui-section-kicker">关联</span>
-                  {relatedChips.map((chip) => (
-                    <span
-                      key={chip.id}
-                      className="ui-status-accent inline-flex max-w-[220px] items-center gap-1 rounded-md px-2 py-0.5 text-[11px] font-medium"
-                    >
-                      <button type="button" onClick={() => openCard(chip)} className="truncate transition-colors hover:underline">
-                        {chip.title}
-                      </button>
-                      {draftRelatedIds.includes(chip.id) ? (
-                        <button
-                          type="button"
-                          onClick={() => {
-                            editorGenerationRef.current += 1;
-                            setDraftRelatedIds((ids) => ids.filter((id) => id !== chip.id));
-                            setDirty(true);
-                            setSaveState("idle");
-                          }}
-                          className="text-[var(--ui-accent-text)] opacity-50 transition-opacity hover:opacity-100"
-                          title="移除关联"
-                          aria-label={`移除关联：${chip.title}`}
-                        >
-                          <X size={11} />
-                        </button>
-                      ) : (
-                        <span
-                          className="shrink-0 text-[var(--ui-accent-text)] opacity-60"
-                          title="这是来自另一个知识条目的关联，请打开对方条目后移除"
-                          aria-label="来自另一个知识条目的关联"
-                        >
-                          ↔
-                        </span>
-                      )}
-                    </span>
-                  ))}
-                </div>
-              )}
-              {reviewHistory.length > 1 && (
-                <div>
-                  <div className="mb-1 flex items-center justify-between">
-                    <span className="ui-section-kicker">复习间隔趋势</span>
-                    <span className="text-[11px] text-[var(--ui-text-subtle)]">最近 {reviewHistory[reviewHistory.length - 1].interval_days.toFixed(0)} 天</span>
-                  </div>
-                  <IntervalChart history={reviewHistory} />
-                </div>
-              )}
-            </div>
-          )}
-
-          {duplicateHint && (
-            <div className="mt-3 ui-alert-warn" role="status" aria-live="polite">
-              {duplicateHint}
-            </div>
-          )}
-            {notice && validationEntries.length === 0 && (
-              <div
-                className={["mt-3", noticeTone === "good" ? "ui-alert-good" : noticeTone === "bad" ? "ui-alert-bad" : "ui-alert-warn"].join(" ")}
-                role={noticeTone === "bad" ? "alert" : "status"}
-                aria-live="polite"
-              >
-                {notice}
-              </div>
-            )}
-          </div>
-
-          <div className="ui-mobile-editor-actions relative z-20 mt-5 flex flex-wrap gap-2 rounded-xl border p-2 xl:hidden">
-            <div className="flex min-h-8 w-full items-center justify-between gap-2 px-1 text-[11px]" role="status" aria-live="polite">
-              <span className={saveState === "error" ? "font-semibold text-[var(--ui-danger-text)]" : dirty ? "text-[var(--ui-warning-text)]" : "text-[var(--ui-text-subtle)]"}>
-                {mobileSaveLabel}
-              </span>
-              <div className="flex items-center gap-1.5">
-                {hasSourceReference && (
-                  <button type="button" onClick={scrollToSource} className="ui-button-ghost h-11 min-h-11 px-2 text-[11px] md:h-9 md:min-h-9">
-                    跳到来源
-                  </button>
-                )}
-                {selectedId && (dirty || saveState === "error") && (
-                  <button type="button" onClick={() => void retrySaveDraft()} disabled={saving} className="ui-button-secondary h-11 min-h-11 px-2 text-[11px] md:h-9 md:min-h-9">
-                    {saveState === "error" ? "重试保存" : "立即保存"}
-                  </button>
-                )}
-              </div>
-            </div>
-            {!selectedId ? (
-              <button type="button" onClick={saveNewCard} disabled={saving} className="ui-button-primary min-h-11 flex-1 px-3">
-                <Plus size={14} /> 创建草稿
-              </button>
-            ) : (
-              <>
-                {draft.status === "draft" && (
-                  <button type="button" onClick={() => updateStatus("confirmed")} disabled={saving} className="ui-button-primary min-h-11 flex-1 px-3">
-                    <CheckCircle2 size={14} /> 确认沉淀
-                  </button>
-                )}
-                <button type="button" onClick={() => void deleteCards()} disabled={saving} className="ui-button-danger min-h-11 px-3">
-                  <Trash2 size={14} /> 删除
-                </button>
-              </>
-            )}
-          </div>
-        </section>
-      </div>
+          </section>
+        }
+      />
       {sourceDetailOpen && sourceArticle && (
         <ArticleDetail
           article={sourceArticle}
@@ -3621,12 +3787,13 @@ export default function KnowledgePage({
         spaces={projectCounts}
         onImported={handleImported}
         onOpenSettings={() => {
-          if (typeof window !== "undefined") writeSessionStorage("daily-summary-settings-tab", "ai");
+          if (typeof window !== "undefined")
+            writeSessionStorage("daily-summary-settings-tab", "ai");
           onNavigate("settings");
         }}
       />
       {dialog}
-    </motion.div>
+    </div>
   );
 }
 
@@ -3701,35 +3868,6 @@ function SpaceOverview({
       </div>
     </section>
   );
-}
-
-function KnowledgeListSkeleton() {
-  return (
-    <div className="space-y-2 p-2" aria-label="正在加载知识条目" role="status">
-      {["w-4/5", "w-3/5", "w-11/12", "w-2/3"].map((width, index) => (
-        <div key={index} className="ui-panel-muted rounded-lg p-2.5">
-          <div className="flex items-center gap-2">
-            <div className="ui-skeleton h-4 w-4 rounded" />
-            <div className={`ui-skeleton h-3 ${width}`} />
-          </div>
-          <div className="ui-skeleton mt-2 h-2.5 w-2/5" />
-        </div>
-      ))}
-    </div>
-  );
-}
-
-function TriStateCheckbox({
-  indeterminate = false,
-  ...props
-}: InputHTMLAttributes<HTMLInputElement> & { indeterminate?: boolean }) {
-  const ref = useRef<HTMLInputElement>(null);
-
-  useEffect(() => {
-    if (ref.current) ref.current.indeterminate = indeterminate;
-  }, [indeterminate]);
-
-  return <input ref={ref} type="checkbox" {...props} />;
 }
 
 function FilterButton({ active, onClick, children }: { active: boolean; onClick: () => void; children: React.ReactNode }) {
@@ -3840,22 +3978,6 @@ function TagFilterPicker({
           <ChevronDown size={13} className={showAll ? "rotate-180" : ""} />
         </button>
       )}
-    </div>
-  );
-}
-
-function KnowledgeEmptyPreview() {
-  return (
-    <div className="grid gap-3 text-xs leading-5 text-[var(--ui-text-muted)]">
-      <p className="flex items-start gap-2">
-        <FileText size={14} className="mt-0.5 shrink-0 text-[var(--ui-accent-text)]" />
-        <span>用一两段写清楚可复习的结论，避免只写“以后注意”。</span>
-      </p>
-      <ul className="list-disc space-y-1 pl-5">
-        <li><span className="font-semibold text-[var(--ui-text)]">事实</span>：记录可由来源片段支撑的内容。</li>
-        <li><span className="font-semibold text-[var(--ui-text)]">方法</span>：沉淀步骤、判断顺序或排查清单。</li>
-        <li><span className="font-semibold text-[var(--ui-text)]">原则</span>：从多次记录中确认的稳定做法。</li>
-      </ul>
     </div>
   );
 }

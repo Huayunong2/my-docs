@@ -1,3 +1,4 @@
+import { paginateLegacyReviews } from "./reviewCompatibility";
 // API layer — 桌面端和浏览器统一走服务器 HTTP，同源部署默认使用 /api。
 import { normalizeTags, parseTags } from "./tags";
 import { isLocalHttpLocation, isLoopbackHostname, isLoopbackHttpUrl, LOCAL_AI_ACCESS_QUERY_PARAM, LOCAL_AI_TEST_TOKEN, LOCAL_AI_TOKEN_SESSION_KEY } from "./localAiAccess";
@@ -1065,7 +1066,12 @@ export function queryReviews(filters: {
   return httpRequest<ReviewListPage>(`/reviews/query${query ? `?${query}` : ""}`, options).then((result) => ({
     ...result,
     reviews: result.reviews.map(mapReview),
-  }));
+  })).catch(async (error: unknown) => {
+    // Preserve auth and network errors; only adapt a missing endpoint.
+    if (!(error instanceof ApiError) || error.status !== 404) throw error;
+    const legacy = await httpRequest<Review[]>("/reviews", options);
+    return paginateLegacyReviews(legacy.map(mapReview), filters);
+  });
 }
 
 export function getReview(id: string) {

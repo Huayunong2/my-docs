@@ -1,0 +1,323 @@
+/* Feedback is short and state-driven: no perpetual decoration or layout animation. */
+:root {
+  --ix-ease: cubic-bezier(0.2, 0.7, 0.2, 1);
+}
+:where(.app-shell, .wb-modal, .ui-modal-surface)
+  :is(
+    .ui-button-primary,
+    .ui-button-secondary,
+    .ui-button-ghost,
+    .ui-button-success,
+    .ui-button-danger,
+    .ui-icon-button,
+    .shell-icon
+  ) {
+  transition:
+    background-color 140ms,
+    border-color 140ms,
+    box-shadow 140ms,
+    color 140ms,
+    scale 100ms var(--ix-ease);
+}
+:where(.app-shell, .wb-modal, .ui-modal-surface) :is(.ui-field, .ui-textarea) {
+  transition:
+    border-color 160ms,
+    box-shadow 160ms;
+}
+:where(.app-shell, .wb-modal, .ui-modal-surface)
+  :is(.ui-field, .ui-textarea):focus-visible {
+  border-color: var(--ui-selected-border);
+  box-shadow: 0 0 0 3px var(--ui-surface-selected);
+  outline: none;
+}
+:where(.app-shell, .wb-modal, .ui-modal-surface)
+  :is(
+    .ui-button-primary,
+    .ui-button-secondary,
+    .ui-button-ghost,
+    .ui-button-success,
+    .ui-button-danger,
+    .ui-icon-button,
+    .shell-icon
+  ):active:not(:disabled) {
+  scale: 0.975;
+}
+:where(.kl-card, .history-card, .ft-search-result, .rp-period) {
+  transition:
+    border-color 160ms,
+    background-color 160ms,
+    box-shadow 160ms;
+}
+:where(.app-shell) [role="tab"] {
+  transition:
+    color 140ms,
+    background-color 140ms,
+    border-color 140ms;
+}
+:where(.app-shell, .wb-modal) input[type="checkbox"] {
+  transition: scale 120ms;
+}
+:where(.app-shell, .wb-modal) input[type="checkbox"]:active {
+  scale: 0.9;
+}
+.ix-back-top {
+  position: fixed;
+  z-index: 35;
+  bottom: 25px;
+  right: 26px;
+  display: grid;
+  place-items: center;
+  width: 42px;
+  height: 42px;
+  border: 1px solid var(--ui-border);
+  border-radius: 12px;
+  background: var(--ui-surface-raised);
+  color: var(--ui-text-muted);
+  box-shadow: 0 3px 16px rgb(0 0 0 / 0.09);
+  cursor: pointer;
+  animation: ix-enter 140ms var(--ix-ease);
+}
+.ix-back-top:hover {
+  color: var(--ui-accent-text);
+  border-color: var(--ui-selected-border);
+}
+.ix-back-top:focus-visible {
+  outline: 2px solid var(--ui-focus);
+  outline-offset: 3px;
+}
+.ix-shortcut-dialog {
+  position: fixed;
+  left: 50%;
+  top: 50%;
+  translate: -50% -50%;
+  width: min(470px, calc(100vw - 32px));
+  max-height: calc(100dvh - 32px);
+  overflow-y: auto;
+  z-index: 81;
+  border: 1px solid var(--ui-border);
+  border-radius: 16px;
+  padding: 23px;
+  box-shadow: var(--ui-shadow-panel);
+  background: var(--ui-surface-raised);
+  color: var(--ui-text);
+  outline: none;
+  animation: ix-enter 150ms var(--ix-ease);
+}
+.ix-shortcut-dialog > header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 15px;
+}
+.ix-shortcut-dialog h2 {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 19px;
+  font-weight: 600;
+}
+.ix-shortcut-dialog > p {
+  color: var(--ui-text-subtle);
+  font-size: 12px;
+  line-height: 1.7;
+  margin-top: 8px;
+}
+.ix-shortcut-dialog dl {
+  margin-top: 18px;
+}
+.ix-shortcut-dialog dl > div {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 12px 1px;
+  border-bottom: 1px solid var(--ui-border);
+  font-size: 12px;
+}
+.ix-shortcut-dialog kbd {
+  color: var(--ui-text-muted);
+  font: 11px var(--font-sans);
+  white-space: nowrap;
+  padding: 4px 6px;
+  border: 1px solid var(--ui-border);
+  border-radius: 4px;
+  background: var(--ui-surface-subtle);
+}
+.ix-shortcut-dialog footer {
+  font-size: 11px;
+  line-height: 1.8;
+  color: var(--ui-text-subtle);
+  padding-top: 16px;
+}
+.ix-loading-indicator {
+  height: 2px;
+  margin-bottom: 20px;
+  overflow: hidden;
+  border-radius: 2px;
+  background: var(--ui-surface-selected);
+}
+.ix-loading-indicator::before {
+  content: "";
+  display: block;
+  width: 30%;
+  height: 100%;
+  background: var(--ui-accent-solid);
+  animation: ix-loading 1s ease-in-out infinite alternate;
+}
+@keyframes ix-enter {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+@keyframes ix-pop {
+  from {
+    opacity: 0;
+    scale: 0.98;
+  }
+  to {
+    opacity: 1;
+    scale: 1;
+  }
+}
+@keyframes ix-loading {
+  from {
+    translate: -10% 0;
+  }
+  to {
+    translate: 240% 0;
+  }
+}
+@media (hover: hover) and (pointer: fine) {
+  :where(.app-shell)
+    :is(.ui-button-primary, .ui-button-success):hover:not(:disabled) {
+    box-shadow: 0 3px 10px
+      color-mix(in srgb, var(--ui-accent-solid) 16%, transparent);
+  }
+  :where(.app-shell) :is(.kl-card, .history-card, .ft-search-result):hover {
+    border-color: var(--ui-border-strong);
+    box-shadow: 0 3px 13px rgb(0 0 0 / 0.04);
+  }
+  .shell-mobile-link:active {
+    scale: 0.96;
+  }
+}
+@media (prefers-reduced-motion: no-preference) {
+  .ui-floating-surface[data-state="open"] {
+    animation: ix-pop 130ms var(--ix-ease);
+  }
+  .app-shell details[open] > :not(summary) {
+    animation: ix-enter 150ms ease-out;
+  }
+}
+@media (max-width: 767px) {
+  .ix-back-top {
+    bottom: calc(var(--ui-mobile-nav-total-height, 68px) + 16px);
+    right: 18px;
+    width: 44px;
+    height: 44px;
+  }
+  .ix-shortcut-dialog {
+    padding: 20px;
+  }
+  .ix-shortcut-dialog dl > div {
+    gap: 8px;
+    font-size: 11px;
+  }
+  .ix-shortcut-dialog kbd {
+    font-size: 10px;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .app-shell *,
+  .ui-modal-surface *,
+  .wb-modal *,
+  .ui-floating-surface,
+  .ix-back-top,
+  .ix-shortcut-dialog {
+    animation: none !important;
+    transition-duration: 0s !important;
+    scroll-behavior: auto !important;
+  }
+  .app-shell button:active {
+    scale: 1 !important;
+  }
+  .ix-loading-indicator::before {
+    animation: none;
+    width: 100%;
+    opacity: 0.5;
+  }
+}
+.ft-stats .ft-month-nav .ft-month-select {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-width: 126px;
+  min-height: 38px;
+  padding: 0 10px;
+  font-size: 13px;
+  font-weight: 550;
+  white-space: nowrap;
+  border-radius: 7px;
+}
+.ft-stats .ft-month-nav .ft-month-select:hover,
+.ft-month-select[data-state="open"] {
+  background: var(--ui-surface-hover);
+}
+.ix-month-picker {
+  width: 256px;
+  padding: 12px;
+}
+.ix-month-picker > header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 10px;
+}
+.ix-month-picker strong {
+  font-size: 13px;
+  font-weight: 600;
+}
+.ix-month-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 5px;
+}
+.ix-month-grid button {
+  min-height: 40px;
+  padding: 8px;
+  font-size: 12px;
+  border-radius: 7px;
+  border: 1px solid transparent;
+  color: var(--ui-text-muted);
+}
+.ix-month-grid button:hover {
+  background: var(--ui-surface-hover);
+}
+.ix-month-grid button[aria-pressed="true"] {
+  color: var(--ui-accent-text);
+  background: var(--ui-surface-selected);
+  border-color: var(--ui-selected-border);
+  font-weight: 600;
+}
+.ix-month-picker button:focus-visible {
+  outline: 2px solid var(--ui-focus);
+  outline-offset: 1px;
+}
+.ix-route-error {
+  margin: 5vh auto;
+  max-width: 620px;
+}
+@media (max-width: 767px) {
+  .ix-month-grid button {
+    min-height: 44px;
+  }
+  .ft-stats .ft-month-nav .ft-month-select {
+    min-width: 116px;
+    gap: 5px;
+    padding: 0 6px;
+  }
+}

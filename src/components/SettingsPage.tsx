@@ -1,16 +1,38 @@
-import { useCallback, useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
-import { motion } from "framer-motion";
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type KeyboardEvent,
+  type ReactNode,
+} from "react";
 import { useBlocker } from "@tanstack/react-router";
-import { Bot, DatabaseBackup, Monitor, Moon, Palette, Plug, Settings, SlidersHorizontal, Sun } from "lucide-react";
+import {
+  Bot,
+  DatabaseBackup,
+  Palette,
+  Plug,
+  Settings,
+  SlidersHorizontal,
+  Search,
+  X,
+  ShieldCheck,
+} from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import AIPanel from "./settings/AIPanel";
 import ConnectionPanel from "./settings/ConnectionPanel";
 import DataSafetyPanel from "./settings/DataSafetyPanel";
 import ReviewSettingsPanel from "./settings/ReviewSettingsPanel";
 import { useConfirmDialog } from "./ui/Feedback";
-import PageHeader from "./ui/PageHeader";
-import { readLocalStorage, readSessionStorage, removeSessionStorage, writeLocalStorage } from "../lib/storage";
-import { themeModeLabels, themeModes, type ThemeMode } from "../lib/theme";
+import WorkspaceHeader from "./workspace/WorkspaceHeader";
+import AppearancePanel from "./settings/AppearancePanel";
+import {
+  readLocalStorage,
+  readSessionStorage,
+  removeSessionStorage,
+  writeLocalStorage,
+} from "../lib/storage";
+import { type ThemeMode } from "../lib/theme";
 
 type Tab = "connect" | "review" | "ai" | "data" | "appearance";
 
@@ -48,24 +70,21 @@ interface SettingsPageProps {
   onConnectionSaved?: (message?: string) => void;
 }
 
-const THEMES = [
-  { id: "", name: "靛蓝", color: "#6366f1" },
-  { id: "violet", name: "紫罗兰", color: "#8b5cf6" },
-  { id: "blue", name: "晴蓝", color: "#3b82f6" },
-  { id: "emerald", name: "翡翠绿", color: "#10b981" },
-  { id: "rose", name: "玫瑰红", color: "#f43f5e" },
-  { id: "cyan", name: "青色", color: "#06b6d4" },
-];
-
-const themeIcons: Record<ThemeMode, LucideIcon> = {
-  system: Monitor,
-  light: Sun,
-  dark: Moon,
-};
-
-export default function SettingsPage({ accentTheme, onChangeAccentTheme, themeMode, onChangeThemeMode, onConnectionSaved }: SettingsPageProps) {
+export default function SettingsPage({
+  accentTheme,
+  onChangeAccentTheme,
+  themeMode,
+  onChangeThemeMode,
+  onConnectionSaved,
+}: SettingsPageProps) {
+  const [search, setSearch] = useState("");
+  const [verticalNav, setVerticalNav] = useState(
+    () => window.matchMedia("(min-width: 1024px)").matches,
+  );
   const [tab, setTab] = useState<Tab>(() => initialSettingsTab());
-  const [mountedTabs, setMountedTabs] = useState<Set<Tab>>(() => new Set([tab]));
+  const [mountedTabs, setMountedTabs] = useState<Set<Tab>>(
+    () => new Set([tab]),
+  );
   const [dirtyTabs, setDirtyTabs] = useState<Set<Tab>>(new Set());
   const contentRef = useRef<HTMLDivElement>(null);
   const { confirm, dialog } = useConfirmDialog();
@@ -81,8 +100,60 @@ export default function SettingsPage({ accentTheme, onChangeAccentTheme, themeMo
       return next;
     });
   }, []);
-  const labels: Record<Tab, string> = { connect: "连接服务", review: "复习计划", ai: "AI 配置", data: "备份与迁移", appearance: "外观" };
-  const tabIcons: Record<Tab, LucideIcon> = { connect: Plug, review: SlidersHorizontal, ai: Bot, data: DatabaseBackup, appearance: Palette };
+  const labels: Record<Tab, string> = {
+    connect: "连接服务",
+    review: "复习计划",
+    ai: "AI 配置",
+    data: "备份与迁移",
+    appearance: "外观",
+  };
+  const tabIcons: Record<Tab, LucideIcon> = {
+    connect: Plug,
+    review: SlidersHorizontal,
+    ai: Bot,
+    data: DatabaseBackup,
+    appearance: Palette,
+  };
+  const descriptions: Record<Tab, string> = {
+    connect: "管理服务地址与访问令牌，测试成功后再保存连接。",
+    review: "设置每天的复习节奏，不改变已经记录的复习历史。",
+    ai: "连接你的模型服务，按需要为不同任务配置模型。",
+    data: "创建保护点、恢复数据或迁移内容，危险操作仍需确认。",
+    appearance: "调整明暗模式与强调色，让阅读和操作更舒适。",
+  };
+  const keywords: Record<Tab, string> = {
+    connect: "服务器 地址 令牌 token 网络 诊断",
+    review: "FSRS 新题 队列 每天 上限 记忆",
+    ai: "模型 API Key 路由 提示词",
+    data: "导入 导出 恢复 备份 迁移 数据库",
+    appearance: "主题 颜色 深色 浅色 系统",
+  };
+  const matchedTabs = settingsTabs.filter((id) =>
+    `${labels[id]} ${descriptions[id]} ${keywords[id]}`
+      .toLocaleLowerCase()
+      .includes(search.trim().toLocaleLowerCase()),
+  );
+  useEffect(() => {
+    const media = window.matchMedia("(min-width: 1024px)");
+    const update = () => setVerticalNav(media.matches);
+    media.addEventListener("change", update);
+    return () => media.removeEventListener("change", update);
+  }, []);
+  useEffect(() => {
+    if (verticalNav) return;
+    const frame = requestAnimationFrame(() => {
+      const selected = document.getElementById(`settings-tab-${tab}`);
+      const container = selected?.parentElement;
+      if (!selected || !container) return;
+      const item = selected.getBoundingClientRect(),
+        box = container.getBoundingClientRect();
+      if (item.right > box.right)
+        container.scrollLeft += item.right - box.right + 8;
+      if (item.left < box.left)
+        container.scrollLeft -= box.left - item.left + 8;
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [tab, verticalNav]);
   const switchTab = (next: Tab) => {
     if (next === tab) return;
     setTab(next);
@@ -93,7 +164,11 @@ export default function SettingsPage({ accentTheme, onChangeAccentTheme, themeMo
     if (typeof window !== "undefined") {
       const url = new URL(window.location.href);
       url.searchParams.set("tab", next);
-      window.history.replaceState({}, "", `${url.pathname}${url.search}${url.hash}`);
+      window.history.replaceState(
+        window.history.state,
+        "",
+        `${url.pathname}${url.search}${url.hash}`,
+      );
       writeLocalStorage(settingsTabStorageKey, next);
     }
     requestAnimationFrame(() => {
@@ -101,11 +176,16 @@ export default function SettingsPage({ accentTheme, onChangeAccentTheme, themeMo
       document.getElementById(`settings-tab-${next}`)?.focus();
     });
   };
-  const handleTabKeyDown = (event: KeyboardEvent<HTMLButtonElement>, current: Tab) => {
+  const handleTabKeyDown = (
+    event: KeyboardEvent<HTMLButtonElement>,
+    current: Tab,
+  ) => {
     const index = settingsTabs.indexOf(current);
     let nextIndex = index;
-    if (event.key === "ArrowRight") nextIndex = (index + 1) % settingsTabs.length;
-    if (event.key === "ArrowLeft") nextIndex = (index - 1 + settingsTabs.length) % settingsTabs.length;
+    if (event.key === "ArrowRight" || event.key === "ArrowDown")
+      nextIndex = (index + 1) % settingsTabs.length;
+    if (event.key === "ArrowLeft" || event.key === "ArrowUp")
+      nextIndex = (index - 1 + settingsTabs.length) % settingsTabs.length;
     if (event.key === "Home") nextIndex = 0;
     if (event.key === "End") nextIndex = settingsTabs.length - 1;
     if (nextIndex === index) return;
@@ -120,7 +200,9 @@ export default function SettingsPage({ accentTheme, onChangeAccentTheme, themeMo
       const next = requested && tabAliases[requested];
       if (!next || next === tab) return;
       setTab(next);
-      setMountedTabs((current) => current.has(next) ? current : new Set(current).add(next));
+      setMountedTabs((current) =>
+        current.has(next) ? current : new Set(current).add(next),
+      );
       requestAnimationFrame(() => {
         if (contentRef.current) contentRef.current.scrollTop = 0;
         document.getElementById("settings-tab-" + next)?.focus();
@@ -134,7 +216,8 @@ export default function SettingsPage({ accentTheme, onChangeAccentTheme, themeMo
     if (!dirtyTabs.size) return false;
     const shouldLeave = await confirm({
       title: "放弃未保存的设置？",
-      message: "离开设置页会丢弃当前尚未保存的连接、复习计划或 AI 配置修改，也会关闭待确认的导入预览。已经保存的内容不会受影响。",
+      message:
+        "离开设置页会丢弃当前尚未保存的连接、复习计划或 AI 配置修改，也会关闭待确认的导入预览。已经保存的内容不会受影响。",
       confirmText: "放弃并离开",
       danger: true,
     });
@@ -154,102 +237,158 @@ export default function SettingsPage({ accentTheme, onChangeAccentTheme, themeMo
       aria-labelledby={`settings-tab-${id}`}
       tabIndex={-1}
       hidden={tab !== id}
-      className="min-h-0 outline-hidden"
+      className="st-tab-panel min-h-0 outline-hidden"
     >
       {mountedTabs.has(id) ? children : null}
     </div>
   );
 
   return (
-    <motion.div
-      initial={{ opacity: 0, y: 10 }}
-      animate={{ opacity: 1, y: 0 }}
-      className="page-surface page-surface-settings settings-page flex h-full min-h-0 flex-col overflow-hidden"
-    >
-      <div className="settings-header ui-soft-divider shrink-0 border-b px-3 pb-3 pt-4 sm:px-4 md:px-8 md:pb-5 md:pt-6">
-        <div className="settings-header-inner">
-          <PageHeader icon={Settings} title="设置" description="连接、复习、AI、备份与迁移、外观" className="mb-4" />
-          <div className="settings-tabs ui-segment flex w-full min-w-0 gap-1 overflow-x-auto p-0.5 sm:w-fit sm:overflow-visible" role="tablist" aria-orientation="horizontal" aria-label="设置分类">
+    <div className="wb-page st-page">
+      <WorkspaceHeader
+        icon={Settings}
+        title="设置"
+        actions={
+          <span className="st-save-summary" role="status">
+            {dirtyTabs.size
+              ? `${dirtyTabs.size} 个分类有未保存更改`
+              : ""}
+          </span>
+        }
+      />
+      <div className="st-layout">
+        <aside className="st-navigation" aria-label="设置导航">
+          <label className="wb-search st-search">
+            <Search size={15} />
+            <input
+              type="search"
+              value={search}
+              onChange={(event) => setSearch(event.target.value)}
+              placeholder="查找设置…"
+              aria-label="查找设置"
+            />
+            {search && (
+              <button
+                type="button"
+                className="wb-icon-button"
+                aria-label="清除设置搜索"
+                onClick={() => setSearch("")}
+              >
+                <X size={14} />
+              </button>
+            )}
+          </label>
+          {search.trim() ? (
+            <div className="st-search-results" aria-label="设置搜索结果">
+              <p className="wb-eyebrow">{matchedTabs.length} 个相关分类</p>
+              {matchedTabs.map((id) => {
+                const Icon = tabIcons[id];
+                return (
+                  <button
+                    type="button"
+                    key={id}
+                    onClick={() => {
+                      setSearch("");
+                      switchTab(id);
+                    }}
+                  >
+                    <Icon size={17} />
+                    <span>
+                      {labels[id]}
+                      <small>{descriptions[id]}</small>
+                    </span>
+                  </button>
+                );
+              })}
+              {!matchedTabs.length && (
+                <p className="wb-muted">
+                  没有匹配的设置。试试“模型”“备份”或“主题”。
+                </p>
+              )}
+            </div>
+          ) : null}
+          <div
+            className="st-nav-tabs"
+            role="tablist"
+            aria-orientation={verticalNav ? "vertical" : "horizontal"}
+            aria-label="设置分类"
+          >
             {settingsTabs.map((id) => {
               const Icon = tabIcons[id];
               return (
                 <button
                   key={id}
-                  id={`settings-tab-${id}`}
                   type="button"
+                  id={`settings-tab-${id}`}
                   role="tab"
                   aria-selected={tab === id}
-                  aria-label={labels[id] + (dirtyTabs.has(id) ? "（有未保存更改）" : "")}
+                  aria-label={
+                    labels[id] + (dirtyTabs.has(id) ? "（有未保存更改）" : "")
+                  }
                   aria-controls={`settings-panel-${id}`}
                   tabIndex={tab === id ? 0 : -1}
                   onClick={() => switchTab(id)}
                   onKeyDown={(event) => handleTabKeyDown(event, id)}
-                  className={[
-                    "ui-segment-item h-11 min-w-max w-auto shrink-0 whitespace-nowrap px-3 sm:h-10 sm:min-w-[88px]",
-                    tab === id ? "ui-segment-item-active" : "",
-                  ].join(" ")}
                 >
-                    <Icon size={15} aria-hidden="true" />
-                    {labels[id]}
-                    {dirtyTabs.has(id) && <span className="h-1.5 w-1.5 rounded-full bg-[var(--ui-warning-text)]" aria-hidden="true" />}
-                  </button>
+                  <Icon size={17} />
+                  <span>{labels[id]}</span>
+                  {dirtyTabs.has(id) && <i aria-hidden="true" />}
+                </button>
               );
             })}
           </div>
-        </div>
-      </div>
-      <div ref={contentRef} className="settings-content min-h-0 flex-1 overflow-y-auto px-3 py-4 sm:px-4 md:px-8 md:py-6">
-        <div className="settings-content-inner">
-          {panel("connect", <ConnectionPanel onConnectionSaved={onConnectionSaved} onDirtyChange={(dirty) => markDirty("connect", dirty)} />)}
-          {panel("review", <ReviewSettingsPanel onDirtyChange={(dirty) => markDirty("review", dirty)} />)}
-          {panel("ai", <AIPanel onDirtyChange={(dirty) => markDirty("ai", dirty)} />)}
-          {panel("data", <DataSafetyPanel onDirtyChange={(dirty) => markDirty("data", dirty)} />)}
-          {panel("appearance", (
-            <div className="settings-appearance-grid grid w-full gap-4">
-            <div className="ui-panel p-5">
-              <h3 className="text-sm font-semibold text-[var(--ui-text)]">显示模式</h3>
-              <p className="mt-1 text-xs leading-5 text-[var(--ui-text-subtle)]">选择跟随系统、浅色或深色，偏好会保存在当前设备。</p>
-              <div className="mt-4 grid grid-cols-3 gap-2" role="group" aria-label="显示模式">
-                {themeModes.map((id) => {
-                  const Icon = themeIcons[id];
-                  return (
-                    <button
-                      key={id}
-                      type="button"
-                      onClick={() => onChangeThemeMode(id)}
-                      aria-pressed={themeMode === id}
-                      className={`flex min-h-11 items-center justify-center gap-1.5 rounded-xl px-2 text-xs font-semibold transition-colors ${themeMode === id ? "ui-status-accent shadow-xs" : "ui-theme-choice"}`}
-                    >
-                      <Icon size={15} /> {themeModeLabels[id]}
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
-
-            <div className="ui-panel p-5">
-              <h3 className="text-sm font-semibold text-[var(--ui-text)]">主题色</h3>
-              <p className="mt-1 text-xs leading-5 text-[var(--ui-text-subtle)]">选择应用的强调色，即时生效并自动保存</p>
-              <div className="mt-4 flex flex-wrap gap-3">
-                {THEMES.map((t) => (
-                  <button
-                    key={t.id || "default"}
-                    type="button"
-                    onClick={() => onChangeAccentTheme(t.id)}
-                    aria-pressed={accentTheme === t.id}
-                    className={`ui-theme-choice flex items-center gap-2 rounded-xl px-3 py-2 transition-all ${accentTheme === t.id ? "ui-theme-choice-active" : ""}`}
-                  >
-                    <span className="h-5 w-5 rounded-full" style={{ backgroundColor: t.color }} />
-                    <span className="text-sm font-medium text-[var(--ui-text)]">{t.name}</span>
-                  </button>
-                ))}
-              </div>
-            </div>
-            </div>
-          ))}
-        </div>
+          <div className="st-nav-foot">
+            <ShieldCheck size={17} />
+            <p>
+              数据保存在你的服务端。
+              <br />
+              连接与外观偏好保存在本机。
+            </p>
+          </div>
+        </aside>
+        <section className="st-main">
+          <header className="st-category-heading">
+            <span className="wb-eyebrow">偏好与配置</span>
+            <h2>{labels[tab]}</h2>
+            <p>{descriptions[tab]}</p>
+          </header>
+          <div ref={contentRef} className="st-content">
+            {panel(
+              "connect",
+              <ConnectionPanel
+                onConnectionSaved={onConnectionSaved}
+                onDirtyChange={(dirty) => markDirty("connect", dirty)}
+              />,
+            )}
+            {panel(
+              "review",
+              <ReviewSettingsPanel
+                onDirtyChange={(dirty) => markDirty("review", dirty)}
+              />,
+            )}
+            {panel(
+              "ai",
+              <AIPanel onDirtyChange={(dirty) => markDirty("ai", dirty)} />,
+            )}
+            {panel(
+              "data",
+              <DataSafetyPanel
+                onDirtyChange={(dirty) => markDirty("data", dirty)}
+              />,
+            )}
+            {panel(
+              "appearance",
+              <AppearancePanel
+                accentTheme={accentTheme}
+                onChangeAccentTheme={onChangeAccentTheme}
+                themeMode={themeMode}
+                onChangeThemeMode={onChangeThemeMode}
+              />,
+            )}
+          </div>
+        </section>
       </div>
       {dialog}
-    </motion.div>
+    </div>
   );
 }
