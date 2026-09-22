@@ -217,3 +217,44 @@ curl http://127.0.0.1:8080/health
 - 修改 setup.sh 或 ops.sh 前，**MUST** 阅读对应函数和 README.md；涉及真实数据的命令必须先确认目标路径和回滚点。
 - 不得把 dist/、server/target/、src-tauri/target/、src-tauri/gen/、node_modules/、.deploy-stage.* 或本地运行数据作为提交内容。
 - 未经用户明确要求，不得使用会覆盖或删除用户内容的命令，例如 git reset --hard、git checkout --、git clean 或递归删除。即使获得明确授权，也要先确认精确目标和可恢复性。
+
+## 知识页前端结构索引（2026-09-22）
+
+知识页采用“浏览优先，阅读、编辑、复习按需展开”的布局；API 与草稿编排入口仍为 src/components/KnowledgePage.tsx。
+
+| 模块 | 路径 | 职责 |
+|------|------|------|
+| 知识浏览 | src/components/knowledge/KnowledgeLibrary.tsx | 空间导航、筛选、卡片/列表、选择和分页 |
+| 知识阅读 | src/components/knowledge/KnowledgeReader.tsx | 正文、来源、关联知识和 Markdown 复制 |
+| 知识视觉 | src/components/knowledge/knowledge.css | 局部布局、明暗主题、窄屏与触摸适配 |
+| 展示辅助 | src/lib/knowledgePresentation.ts | 正文摘要、日期和键盘触发边界；同目录有单测 |
+| 浏览器回归 | scripts/knowledge-ui-regression.mjs | 隔离的内存 API 测试，不写真实知识库 |
+| 方案与验证 | docs/knowledge-ui-redesign.md | 调研依据、交互说明、复现命令和回退方式 |
+
+## 工作区重构索引（2026-09-22）
+
+- 共享页头与样式：src/components/workspace/WorkspaceHeader.tsx、src/components/workspace/workspace.css。
+- 分步导入：src/components/KnowledgeImportDialog.tsx、src/components/knowledge/ImportDropzone.tsx、src/lib/importWorkflow.ts 及对应测试。
+- 记忆复习：src/components/ReviewPage.tsx；周期复盘：src/components/ReviewsPage.tsx、src/components/reviews/ReviewShared.tsx。
+- 设置分类：src/components/SettingsPage.tsx；外观：src/components/settings/AppearancePanel.tsx；数据分区：src/components/settings/DataSafetyPanel.tsx。
+- 隔离浏览器检查：scripts/workspace-ui-regression.mjs。实现、验证命令与回退说明见根目录 UI_REDESIGN.md。
+
+## 最终工作区索引（2026-09-22）
+
+- 统计四个任务视图：`src/components/StatsPage.tsx`；日期状态与周期生成仍通过原 API。
+- 记录文档行与条件详情：`src/components/HistoryPage.tsx`。
+- 搜索支持 `scope=articles|cards|reviews`：`src/components/SearchPage.tsx` 与 `src/router.tsx`。
+- 全站导航：`src/components/Sidebar.tsx`；页面按路由或悬停/聚焦意图加载，不再定时预加载全部页面。
+- 今日 AI 工作流：`src/components/TodayAIPanel.tsx`，由 `TodayPage.tsx` 提供原文与保存回调；`src/lib/todayAiWorkflow.ts` 负责源版本一致性与候选字段校验。
+- 收尾样式：`src/components/workspace/final-ui.css`，复用全站颜色角色；原有 `workspace.css` 与知识样式仍保留职责。
+- 旧版复盘兼容：`src/lib/reviewCompatibility.ts`，仅缺失分页端点时适配完整列表，不拦截认证、网络或服务异常。
+- 最终浏览器回归：`scripts/final-ui-regression.mjs`；合成内容与内存接口，不允许真实数据写入。说明及回退见根目录 `UI_REDESIGN.md`。
+
+## 生产图表与交互索引（2026-09-22）
+
+- Recharts 生产构建兼容：`scripts/recharts-compat.ts`，在 `vite.config.ts` 注册；对应 `scripts/recharts-compat.test.ts`。不得以修改 node_modules 或关闭压缩替代此适配。
+- 侧栏精细样式：`src/components/workspace/sidebar.css`；导航键盘映射与边界：`src/lib/navigationInteractions.ts` 及对应测试。
+- 全站反馈与快捷键：`src/components/workspace/WorkspaceInteractions.tsx`、`interactions.css`；由 `App.tsx` 挂载，不重新挂载业务页面。
+- 统计月份选择：`src/components/workspace/MonthPicker.tsx`；路由加载错误恢复：`src/components/workspace/PageLoadError.tsx`。
+- 生产浏览器检查：`scripts/production-ui-regression.mjs`；`scripts/final-ui-regression.mjs` 支持 `KNOWLEDGE_FRONTEND_ORIGIN` 指定 loopback 来源。图表或构建修改必须额外检查优化后的生产资源，不能只看开发预览。
+- 本轮诊断、验证结果与回退参考根目录 `UI_REDESIGN.md` 的生产版修复章节。

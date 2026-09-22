@@ -1,10 +1,11 @@
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
+import { rechartsCompatEsm } from "./scripts/recharts-compat";
 
 // https://vite.dev/config/
 export default defineConfig({
-  plugins: [react(), tailwindcss()],
+  plugins: [rechartsCompatEsm(), react(), tailwindcss()],
 
   // Prevent vite from obscuring Rust errors
   clearScreen: false,

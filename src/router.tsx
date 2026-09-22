@@ -7,6 +7,7 @@ import {
   useParams,
   useSearch,
 } from "@tanstack/react-router";
+import PageLoadError from "./components/workspace/PageLoadError";
 import AppShell, { useAppShell } from "./App";
 import type { KnowledgeCardStatus, KnowledgeCardType } from "./lib/api";
 
@@ -103,8 +104,8 @@ function validQuality(value?: string): "missing_source" | "missing_project" | "m
   return value === "missing_source" || value === "missing_project" || value === "missing_tags" || value === "short_content" ? value : undefined;
 }
 
-function validSearchScope(value?: string): "articles" | "cards" | undefined {
-  return value === "articles" || value === "cards" ? value : undefined;
+function validSearchScope(value?: string): "articles" | "cards" | "reviews" | undefined {
+  return value === "articles" || value === "cards" || value === "reviews" ? value : undefined;
 }
 
 function validReviewKind(value?: string): "weekly" | "monthly" | undefined {
@@ -398,6 +399,7 @@ function SettingsRoute() {
 export const router = createRouter({
   routeTree,
   defaultPreload: "intent",
+  defaultErrorComponent: PageLoadError,
   scrollRestoration: true,
 });
 

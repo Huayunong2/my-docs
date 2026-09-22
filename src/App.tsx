@@ -3,6 +3,8 @@ import { MotionConfig } from "framer-motion";
 import { Outlet, useLocation, useNavigate as useRouterNavigate } from "@tanstack/react-router";
 import { useQuery } from "@tanstack/react-query";
 import { Toaster, toast } from "sonner";
+import WorkspaceInteractions from "./components/workspace/WorkspaceInteractions";
+import { pageShortcuts, isInteractionBlocked } from "./lib/navigationInteractions";
 import Sidebar from "./components/Sidebar";
 import CommandPalette from "./components/CommandPalette";
 import * as api from "./lib/api";
@@ -26,7 +28,7 @@ const pageLoaders: Partial<Record<Page, () => Promise<unknown>>> = {
 };
 
 export function preloadPage(page: Page) {
-  pageLoaders[page]?.();
+  void pageLoaders[page]?.().catch(() => { /* Navigation handles a failed lazy chunk; prefetch must stay silent. */ });
 }
 
 function pageFromPath(pathname: string): Page {
@@ -96,6 +98,7 @@ export function AppShell() {
   const location = useLocation();
   const [zen, setZen] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
+  const [shortcutsOpen, setShortcutsOpen] = useState(false);
   const [themeMode, setThemeMode] = useState<ThemeMode>(() => {
     if (typeof window !== "undefined") {
       const stored = readLocalStorage("themeMode");
@@ -271,13 +274,9 @@ export function AppShell() {
 
   // Keyboard shortcuts: Ctrl/Cmd+1-9 keeps the existing fast navigation workflow.
   useEffect(() => {
-    const map: Record<string, Page> = {
-      "1": "today", "2": "history", "3": "archive",
-      "4": "search", "5": "stats", "6": "reviews",
-      "7": "knowledge", "8": "settings", "9": "review",
-    };
+    const map = pageShortcuts;
     const handler = (event: KeyboardEvent) => {
-      if (event.defaultPrevented || event.isComposing || isEditableTarget(event.target)) return;
+      if (isInteractionBlocked(event) || isEditableTarget(event.target) || document.querySelector('[role="dialog"], [role="alertdialog"], [role="menu"], [role="listbox"]')) return;
       if ((event.ctrlKey || event.metaKey) && map[event.key]) {
         event.preventDefault();
         navigate(map[event.key]);
@@ -290,7 +289,7 @@ export function AppShell() {
   // Ctrl/Cmd+K 命令面板
   useEffect(() => {
     const handler = (event: KeyboardEvent) => {
-      if (event.defaultPrevented || event.isComposing || isEditableTarget(event.target)) return;
+      if (isInteractionBlocked(event) || isEditableTarget(event.target) || document.querySelector('[role="dialog"], [role="alertdialog"], [role="menu"], [role="listbox"]')) return;
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "k") {
         event.preventDefault();
         setPaletteOpen((value) => !value);
@@ -300,12 +299,7 @@ export function AppShell() {
     return () => window.removeEventListener("keydown", handler);
   }, []);
 
-  useEffect(() => {
-    const timer = window.setTimeout(() => {
-      for (const loadPage of Object.values(pageLoaders)) void loadPage();
-    }, 2_000);
-    return () => window.clearTimeout(timer);
-  }, []);
+  // Route chunks are loaded on navigation or explicit hover/focus intent.
 
   const backToKnowledge = useCallback(() => {
     void routerNavigate({
@@ -382,6 +376,7 @@ export function AppShell() {
                 page={currentPage}
                 onPrefetch={preloadPage}
                 onOpenPalette={openPalette}
+                onOpenShortcuts={() => setShortcutsOpen(true)}
                 dark={dark}
                 onToggleDark={toggleDark}
                 themeMode={themeMode}
@@ -394,6 +389,7 @@ export function AppShell() {
                 <Outlet />
               </Suspense>
             </main>
+            <WorkspaceInteractions pageKey={currentPage} open={shortcutsOpen} onOpenChange={setShortcutsOpen} />
             <CommandPalette open={paletteOpen} onClose={() => setPaletteOpen(false)} onNavigate={(page) => { navigate(page); setPaletteOpen(false); }} />
           </div>
           <Toaster richColors position="bottom-center" theme={dark ? "dark" : "light"} />
@@ -405,7 +401,8 @@ export function AppShell() {
 
 function PageFallback() {
   return (
-    <div className="min-h-full animate-fade-in p-4 md:p-8">
+    <div className="min-h-full p-4 md:p-8" role="status" aria-label="正在加载页面" aria-busy="true">
+      <div className="ix-loading-indicator" aria-hidden="true" />
       <div className="ui-skeleton mb-4 h-8 w-48" />
       <div className="ui-skeleton mb-4 h-16 w-full max-w-2xl" />
       <div className="space-y-4">

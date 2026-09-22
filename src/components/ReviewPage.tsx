@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { AnimatePresence, motion } from "framer-motion";
+import { motion } from "framer-motion";
 import * as Dialog from "@radix-ui/react-dialog";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
@@ -11,20 +11,23 @@ import {
   ExternalLink,
   Eye,
   Link2,
-  LoaderCircle,
   PencilLine,
-  Sparkles,
   X,
   ArrowRight,
+  ArrowLeft,
+  HelpCircle,
+  RotateCcw,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import * as api from "../lib/api";
 import type { KnowledgeCard, ReviewCard, ReviewGrade } from "../lib/api";
-import { cardTypeLabels, reviewStateLabels } from "../lib/cardLabels";
+import { cardTypeLabels } from "../lib/cardLabels";
 import type { Page } from "../App";
 import MarkdownContent from "./MarkdownContent";
-import { InlineError, LoadingState } from "./ui/Feedback";
-import PageHeader from "./ui/PageHeader";
+import { InlineError, LoadingState, useConfirmDialog } from "./ui/Feedback";
+import WorkspaceHeader from "./workspace/WorkspaceHeader";
+import { isKnowledgeShortcut } from "../lib/knowledgePresentation";
+import { writeSessionStorage } from "../lib/storage";
 import { toast } from "sonner";
 
 const gradeOptions: Array<{
@@ -71,8 +74,11 @@ function formatReviewPreview(preview?: api.ReviewGradePreview): string {
   if (!preview) return "";
   if (preview.interval_days <= 0) return "今天再来";
   if (preview.interval_days === 1) return "明天";
-  if (preview.interval_days <= 30) return `${Math.round(preview.interval_days)} 天后`;
-  return preview.next_review_at ? `${preview.next_review_at.slice(5).replace("-", "/")}` : "稍后安排";
+  if (preview.interval_days <= 30)
+    return `${Math.round(preview.interval_days)} 天后`;
+  return preview.next_review_at
+    ? `${preview.next_review_at.slice(5).replace("-", "/")}`
+    : "稍后安排";
 }
 
 export default function ReviewPage({
@@ -84,10 +90,18 @@ export default function ReviewPage({
   onNavigate: (page: Page) => void;
   onOpenKnowledgeCard: (cardId: string) => void;
 }) {
+  const [sessionStarted, setSessionStarted] = useState(false);
+  const [sessionRatings, setSessionRatings] = useState(0);
+  const [showHint, setShowHint] = useState(false);
+  const gradeLock = useRef(false);
+  const discardLock = useRef(false);
+  const { confirm, dialog } = useConfirmDialog();
+  const questionRef = useRef<HTMLDivElement>(null);
   const [cards, setCards] = useState<ReviewCard[]>([]);
   const [allCards, setAllCards] = useState<KnowledgeCard[]>([]);
   const [stats, setStats] = useState<api.DueReviewStats | null>(null);
-  const [reviewStats, setReviewStats] = useState<api.ReviewStatsResponse | null>(null);
+  const [reviewStats, setReviewStats] =
+    useState<api.ReviewStatsResponse | null>(null);
   const [index, setIndex] = useState(0);
   const [revealed, setRevealed] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -144,18 +158,37 @@ export default function ReviewPage({
     staleTime: 5 * 60_000,
   });
   const gradePreviews = useMemo(
-    () => new Map((gradePreviewQuery.data || []).map((preview) => [preview.grade, preview])),
-    [gradePreviewQuery.data]
+    () =>
+      new Map(
+        (gradePreviewQuery.data || []).map((preview) => [
+          preview.grade,
+          preview,
+        ]),
+      ),
+    [gradePreviewQuery.data],
   );
 
   const grade = useCallback(
     async (value: ReviewGrade) => {
-      if (!current || grading) return;
+      if (
+        !current ||
+        !revealed ||
+        !sessionStarted ||
+        grading ||
+        gradeLock.current
+      )
+        return;
+      gradeLock.current = true;
       setGrading(true);
       setError("");
       try {
         const updated = await api.gradeReviewCard(current.id, value);
-        await queryClient.invalidateQueries({ queryKey: api.reviewQueryKeys.preview(current.id) });
+        setSessionRatings((count) => count + 1);
+        void queryClient.invalidateQueries({ queryKey: ["dueCount"] });
+        setShowHint(false);
+        await queryClient.invalidateQueries({
+          queryKey: api.reviewQueryKeys.preview(current.id),
+        });
         const remaining = cards.filter((card) => card.id !== current.id);
         if (value === "again") {
           // 当天重来：放回队列尾部，稍后再遇到；今日 due 数不减
@@ -177,47 +210,97 @@ export default function ReviewPage({
           toast.success("已记录，继续下一张");
         }
         setRevealed(false);
-        setStats((s) => (s
-          ? {
-              ...s,
-              due: value === "again" ? s.due : Math.max(0, s.due - 1),
-              due_reviews: typeof s.due_reviews === "number"
-                ? Math.max(0, s.due_reviews - (value === "again" || !current.next_review_at ? 0 : 1))
-                : s.due_reviews,
-              new_cards: typeof s.new_cards === "number"
-                ? Math.max(0, s.new_cards - (value === "again" || current.next_review_at ? 0 : 1))
-                : s.new_cards,
-              reviewed_today: s.reviewed_today + 1,
-            }
-          : s));
+        setStats((s) =>
+          s
+            ? {
+                ...s,
+                due: value === "again" ? s.due : Math.max(0, s.due - 1),
+                due_reviews:
+                  typeof s.due_reviews === "number"
+                    ? Math.max(
+                        0,
+                        s.due_reviews -
+                          (value === "again" || !current.next_review_at
+                            ? 0
+                            : 1),
+                      )
+                    : s.due_reviews,
+                new_cards:
+                  typeof s.new_cards === "number"
+                    ? Math.max(
+                        0,
+                        s.new_cards -
+                          (value === "again" || current.next_review_at ? 0 : 1),
+                      )
+                    : s.new_cards,
+                reviewed_today: s.reviewed_today + 1,
+              }
+            : s,
+        );
       } catch (e) {
         setError(api.getErrorMessage(e));
       } finally {
+        gradeLock.current = false;
         setGrading(false);
       }
     },
-    [cards, current, grading, load, queryClient, stats]
+    [
+      cards,
+      current,
+      revealed,
+      sessionStarted,
+      grading,
+      load,
+      queryClient,
+      stats,
+    ],
   );
 
   // 空格显示答案，1-4 评分
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
-      if (e.ctrlKey || e.metaKey || e.altKey) return;
+      if (
+        !isKnowledgeShortcut(e) ||
+        e.repeat ||
+        editing ||
+        grading ||
+        !sessionStarted ||
+        document.querySelector(
+          '[role="dialog"], [role="alertdialog"], [role="menu"], [role="listbox"]',
+        )
+      )
+        return;
       if (!current || loading) return;
       if (!revealed) {
-        if (e.key === " " || e.key === "Enter") {
+        if (
+          (e.key === " " || e.key === "Enter") &&
+          !(e.target instanceof Element && e.target.closest("button, a"))
+        ) {
           e.preventDefault();
           setRevealed(true);
         }
         return;
       }
-      const map: Record<string, ReviewGrade> = { "1": "again", "2": "hard", "3": "good", "4": "easy" };
+      const map: Record<string, ReviewGrade> = {
+        "1": "again",
+        "2": "hard",
+        "3": "good",
+        "4": "easy",
+      };
       const gradeKey = map[e.key];
       if (gradeKey) void grade(gradeKey);
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [current, grade, loading, revealed]);
+  }, [current, grade, loading, revealed, sessionStarted, editing, grading]);
+
+  useEffect(() => {
+    if (sessionStarted && current) {
+      setShowHint(false);
+      questionRef.current?.parentElement?.scrollTo({ top: 0 });
+      questionRef.current?.focus({ preventScroll: true });
+    }
+  }, [current?.id, sessionStarted]);
 
   const openSource = () => {
     if (!current) return;
@@ -230,8 +313,11 @@ export default function ReviewPage({
   };
 
   const relatedCards = useMemo(
-    () => (current?.related_ids || []).map((id) => allCards.find((card) => card.id === id)).filter((card): card is KnowledgeCard => !!card),
-    [allCards, current]
+    () =>
+      (current?.related_ids || [])
+        .map((id) => allCards.find((card) => card.id === id))
+        .filter((card): card is KnowledgeCard => !!card),
+    [allCards, current],
   );
 
   const openEdit = (event?: React.MouseEvent<HTMLButtonElement>) => {
@@ -239,16 +325,23 @@ export default function ReviewPage({
     if (event) editingTriggerRef.current = event.currentTarget;
     const loadCard = async () => {
       try {
-        const card = allCards.find((item) => item.id === current.knowledge_card_id)
-          || await api.getKnowledgeCard(current.knowledge_card_id);
+        const card =
+          allCards.find((item) => item.id === current.knowledge_card_id) ||
+          (await api.getKnowledgeCard(current.knowledge_card_id));
         setEditing(card);
         setEditTitle(card.title);
         setEditContent(card.content);
         setEditTagsText(card.tags.join(", "));
-        setEditRelatedText(((card.declared_related_ids?.length ? card.declared_related_ids : card.related_ids) || [])
-          .map((id) => allCards.find((item) => item.id === id)?.title || "")
-          .filter(Boolean)
-          .join(", "));
+        setEditRelatedText(
+          (
+            (card.declared_related_ids?.length
+              ? card.declared_related_ids
+              : card.related_ids) || []
+          )
+            .map((id) => allCards.find((item) => item.id === id)?.title || "")
+            .filter(Boolean)
+            .join(", "),
+        );
       } catch (e) {
         setError(api.getErrorMessage(e));
       }
@@ -257,10 +350,15 @@ export default function ReviewPage({
   };
 
   const resolveRelatedIds = (text: string): string[] => {
-    const titles = text.split(",").map((title) => title.trim()).filter(Boolean);
+    const titles = text
+      .split(",")
+      .map((title) => title.trim())
+      .filter(Boolean);
     const ids: string[] = [];
     for (const title of titles) {
-      const matched = allCards.find((card) => card.id !== editing?.id && card.title === title);
+      const matched = allCards.find(
+        (card) => card.id !== editing?.id && card.title === title,
+      );
       if (matched && !ids.includes(matched.id)) ids.push(matched.id);
     }
     return ids;
@@ -274,10 +372,15 @@ export default function ReviewPage({
       const saved = await api.updateKnowledgeCard(editing.id, {
         title: editTitle.trim(),
         content: editContent.trim(),
-        tags: editTagsText.split(",").map((tag) => tag.trim()).filter(Boolean),
+        tags: editTagsText
+          .split(",")
+          .map((tag) => tag.trim())
+          .filter(Boolean),
         related_ids: resolveRelatedIds(editRelatedText),
       });
-      setAllCards((prev) => prev.map((card) => (card.id === saved.id ? saved : card)));
+      setAllCards((prev) =>
+        prev.map((card) => (card.id === saved.id ? saved : card)),
+      );
       setEditing(null);
       // 编辑知识正文可能让当前复习题变为 stale；重新取队列，避免继续操作已失效的投影。
       await load();
@@ -289,249 +392,375 @@ export default function ReviewPage({
     }
   };
 
-  const finished = !loading && !error && !batchComplete && stats !== null && cards.length === 0;
+  const finished =
+    !loading &&
+    !error &&
+    !batchComplete &&
+    stats !== null &&
+    cards.length === 0;
+
+  const closeEditor = async () => {
+    if (!editing || savingEdit || discardLock.current) return;
+    const changed =
+      editTitle !== editing.title ||
+      editContent !== editing.content ||
+      editTagsText !== editing.tags.join(", ") ||
+      editRelatedText !==
+        (
+          (editing.declared_related_ids?.length
+            ? editing.declared_related_ids
+            : editing.related_ids) || []
+        )
+          .map((id) => allCards.find((card) => card.id === id)?.title || "")
+          .filter(Boolean)
+          .join(", ");
+    if (changed) {
+      discardLock.current = true;
+      try {
+        const leave = await confirm({
+          title: "放弃知识条目的修改？",
+          message: "当前标题或正文的修改尚未保存。",
+          confirmText: "放弃修改",
+        });
+        if (!leave) return;
+      } finally {
+        discardLock.current = false;
+      }
+    }
+    setEditing(null);
+  };
 
   return (
-    <motion.div
-      initial={{ opacity: 0, y: 10 }}
-      animate={{ opacity: 1, y: 0 }}
-      className="page-surface page-surface-review min-h-full px-3 pb-24 pt-4 sm:px-4 md:px-8 md:py-6"
-    >
-      <PageHeader
+    <div className="wb-page rs-page">
+      <WorkspaceHeader
         icon={Brain}
-        title="间隔复习"
-        description="按遗忘曲线回顾独立复习题，知识正文保留在条目中"
+        title="复习"
         actions={
-          stats ? (
-            <>
-              <StatChip label="今日可复习" value={stats.due} highlight={stats.due > 0} />
-              {typeof stats.due_reviews === "number" && <StatChip label="到期复习题" value={stats.due_reviews} />}
-              {typeof stats.new_cards === "number" && <StatChip label="可加入新题" value={stats.new_cards} />}
-              <StatChip label="已复习" value={stats.reviewed_today} />
-              <StatChip label="已沉淀" value={stats.total_confirmed} />
-            </>
-          ) : null
+          <>
+            <button
+              type="button"
+              className="ui-button-ghost"
+              onClick={() => {
+                writeSessionStorage("daily-summary-settings-tab", "review");
+                onNavigate("settings");
+              }}
+            >
+              <CalendarClock size={15} />
+              复习计划
+            </button>
+            <button
+              type="button"
+              className="ui-button-secondary"
+              onClick={() => void load()}
+              disabled={grading || loading}
+            >
+              <RotateCcw size={15} />
+              刷新队列
+            </button>
+          </>
         }
       />
-
-      {reviewStats && reviewStats.upcoming.some((d) => d.count > 0) && (
-        <div className="ui-panel-muted mx-auto mb-4 flex max-w-2xl flex-wrap items-center gap-2 px-4 py-2.5">
-          <span className="text-xs font-medium text-[var(--ui-text-muted)]">未来 7 天</span>
-          <div className="flex flex-1 items-end gap-1">
-            {reviewStats.upcoming.map((day) => (
-              <div key={day.date} className="flex flex-1 flex-col items-center gap-1" title={`${day.date} · ${day.count} 张`}>
-                <span className={`font-mono text-[11px] leading-none ${day.count > 0 ? "text-[var(--ui-accent-text)]" : "text-[var(--ui-text-disabled)]"}`}>
-                  {day.count || ""}
-                </span>
-                <div className={`h-1.5 w-full rounded-full ${day.count > 0 ? "ui-accent-fill-50" : "bg-[var(--ui-surface-inset)]"}`} />
-              </div>
-            ))}
-          </div>
-          <span className="text-[11px] text-[var(--ui-text-disabled)]">
-            {reviewStats.upcoming[0].date.slice(5)}~{reviewStats.upcoming[6].date.slice(5)}
-          </span>
+      {error && (
+        <div className="rs-error">
+          <InlineError message={error} onRetry={load} />
         </div>
       )}
-
-      {error && <div className="mb-4"><InlineError message={error} onRetry={load} /></div>}
-
-      <div className="mx-auto max-w-2xl">
-        {loading ? (
-          <LoadingState label="加载今日复习队列..." rows={2} />
-        ) : batchComplete ? (
-          <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }}>
+      <div className="rs-layout" data-studying={sessionStarted && !!current}>
+        <section className="rs-main">
+          {loading ? (
+            <LoadingState label="读取今日复习队列…" rows={3} />
+          ) : batchComplete ? (
             <ReviewBatchComplete
               remaining={batchRemaining}
               onContinue={() => {
-                setBatchComplete(false);
+                setSessionStarted(true);
                 void load();
               }}
               onNavigate={onNavigate}
             />
-          </motion.div>
-        ) : finished ? (
-          <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }}>
-            <ReviewEmptyState stats={stats} reviewStats={reviewStats} onNavigate={onNavigate} />
-          </motion.div>
-        ) : current ? (
-          <AnimatePresence mode="wait">
-            <motion.div
-              key={current.id}
-              initial={{ opacity: 0, x: 24 }}
-              animate={{ opacity: 1, x: 0 }}
-              exit={{ opacity: 0, x: -24 }}
-              transition={{ duration: 0.18 }}
-            >
-              <div className="ui-panel p-5 sm:p-6">
-                <div className="mb-3 flex flex-wrap items-center gap-2">
-                  <span className="ui-status-accent rounded-md px-2 py-0.5 text-[11px] font-semibold">
-                    {cardTypeLabels[current.card_type]}
+          ) : finished ? (
+            <ReviewEmptyState
+              stats={stats}
+              reviewStats={reviewStats}
+              onNavigate={onNavigate}
+            />
+          ) : current && !sessionStarted ? (
+            <div className="wb-panel rs-ready">
+              <div className="wb-eyebrow">今日复习</div>
+              <h2>给记忆一次主动回想。</h2>
+              <p className="rs-ready-copy">
+                一次只专注一道题。先尝试回忆，再打开答案，按真实记忆程度评分。
+              </p>
+              <div className="rs-due-count">
+                <strong>{stats?.due ?? cards.length}</strong>
+                <span>道题可以开始</span>
+              </div>
+              <div className="rs-queue-details">
+                {typeof stats?.due_reviews === "number" && (
+                  <span>
+                    到期复习 <b>{stats.due_reviews}</b>
                   </span>
-                  <span className="ui-chip h-auto px-2 py-0.5 text-[11px]">
-                    {reviewItemTypeLabels[current.item_type] || current.item_type}
+                )}
+                {typeof stats?.new_cards === "number" && (
+                  <span>
+                    可加入新题 <b>{stats.new_cards}</b>
                   </span>
-                  {current.review_state && current.review_state !== "new" && (
-                    <span
-                      className={[
-                        "rounded-md px-2 py-0.5 text-[11px] font-medium",
-                        current.review_state === "mature" ? "ui-status-success" : "ui-status-warning",
-                      ].join(" ")}
-                    >
-                      {reviewStateLabels[current.review_state] || current.review_state}
+                )}
+                <span>
+                  本批 <b>{cards.length}</b> 道
+                </span>
+              </div>
+              <button
+                type="button"
+                className="ui-button-primary rs-start"
+                onClick={() => setSessionStarted(true)}
+              >
+                {sessionRatings ? "继续复习" : "开始复习"}
+                <ArrowRight size={17} />
+              </button>
+              <div className="rs-method">
+                <span>
+                  <b>01</b>回想问题
+                </span>
+                <span>
+                  <b>02</b>核对答案
+                </span>
+                <span>
+                  <b>03</b>记录记忆程度
+                </span>
+              </div>
+            </div>
+          ) : current ? (
+            <div className="wb-panel rs-session">
+              <div className="rs-session-bar">
+                <button
+                  type="button"
+                  className="ui-button-ghost"
+                  disabled={grading}
+                  onClick={() => {
+                    setSessionStarted(false);
+                    setRevealed(false);
+                  }}
+                >
+                  <ArrowLeft size={15} />
+                  暂停本轮
+                </button>
+                <span role="status">
+                  本轮评分 {sessionRatings} 次 · 剩余 {cards.length} 题
+                </span>
+              </div>
+              <div className="rs-study-content">
+                <div className="rs-question" ref={questionRef} tabIndex={-1}>
+                  <div className="rs-question-meta">
+                    <span>
+                      {reviewItemTypeLabels[current.item_type] ||
+                        current.item_type}
                     </span>
-                  )}
-                  {current.source_date && (
-                    <span className="font-mono text-xs text-[var(--ui-text-subtle)]">
-                      {current.source_date}
-                    </span>
-                  )}
-                  {current.review_count ? (
-                    <span className="text-xs text-[var(--ui-text-subtle)]">
-                      复习过 {current.review_count} 次
-                    </span>
-                  ) : null}
-                </div>
-
-                <h3 className="text-lg font-bold leading-snug text-[var(--ui-text)]">
-                  {current.title}
-                </h3>
-
-                <div className="ui-panel-muted mt-4 p-4">
-                  <div className="ui-section-kicker mb-1.5">问题</div>
-                  <div className="text-sm leading-6 text-[var(--ui-text)]">
+                    <span>{cardTypeLabels[current.card_type]}</span>
+                    {current.review_count ? (
+                      <span>已复习 {current.review_count} 次</span>
+                    ) : (
+                      <span>首次回忆</span>
+                    )}
+                  </div>
+                  <p className="rs-context-title">{current.title}</p>
+                  <div className="wb-eyebrow">尝试回答</div>
+                  <div className="rs-prompt">
                     <MarkdownContent content={current.prompt} />
                   </div>
                   {current.hint && !revealed && (
-                    <p className="mt-2 text-xs text-[var(--ui-text-subtle)]">提示：{current.hint}</p>
-                  )}
-                </div>
-
-                {current.tags.length > 0 && (
-                  <div className="mt-2 flex flex-wrap gap-1.5">
-                    {current.tags.map((tag) => (
-                      <span key={tag} className="ui-chip h-auto px-2 py-0.5 text-[11px]">
-                        #{tag}
-                      </span>
-                    ))}
-                  </div>
-                )}
-
-                {!revealed ? (
-                  <div className="mt-6 flex flex-col items-center gap-2 pb-2">
-                    <button
-                      type="button"
-                      onClick={() => setRevealed(true)}
-                      className="ui-button-primary h-12 w-full max-w-xs text-base"
-                    >
-                      <Eye size={16} /> 显示答案
-                    </button>
-                    <span className="text-xs text-[var(--ui-text-subtle)]">按空格键快速显示</span>
-                  </div>
-                ) : (
-                  <motion.div initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} className="mt-5">
-                    <div className="ui-panel-muted p-4">
-                      <MarkdownContent content={current.answer} />
-                    </div>
-
-                    {current.source_excerpt && (
-                      <div className="ui-alert-warn mt-3 p-3">
-                        <div className="mb-1 flex items-center gap-1 text-[11px] font-semibold text-[var(--ui-warning-text)]">
-                          <Sparkles size={11} /> 原文片段
-                        </div>
-                        <p className="text-xs leading-5 text-[var(--ui-warning-text)] opacity-80">
-                          {current.source_excerpt}
-                        </p>
-                      </div>
-                    )}
-
-                    {current.source_date && (
+                    <div className="rs-hint">
                       <button
                         type="button"
-                        onClick={openSource}
-                        className="mt-3 inline-flex items-center gap-1 text-xs font-semibold text-[var(--ui-accent-text)] hover:underline"
+                        className="ui-button-ghost"
+                        aria-expanded={showHint}
+                        onClick={() => setShowHint((value) => !value)}
                       >
-                        <ExternalLink size={12} /> 查看来源
+                        <HelpCircle size={15} />
+                        {showHint ? "收起提示" : "给我一点提示"}
                       </button>
-                    )}
-
-                    {relatedCards.length > 0 && (
-                      <div className="mt-3 flex flex-wrap items-center gap-1.5">
-                        <span className="inline-flex items-center gap-1 text-[11px] font-medium text-[var(--ui-text-subtle)]">
-                          <Link2 size={11} /> 关联
-                        </span>
+                      {showHint && <p>{current.hint}</p>}
+                    </div>
+                  )}
+                </div>
+                {revealed && (
+                  <section className="rs-answer" aria-label="参考答案">
+                    <div className="rs-answer-label">
+                      <CheckCircle2 size={15} />
+                      参考答案
+                    </div>
+                    <MarkdownContent content={current.answer} />
+                    <details className="rs-evidence">
+                      <summary>
+                        <Link2 size={14} />
+                        来源与关联知识
+                      </summary>
+                      {current.source_excerpt && (
+                        <blockquote>{current.source_excerpt}</blockquote>
+                      )}
+                      <div className="wb-inline-actions">
+                        {(current.source_date || current.source_review_id) && (
+                          <button
+                            type="button"
+                            className="ui-button-ghost"
+                            onClick={openSource}
+                          >
+                            <ExternalLink size={14} />
+                            查看来源
+                          </button>
+                        )}
+                        <button
+                          type="button"
+                          className="ui-button-ghost"
+                          onClick={openEdit}
+                        >
+                          <PencilLine size={14} />
+                          编辑知识条目
+                        </button>
                         {relatedCards.map((related) => (
                           <button
                             key={related.id}
                             type="button"
+                            className="ui-button-ghost"
                             onClick={() => onOpenKnowledgeCard(related.id)}
-                            className="ui-status-accent rounded-md px-2 py-0.5 text-[11px] font-medium transition-colors hover:shadow-xs"
                           >
                             {related.title}
                           </button>
                         ))}
                       </div>
-                    )}
-
-                    <div className="mt-4 flex items-center justify-between gap-2">
-                      <button
-                        type="button"
-                        onClick={openEdit}
-                        className="ui-button-secondary h-8 px-2.5"
-                      >
-                        <PencilLine size={12} /> 编辑知识条目
-                      </button>
+                    </details>
+                  </section>
+                )}
+              </div>
+              <footer className="rs-answer-actions">
+                {!revealed ? (
+                  <>
+                    <p>先在心中回答，再查看答案。</p>
+                    <button
+                      type="button"
+                      className="ui-button-primary"
+                      onClick={() => setRevealed(true)}
+                    >
+                      <Eye size={16} />
+                      显示答案<kbd aria-hidden="true">Space</kbd>
+                    </button>
+                  </>
+                ) : (
+                  <>
+                    <div className="rs-grade-heading">
+                      <span>这次记得怎么样？</span>
+                      <span>
+                        {grading
+                          ? "正在记录…"
+                          : gradePreviewQuery.isFetching
+                            ? "正在读取下次复习安排…"
+                            : gradePreviewQuery.isError
+                              ? "暂时无法预览间隔，仍可评分"
+                              : "下次复习时间由服务端计算"}
+                      </span>
                     </div>
-
-                    <div className="mt-4 flex items-center justify-between gap-2">
-                      <span className="ui-section-kicker">选择记忆程度</span>
-                      {gradePreviewQuery.isFetching ? (
-                        <span className="inline-flex items-center gap-1 text-[11px] text-[var(--ui-text-subtle)]">
-                          <LoaderCircle size={12} className="animate-spin" /> 计算下次复习
-                        </span>
-                      ) : gradePreviewQuery.isError ? (
-                        <span className="text-[11px] text-[var(--ui-text-subtle)]">暂时无法预览</span>
-                      ) : (
-                        <span className="text-[11px] text-[var(--ui-text-subtle)]">下次复习预览</span>
-                      )}
-                    </div>
-
-                    <div className="mt-2 grid grid-cols-2 gap-2 sm:grid-cols-4">
-                      {gradeOptions.map((option) => (
+                    <div className="rs-grade-grid">
+                      {gradeOptions.map((option, i) => (
                         <button
-                          key={option.grade}
                           type="button"
-                          onClick={() => void grade(option.grade)}
+                          key={option.grade}
+                          data-grade={option.grade}
                           disabled={grading}
-                          className={[
-                            "ui-review-grade",
-                            option.className,
-                          ].join(" ")}
+                          onClick={() => void grade(option.grade)}
                         >
-                          <span className="text-base leading-none">{option.label}</span>
-                          <span className="text-[10px] font-normal opacity-70">
-                            {formatReviewPreview(gradePreviews.get(option.grade)) || option.hint}
+                          <span>
+                            <kbd>{i + 1}</kbd>
+                            {option.label}
                           </span>
+                          <small>
+                            {formatReviewPreview(
+                              gradePreviews.get(option.grade),
+                            ) || "间隔待返回"}
+                          </small>
                         </button>
                       ))}
                     </div>
-                  </motion.div>
+                  </>
                 )}
-              </div>
-
-              <p className="mt-3 flex items-center justify-center gap-1.5 text-xs text-[var(--ui-text-subtle)]">
-                <CheckCircle2 size={12} className="text-[var(--ui-success-text)]" />
-                剩余 {cards.length} 道题 · 空格翻面，1-4 评分
-              </p>
-            </motion.div>
-          </AnimatePresence>
-        ) : null}
+              </footer>
+            </div>
+          ) : !error ? (
+            <div className="wb-panel wb-empty">
+              <Brain size={30} />
+              <h2>暂时没有可用的复习题</h2>
+              <button
+                type="button"
+                className="ui-button-secondary"
+                onClick={() => void load()}
+              >
+                重新读取队列
+              </button>
+            </div>
+          ) : null}
+        </section>
+        <aside className="rs-sidebar">
+          <section className="wb-panel rs-today">
+            <h3>今天的积累</h3>
+            <div>
+              <strong>{stats?.reviewed_today ?? "—"}</strong>
+              <span>次复习已记录</span>
+            </div>
+            <p>知识条目 {stats?.total_confirmed ?? "—"} 个已沉淀</p>
+          </section>
+          <section className="wb-panel rs-schedule">
+            <div className="rs-aside-title">
+              <h3>接下来 7 天</h3>
+              <CalendarClock size={15} />
+            </div>
+            {reviewStats?.upcoming.length ? (
+              <>
+                <div className="rs-days">
+                  {reviewStats.upcoming.slice(0, 7).map((day) => (
+                    <div
+                      key={day.date}
+                      title={`${day.date} · ${day.count} 道题`}
+                    >
+                      <span>{day.count}</span>
+                      <i
+                        style={{
+                          height: `${Math.max(3, (day.count / Math.max(1, ...reviewStats.upcoming.map((item) => item.count))) * 60)}px`,
+                        }}
+                      />
+                      <time dateTime={day.date}>
+                        {day.date.slice(5).replace("-", "/")}
+                      </time>
+                    </div>
+                  ))}
+                </div>
+                <p className="wb-muted">
+                  按当前服务端安排展示，评分后可能变化。
+                </p>
+              </>
+            ) : (
+              <p className="wb-muted">暂无未来复习安排。</p>
+            )}
+          </section>
+          <section className="rs-guide">
+            <h3>复习题不等于知识正文</h3>
+            <p>
+              知识条目用来查阅和维护，复习题用来主动回忆。新知识需要创建复习题后才会进入队列。
+            </p>
+            <button
+              type="button"
+              className="ui-button-ghost"
+              onClick={() => onNavigate("knowledge")}
+            >
+              管理知识与复习题
+              <ArrowRight size={14} />
+            </button>
+          </section>
+        </aside>
       </div>
-
-
-
       <Dialog.Root
         open={!!editing}
-        onOpenChange={(open) => { if (!open && !savingEdit) setEditing(null); }}
+        onOpenChange={(open) => {
+          if (!open) void closeEditor();
+        }}
       >
         <Dialog.Portal>
           <Dialog.Overlay className="ui-overlay fixed inset-0 z-50 data-[state=open]:animate-fade-in" />
@@ -547,72 +776,87 @@ export default function ReviewPage({
                 initial={{ y: 16, opacity: 0 }}
                 animate={{ y: 0, opacity: 1 }}
                 transition={{ duration: 0.15 }}
-                className="ui-modal-surface fixed inset-x-3 bottom-3 z-50 max-w-md p-4 outline-hidden sm:left-1/2 sm:right-auto sm:top-1/2 sm:bottom-auto sm:w-[calc(100%-1.5rem)] sm:-translate-x-1/2 sm:-translate-y-1/2 sm:p-5"
+                className="wb-modal rs-edit-dialog ui-modal-surface fixed inset-x-3 bottom-3 z-50 max-w-md p-4 outline-hidden sm:left-1/2 sm:right-auto sm:top-1/2 sm:bottom-auto sm:w-[calc(100%-1.5rem)] sm:-translate-x-1/2 sm:-translate-y-1/2 sm:p-5"
               >
-              <div className="mb-3 flex items-center justify-between">
-                <Dialog.Title className="text-sm font-bold text-[var(--ui-text)]">编辑知识卡片</Dialog.Title>
-                <Dialog.Close asChild>
-                  <button type="button" className="ui-icon-button h-8 w-8" title="关闭" aria-label="关闭编辑卡片">
-                    <X size={15} />
+                <div className="mb-3 flex items-center justify-between">
+                  <Dialog.Title className="text-sm font-bold text-[var(--ui-text)]">
+                    编辑知识条目
+                  </Dialog.Title>
+                  <Dialog.Close asChild>
+                    <button
+                      type="button"
+                      className="ui-icon-button h-8 w-8"
+                      title="关闭"
+                      aria-label="关闭编辑知识条目"
+                    >
+                      <X size={15} />
+                    </button>
+                  </Dialog.Close>
+                </div>
+                <Dialog.Description className="sr-only">
+                  编辑知识条目的标题、正文、标签和关联知识条目。
+                </Dialog.Description>
+                {error && (
+                  <div className="ui-alert-bad mb-3" role="alert">
+                    {error}
+                  </div>
+                )}
+                <div className="grid gap-3">
+                  <input
+                    value={editTitle}
+                    onChange={(e) => setEditTitle(e.target.value)}
+                    placeholder="知识标题"
+                    aria-label="知识标题"
+                    className="ui-field h-10"
+                  />
+                  <textarea
+                    value={editContent}
+                    onChange={(e) => setEditContent(e.target.value)}
+                    placeholder="知识正文"
+                    aria-label="知识正文"
+                    className="ui-textarea min-h-[140px] text-sm leading-6"
+                  />
+                  <input
+                    value={editTagsText}
+                    onChange={(e) => setEditTagsText(e.target.value)}
+                    placeholder="标签，用逗号分隔"
+                    aria-label="标签"
+                    className="ui-field h-10"
+                  />
+                  <input
+                    value={editRelatedText}
+                    onChange={(e) => setEditRelatedText(e.target.value)}
+                    placeholder="关联知识条目（逗号分隔的标题）"
+                    aria-label="关联知识条目"
+                    className="ui-field h-10"
+                  />
+                </div>
+                <div className="mt-4 flex justify-end gap-2">
+                  <button
+                    type="button"
+                    disabled={savingEdit}
+                    onClick={() => void closeEditor()}
+                    className="ui-button-secondary"
+                  >
+                    取消
                   </button>
-                </Dialog.Close>
-              </div>
-              <Dialog.Description className="sr-only">编辑知识卡片的标题、正文、标签和关联卡片。</Dialog.Description>
-              <div className="grid gap-3">
-                <input
-                  value={editTitle}
-                  onChange={(e) => setEditTitle(e.target.value)}
-                  placeholder="卡片标题"
-                  className="ui-field h-10"
-                />
-                <textarea
-                  value={editContent}
-                  onChange={(e) => setEditContent(e.target.value)}
-                  placeholder="卡片内容"
-                  className="ui-textarea min-h-[140px] text-sm leading-6"
-                />
-                <input
-                  value={editTagsText}
-                  onChange={(e) => setEditTagsText(e.target.value)}
-                  placeholder="标签，用逗号分隔"
-                  className="ui-field h-10"
-                />
-                <input
-                  value={editRelatedText}
-                  onChange={(e) => setEditRelatedText(e.target.value)}
-                  placeholder="关联卡片（逗号分隔的标题）"
-                  className="ui-field h-10"
-                />
-              </div>
-              <div className="mt-4 flex justify-end gap-2">
-                <button type="button" onClick={() => setEditing(null)} className="ui-button-secondary">
-                  取消
-                </button>
-                <button
-                  type="button"
-                  onClick={() => void saveEdit()}
-                  disabled={savingEdit || !editTitle.trim() || !editContent.trim()}
-                  className="ui-button-primary"
-                >
-                  {savingEdit ? "保存中..." : "保存"}
-                </button>
-              </div>
+                  <button
+                    type="button"
+                    onClick={() => void saveEdit()}
+                    disabled={
+                      savingEdit || !editTitle.trim() || !editContent.trim()
+                    }
+                    className="ui-button-primary"
+                  >
+                    {savingEdit ? "保存中..." : "保存"}
+                  </button>
+                </div>
               </motion.div>
             </Dialog.Content>
           )}
         </Dialog.Portal>
       </Dialog.Root>
-    </motion.div>
-  );
-}
-
-function StatChip({ label, value, highlight }: { label: string; value: number | string; highlight?: boolean }) {
-  return (
-    <div className="ui-panel flex items-center gap-2 px-3 py-1.5">
-      <span className="text-xs text-[var(--ui-text-subtle)]">{label}</span>
-      <span className={`font-mono text-sm font-bold ${highlight ? "text-[var(--ui-accent-text)]" : "text-[var(--ui-text)]"}`}>
-        {value}
-      </span>
+      {dialog}
     </div>
   );
 }
@@ -630,47 +874,76 @@ function ReviewEmptyState({
   const reviewedToday = stats?.reviewed_today ?? 0;
   const nextScheduled = reviewStats?.upcoming.find((day) => day.count > 0);
   const title = hasNoConfirmedCards
-    ? "从第一张卡片开始"
+    ? "从第一道复习题开始"
     : reviewedToday > 0
-      ? "今日复习已完成"
+      ? "当前队列已完成"
       : "今天没有可复习内容";
   const description = hasNoConfirmedCards
-    ? "确认一张知识卡片，它就会进入可追踪的间隔复习队列。"
+    ? "先确认知识条目，再为它创建复习题；知识正文与复习题分别维护。"
     : reviewedToday > 0
-      ? "当前队列已经清空，今天的记忆巩固完成。"
-      : "没有需要立即处理的卡片，可以继续整理知识或查看学习节奏。";
+      ? "当前队列已经清空，可按自己的节奏稍后继续。"
+      : "没有需要立即处理的复习题，可以继续整理知识或查看学习节奏。";
 
   return (
     <section className="ui-panel overflow-hidden">
       <div className="ui-soft-divider border-b px-5 py-7 text-center sm:px-8 sm:py-9">
         <span className="ui-status-accent mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-xl ring-1 ring-[var(--ui-selected-border)]">
-          {hasNoConfirmedCards ? <Brain size={23} strokeWidth={2} /> : <CheckCircle2 size={23} strokeWidth={2} />}
+          {hasNoConfirmedCards ? (
+            <Brain size={23} strokeWidth={2} />
+          ) : (
+            <CheckCircle2 size={23} strokeWidth={2} />
+          )}
         </span>
         <p className="ui-section-kicker">今日复习</p>
-        <h3 className="mt-2 text-lg font-semibold tracking-tight text-[var(--ui-text)]">{title}</h3>
-        <p className="mx-auto mt-2 max-w-md text-sm leading-6 text-[var(--ui-text-muted)]">{description}</p>
+        <h3 className="mt-2 text-lg font-semibold tracking-tight text-[var(--ui-text)]">
+          {title}
+        </h3>
+        <p className="mx-auto mt-2 max-w-md text-sm leading-6 text-[var(--ui-text-muted)]">
+          {description}
+        </p>
         <p className="mt-4 text-3xl font-semibold tracking-tight text-[var(--ui-text)]">
           {hasNoConfirmedCards ? "—" : "0"}
-          <span className="ml-1 text-sm font-medium text-[var(--ui-text-subtle)]">张待复习卡片</span>
+          <span className="ml-1 text-sm font-medium text-[var(--ui-text-subtle)]">
+            道待复习题
+          </span>
         </p>
       </div>
 
       <div className="ui-metric-grid grid grid-cols-3">
-        <ReviewMetric icon={CheckCircle2} label="今日已复习" value={reviewedToday} suffix="张" />
-        <ReviewMetric icon={BookMarked} label="已确认卡片" value={stats?.total_confirmed ?? 0} suffix="张" />
+        <ReviewMetric
+          icon={CheckCircle2}
+          label="今日已复习"
+          value={reviewedToday}
+          suffix="次"
+        />
+        <ReviewMetric
+          icon={BookMarked}
+          label="已沉淀条目"
+          value={stats?.total_confirmed ?? 0}
+          suffix="个"
+        />
         <ReviewMetric
           icon={CalendarClock}
           label="下一批复习"
           value={nextScheduled ? nextScheduled.date.slice(5) : "—"}
-          suffix={nextScheduled ? `${nextScheduled.count} 张` : ""}
+          suffix={nextScheduled ? `${nextScheduled.count} 道` : ""}
         />
       </div>
 
       <div className="ui-soft-divider flex flex-col gap-2 border-t px-5 py-4 sm:flex-row sm:justify-center">
-        <button type="button" onClick={() => onNavigate("knowledge")} className="ui-button-primary w-full sm:w-auto">
-          <BookMarked size={14} /> {hasNoConfirmedCards ? "去知识页确认卡片" : "查看知识库"}
+        <button
+          type="button"
+          onClick={() => onNavigate("knowledge")}
+          className="ui-button-primary w-full sm:w-auto"
+        >
+          <BookMarked size={14} />{" "}
+          {hasNoConfirmedCards ? "去知识页创建复习题" : "查看知识库"}
         </button>
-        <button type="button" onClick={() => onNavigate("stats")} className="ui-button-secondary w-full sm:w-auto">
+        <button
+          type="button"
+          onClick={() => onNavigate("stats")}
+          className="ui-button-secondary w-full sm:w-auto"
+        >
           <BarChart3 size={14} /> 查看复习统计
         </button>
       </div>
@@ -694,20 +967,32 @@ function ReviewBatchComplete({
           <CheckCircle2 size={23} strokeWidth={2} />
         </span>
         <p className="ui-section-kicker">本批复习</p>
-        <h3 className="mt-2 text-lg font-semibold tracking-tight text-[var(--ui-text)]">这一批完成了</h3>
+        <h3 className="mt-2 text-lg font-semibold tracking-tight text-[var(--ui-text)]">
+          这一批完成了
+        </h3>
         <p className="mx-auto mt-2 max-w-md text-sm leading-6 text-[var(--ui-text-muted)]">
-          还有待复习卡片，可以按自己的节奏继续下一批。
+          还有待复习题，可以按自己的节奏继续下一批。
         </p>
         <p className="mt-4 text-3xl font-semibold tracking-tight text-[var(--ui-text)]">
           {remaining}
-          <span className="ml-1 text-sm font-medium text-[var(--ui-text-subtle)]">张待复习</span>
+          <span className="ml-1 text-sm font-medium text-[var(--ui-text-subtle)]">
+            道待复习题
+          </span>
         </p>
       </div>
       <div className="ui-soft-divider flex flex-col gap-2 border-t px-5 py-4 sm:flex-row sm:justify-center">
-        <button type="button" onClick={onContinue} className="ui-button-primary w-full sm:w-auto">
+        <button
+          type="button"
+          onClick={onContinue}
+          className="ui-button-primary w-full sm:w-auto"
+        >
           <ArrowRight size={14} /> 继续下一批
         </button>
-        <button type="button" onClick={() => onNavigate("stats")} className="ui-button-secondary w-full sm:w-auto">
+        <button
+          type="button"
+          onClick={() => onNavigate("stats")}
+          className="ui-button-secondary w-full sm:w-auto"
+        >
           <BarChart3 size={14} /> 查看复习统计
         </button>
       </div>
@@ -729,10 +1014,16 @@ function ReviewMetric({
   return (
     <div className="flex min-w-0 flex-col items-center gap-1 px-2 py-4 text-center sm:px-4">
       <Icon size={14} className="text-[var(--ui-text-subtle)]" />
-      <span className="truncate text-[11px] text-[var(--ui-text-subtle)]">{label}</span>
+      <span className="truncate text-[11px] text-[var(--ui-text-subtle)]">
+        {label}
+      </span>
       <span className="text-sm font-semibold text-[var(--ui-text)]">
         {value}
-        {suffix && <span className="ml-1 text-[11px] font-normal text-[var(--ui-text-subtle)]">{suffix}</span>}
+        {suffix && (
+          <span className="ml-1 text-[11px] font-normal text-[var(--ui-text-subtle)]">
+            {suffix}
+          </span>
+        )}
       </span>
     </div>
   );
