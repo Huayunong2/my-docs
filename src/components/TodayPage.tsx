@@ -39,6 +39,7 @@ import { Tabs, TabsList, TabsTrigger } from "./ui/tabs";
 import CodeMirror from "@uiw/react-codemirror";
 import { EditorView } from "@codemirror/view";
 import { markdown } from "@codemirror/lang-markdown";
+import "./TodayPage.css";
 
 const moods = [
   { emoji: "😊", label: "开心" },
@@ -738,6 +739,7 @@ export default function TodayPage({
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.3 }}
       className="page-surface page-surface-today h-full flex flex-col relative"
+      data-zen={zen || undefined}
     >
       {zen && (
         <div className="flex items-center justify-between px-3 py-2 md:px-8 md:py-3">
@@ -749,7 +751,7 @@ export default function TodayPage({
       )}
       {/* Header */}
       <div className="px-3 pb-2 pt-3 md:px-8 md:pt-4" style={zen ? { display: "none" } : undefined}>
-        <div className="today-header-panel ui-panel px-2 py-2 sm:px-3">
+        <div className="today-header-panel px-2 py-2 sm:px-3">
           <div className="flex flex-col gap-2 xl:flex-row xl:items-center xl:justify-between">
             <div className="flex min-w-0 items-center justify-between gap-2">
               <div className="flex min-w-0 items-center gap-2">
@@ -758,7 +760,7 @@ export default function TodayPage({
               </span>
               <div className="min-w-0">
                 <h1 className="text-base font-bold leading-tight tracking-tight text-[var(--ui-text)]">
-                  每日记录
+                  今日记录
                 </h1>
                 <p className="mt-0.5 truncate text-xs text-[var(--ui-text-subtle)]">
                   {relativeDateLabel(date)} · {date}
@@ -817,7 +819,7 @@ export default function TodayPage({
               )}
             </div>
 
-              <div className="flex flex-wrap items-center gap-1.5">
+              <div className="hidden flex-wrap items-center gap-1.5 md:flex">
                 <span className="ui-chip hidden h-8 sm:inline-flex">
                   {wordCount} 字 · {charCount} 字符
                 </span>
@@ -850,7 +852,7 @@ export default function TodayPage({
             </div>
           </div>
 
-          <div className="ui-soft-divider mt-2 grid grid-cols-2 gap-2 border-t pt-2 md:flex md:flex-wrap md:items-center xl:border-t-0 xl:pt-0">
+          <div className="today-actions ui-soft-divider mt-2 grid grid-cols-2 gap-2 border-t pt-2 md:flex md:flex-wrap md:items-center xl:border-t-0 xl:pt-0">
             {returnTo && onReturn && (
               <button
                 type="button"
@@ -866,7 +868,7 @@ export default function TodayPage({
               onClick={handleManualSave}
               disabled={saveStatus === "saving"}
               className="ui-button-primary w-full md:w-auto"
-              title="手动保存"
+              title="手动保存（Ctrl / ⌘ + S）"
             >
               <Save size={14} /> 保存
             </motion.button>
@@ -935,18 +937,20 @@ export default function TodayPage({
               <Maximize2 size={14} /> 专注
             </button>
 
-            <div className="col-span-2 flex items-center gap-2 md:hidden">
+            <div className="col-span-2 flex items-center gap-2 md:ml-auto">
               <button
                 type="button"
                 onClick={() => setMetaExpanded((value) => !value)}
-                className="ui-button-secondary min-w-0 flex-1"
+                className="ui-button-ghost min-w-0 flex-1"
+                aria-expanded={metaExpanded}
+                aria-controls="today-metadata"
               >
                 <Smile size={14} />
                 心情与标签
                 {metaExpanded ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
               </button>
 
-              <div className="relative shrink-0" data-mobile-more>
+              <div className="relative shrink-0 md:hidden" data-mobile-more>
                 <button
                   type="button"
                   onClick={() => setShowMobileMore((value) => !value)}
@@ -997,7 +1001,7 @@ export default function TodayPage({
               <motion.button
                 whileTap={{ scale: 0.95 }}
                 onClick={handleDelete}
-                className="ui-button-danger hidden md:ml-auto md:inline-flex"
+                className="ui-button-ghost hidden text-[var(--ui-danger-text)] md:inline-flex"
                 title="移入回收站"
               >
                 <Trash2 size={14} /> 移入回收站
@@ -1145,13 +1149,13 @@ export default function TodayPage({
         </AnimatePresence>
       </div>
 
-      <div className={`${metaExpanded ? "block" : "hidden"} px-3 pb-3 md:block md:px-8`} style={zen ? { display: "none" } : undefined}>
+      <div id="today-metadata" className={`${metaExpanded ? "block" : "hidden"} px-3 pb-3 md:px-8`} style={zen ? { display: "none" } : undefined}>
         <div className="today-meta-panel ui-panel-muted grid gap-3 p-2.5 lg:grid-cols-[minmax(260px,0.9fr)_1.1fr]">
           <div className="min-w-0">
             <div className="ui-section-kicker mb-2 flex items-center gap-2 px-1">
               <Smile size={13} /> 心情
             </div>
-            <div className="flex gap-1.5 overflow-x-auto pb-0.5">
+            <div className="flex flex-wrap gap-1.5 pb-0.5">
               {moods.map((m) => (
                 <motion.button
                   key={m.emoji}
@@ -1199,7 +1203,8 @@ export default function TodayPage({
                   }
                 }}
                 onBlur={addTag}
-                placeholder={tags.length ? "添加标签" : "添加标签"}
+                placeholder="添加标签"
+                aria-label="添加标签"
                 className="ui-field h-8 min-w-[120px] flex-1 rounded-lg px-3 py-0 text-xs"
               />
               {quickTags.slice(0, 6).map((tag) => (
@@ -1218,12 +1223,13 @@ export default function TodayPage({
       </div>
 
       {/* Title input */}
-      <div className={`px-3 pb-2 md:px-8 ${zen ? "mx-auto w-full max-w-2xl" : ""}`}>
+      <div className={`today-title-block px-3 pb-2 md:px-8 ${zen ? "mx-auto w-full max-w-2xl" : ""}`}>
         <input
           type="text"
           value={title}
           onChange={handleTitleChange}
-          placeholder="标题..."
+          placeholder="为这一天写个标题…"
+          aria-label="今日记录标题"
           className="today-title-input w-full border-0 bg-transparent text-2xl font-semibold text-[var(--ui-text)] outline-hidden placeholder:text-[var(--ui-text-disabled)] md:text-2xl"
         />
       </div>
@@ -1242,38 +1248,37 @@ export default function TodayPage({
       </div>
 
       {/* Split editor */}
-      <div className={`grid flex-1 grid-cols-1 gap-4 px-3 pb-28 md:px-8 md:pb-6 min-h-0 ${zen ? "" : "md:grid-cols-[minmax(0,1.08fr)_minmax(360px,0.92fr)]"}`}>
-        <div className={`${mobilePane === "edit" ? "flex" : "hidden"} min-w-0 flex-col md:flex`}>
-          <div className="ui-section-kicker mb-2 flex items-center justify-between gap-3">
-            <span>编辑</span>
+      <div className={`today-workspace grid flex-1 grid-cols-1 gap-4 px-3 pb-28 md:px-8 md:pb-6 min-h-0 ${zen ? "" : "md:grid-cols-[minmax(0,1.08fr)_minmax(360px,0.92fr)]"}`}>
+        <div className={`${zen || mobilePane === "edit" ? "flex" : "hidden"} min-w-0 flex-col md:flex`}>
+          <div className="today-pane-heading ui-section-kicker mb-2 flex items-center justify-between gap-3">
+            <span className="inline-flex items-center gap-2"><PenLine size={13} /> 编辑 <span className="today-format-hint">Markdown</span></span>
             <span className="font-mono normal-case tracking-normal">{wordCount} 字</span>
           </div>
-          <div className="ui-editor-surface ui-code-editor h-[56dvh] min-h-0 w-full overflow-hidden md:h-auto md:flex-1">
+          <div className="today-writing-surface ui-editor-surface ui-code-editor h-[56dvh] min-h-0 w-full overflow-hidden md:h-auto md:flex-1">
             <CodeMirror
               value={content}
               onChange={handleContentChange}
               extensions={[markdown(), EditorView.lineWrapping]}
-              placeholder={`开始写 ${date} 的总结...`}
+              placeholder={`记录 ${date} 的进展、想法与收获…`}
+              aria-label="今日记录正文"
               theme={dark ? "dark" : "light"}
               height="100%"
               style={{ height: "100%" }}
               basicSetup={{ lineNumbers: false, foldGutter: false, highlightActiveLine: false }}
             />
           </div>
-          <div className="h-24 md:hidden" />
         </div>
 
         <div className={`${mobilePane === "preview" ? "flex" : "hidden"} min-w-0 flex-col md:flex`} style={zen ? { display: "none" } : undefined}>
-          <div className="ui-section-kicker mb-2 flex items-center justify-between gap-3">
-            <span>预览</span>
+          <div className="today-pane-heading ui-section-kicker mb-2 flex items-center justify-between gap-3">
+            <span className="inline-flex items-center gap-2"><Eye size={13} /> 实时预览</span>
             <span className="font-mono normal-case tracking-normal">{charCount} 字符</span>
           </div>
-          <div className="ui-editor-surface h-[56dvh] min-h-0 overflow-y-auto p-4 md:h-auto md:flex-1 md:p-5">
+          <div className="today-preview-surface ui-editor-surface h-[56dvh] min-h-0 overflow-y-auto p-4 md:h-auto md:flex-1 md:p-5">
             <div className="mx-auto max-w-[760px]">
               <MarkdownPreview content={content} onWikiLink={onWikiLink} onRepairContent={handleContentChange} />
             </div>
           </div>
-          <div className="h-24 md:hidden" />
         </div>
       </div>
       {dialog}
