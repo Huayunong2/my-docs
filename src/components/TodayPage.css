@@ -1,0 +1,141 @@
+.page-surface-today {
+  width: 100%;
+  max-width: none;
+  margin-inline: 0;
+  --today-radius: 16px;
+}
+
+.page-surface-today .today-header-panel {
+  padding: 8px 0 0;
+}
+
+.today-header-panel h1 {
+  font-size: 20px;
+  font-weight: 650;
+  letter-spacing: -0.04em;
+}
+
+.today-header-panel .ui-toolbar {
+  box-shadow: none;
+  background: var(--ui-surface);
+}
+
+.page-surface-today .today-actions {
+  margin-top: 18px;
+  padding-block: 12px;
+  border-top: 1px solid var(--ui-border);
+  border-bottom: 1px solid var(--ui-border);
+  gap: 8px;
+}
+
+.today-actions > button,
+.today-actions > div > button {
+  border-radius: 10px;
+}
+
+.page-surface-today .today-meta-panel {
+  padding: 16px;
+  gap: 20px;
+  border-radius: var(--today-radius);
+  box-shadow: none;
+}
+
+.page-surface-today .today-title-block {
+  padding-top: 16px;
+  padding-bottom: 20px;
+}
+
+.page-surface-today .today-title-input {
+  padding: 8px 0;
+  font-size: clamp(24px, 2.4vw, 34px);
+  line-height: 1.35;
+  letter-spacing: -0.035em;
+  border-radius: 4px;
+}
+
+.today-title-input:focus-visible {
+  outline: 2px solid var(--ui-focus);
+  outline-offset: 5px;
+}
+
+.today-title-input::placeholder {
+  color: var(--ui-text-subtle);
+  font-weight: 400;
+}
+
+.page-surface-today .today-pane-heading {
+  min-height: 32px;
+  margin-bottom: 8px;
+  color: var(--ui-text-muted);
+  font-size: 11px;
+  letter-spacing: 0.03em;
+}
+
+.today-format-hint {
+  margin-left: 4px;
+  color: var(--ui-text-subtle);
+  font-weight: 400;
+  letter-spacing: 0;
+}
+
+.page-surface-today .today-writing-surface,
+.page-surface-today .today-preview-surface {
+  border-radius: var(--today-radius);
+  box-shadow: 0 2px 8px rgb(0 0 0 / 2%);
+  min-height: 280px;
+}
+
+.today-writing-surface:focus-within {
+  border-color: var(--ui-focus);
+}
+
+.page-surface-today .today-writing-surface .cm-editor,
+.page-surface-today .today-writing-surface .cm-scroller {
+  background: var(--ui-surface);
+}
+
+.today-writing-surface .cm-content {
+  padding: 24px 20px 48px;
+  font-size: 14px;
+  line-height: 1.9;
+  caret-color: var(--ui-accent-text);
+}
+
+.today-writing-surface .cm-editor.cm-focused {
+  outline: none;
+}
+
+.page-surface-today .today-preview-surface {
+  padding: 24px 28px 48px;
+  background: var(--ui-surface-inset);
+}
+
+.page-surface-today[data-zen] .today-workspace {
+  width: 100%;
+  max-width: 880px;
+  margin-inline: auto;
+}
+
+@media (max-width: 767px) {
+  .page-surface-today .today-actions {
+    margin-top: 12px;
+  }
+
+  .page-surface-today .today-title-block {
+    padding-top: 12px;
+    padding-bottom: 12px;
+  }
+
+  .page-surface-today .today-actions button {
+    min-height: 40px;
+  }
+
+  .today-writing-surface .cm-content {
+    padding: 16px 10px 32px;
+    font-size: 16px;
+  }
+
+  .page-surface-today .today-preview-surface {
+    padding: 20px 16px 32px;
+  }
+}
