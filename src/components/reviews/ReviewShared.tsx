@@ -14,6 +14,7 @@ import {
 } from "../../lib/reviewContent";
 import MarkdownContent from "../MarkdownContent";
 import "../workspace/workspace.css";
+import { DialogPositionMenu, useDialogWindowMovement } from "../ui/dialogWindow";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -71,6 +72,7 @@ export function ReviewViewerModal({
 }) {
   const [editing, setEditing] = useState(false);
   const [metaExpanded, setMetaExpanded] = useState(false);
+  const titleRef = useRef<HTMLHeadingElement>(null);
   const [editBaseline, setEditBaseline] = useState({ title, content });
   const discardPromptRef = useRef<Promise<boolean> | null>(null);
   const sourceCount =
@@ -82,6 +84,7 @@ export function ReviewViewerModal({
     !readOnly &&
     editing &&
     (title !== editBaseline.title || content !== editBaseline.content);
+  const movement = useDialogWindowMovement(title || "复盘详情", true);
   const metaItems = [
     { label: "类型", value: review.kind === "weekly" ? "周复盘" : "月复盘" },
     { label: "周期", value: `${review.period_start} 至 ${review.period_end}` },
@@ -164,8 +167,15 @@ export function ReviewViewerModal({
       <Dialog.Portal>
         <Dialog.Overlay className="ui-overlay fixed inset-0 z-50 data-[state=open]:animate-fade-in" />
         <Dialog.Content
-          className="wb-modal rp-viewer ui-modal-surface"
+          ref={movement.dialogRef}
+          style={movement.dialogStyle}
+          data-window-movable={movement.canMove || undefined}
+          className="wb-modal rp-viewer ui-modal-surface dialog-window"
           aria-busy={saving || extractingKnowledge}
+          onOpenAutoFocus={(event) => {
+            event.preventDefault();
+            titleRef.current?.focus();
+          }}
           onPointerDownOutside={(event) => {
             if (!hasUnsavedChanges) return;
             event.preventDefault();
@@ -183,10 +193,10 @@ export function ReviewViewerModal({
           }}
         >
           {/* Header */}
-          <div className="rp-viewer-header flex items-start justify-between gap-3">
+          <div className="rp-viewer-header flex items-start justify-between gap-3 dialog-drag-handle" {...movement.handleProps}>
             <div className="min-w-0 flex-1">
               <div className="flex flex-wrap items-center gap-2">
-                <Dialog.Title className="break-words text-base font-bold text-[var(--ui-text)]">
+                <Dialog.Title ref={titleRef} tabIndex={-1} className="break-words text-base font-bold text-[var(--ui-text)]">
                   {title || "复盘详情"}
                 </Dialog.Title>
                 <ReviewStatusPill status={review.status} />
@@ -215,17 +225,20 @@ export function ReviewViewerModal({
                 </span>
               </Dialog.Description>
             </div>
-            <Dialog.Close asChild>
-              <button
-                type="button"
-                disabled={saving}
-                className="ui-icon-button h-11 w-11 sm:h-8 sm:w-8"
-                aria-label="关闭复盘详情"
-                title="关闭复盘详情"
-              >
-                <X size={15} />
-              </button>
-            </Dialog.Close>
+            <div className="dialog-window-actions">
+              {movement.canMove && <DialogPositionMenu onMove={movement.moveBy} onCenter={movement.center} />}
+              <Dialog.Close asChild>
+                <button
+                  type="button"
+                  disabled={saving}
+                  className="ui-icon-button h-11 w-11 sm:h-8 sm:w-8"
+                  aria-label="关闭复盘详情"
+                  title="关闭复盘详情"
+                >
+                  <X size={15} />
+                </button>
+              </Dialog.Close>
+            </div>
           </div>
 
           <details

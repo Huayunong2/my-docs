@@ -215,7 +215,7 @@ export default function AIPanel({ onDirtyChange }: { onDirtyChange?: (dirty: boo
     <div className="grid w-full max-w-4xl gap-4">
       <Card>
         <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-          <SectionTitle desc="填写 API 地址、Key 和默认模型即可开始使用；只有需要按任务区分模型时才需要展开高级路由。">AI 连接</SectionTitle>
+          <SectionTitle desc="配置模型服务；需要按任务分流时再展开高级路由。">模型服务连接</SectionTitle>
           {config && (
             <span className={`inline-flex w-fit items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px] font-semibold ${config.api_key_configured ? "ui-status-success" : "ui-status-warning"}`}>
               {config.api_key_configured ? <CheckCircle2 size={12} /> : <AlertTriangle size={12} />}
@@ -248,7 +248,7 @@ export default function AIPanel({ onDirtyChange }: { onDirtyChange?: (dirty: boo
               <ConfigField
                 id="ai-base-url"
                 label="API 地址"
-                description="填写服务商提供的兼容接口根地址，例如 https://api.openai.com/v1。"
+                description="服务商提供的兼容接口根地址。"
                 className="sm:col-span-2"
               >
                 <Input
@@ -267,7 +267,7 @@ export default function AIPanel({ onDirtyChange }: { onDirtyChange?: (dirty: boo
               <ConfigField
                 id="ai-model"
                 label="默认模型 ID"
-                description="填写服务商提供的模型名称，例如 gpt-4o-mini 或 deepseek-chat；已保存高级路由的任务会以对应模型档案为准。"
+                description="已设置高级路由的任务会使用对应模型档案。"
               >
                 <Input
                   id="ai-model"
@@ -352,7 +352,7 @@ export default function AIPanel({ onDirtyChange }: { onDirtyChange?: (dirty: boo
       </Card>
 
       <details
-        className="group"
+        className="settings-disclosure-card group"
         open={routingOpen}
         onToggle={(event) => {
           const open = event.currentTarget.open;
@@ -360,7 +360,7 @@ export default function AIPanel({ onDirtyChange }: { onDirtyChange?: (dirty: boo
           if (open) setRoutingMounted(true);
         }}
       >
-        <summary className="ui-panel-muted flex cursor-pointer list-none items-center justify-between gap-3 rounded-xl p-4 outline-hidden focus-visible:ring-2 focus-visible:ring-[var(--ui-focus)]/40 sm:p-5">
+        <summary className="settings-disclosure-summary flex cursor-pointer list-none items-center justify-between gap-3 outline-hidden focus-visible:ring-2 focus-visible:ring-[var(--ui-focus)]/40">
           <span className="min-w-0">
             <span className="block text-sm font-semibold text-[var(--ui-text)]">高级路由与模型档案</span>
             <span className="mt-1 block text-xs leading-5 text-[var(--ui-text-muted)]">仅在需要为每日总结、知识条目提取或周期回顾使用不同模型时展开；否则无需设置。</span>
@@ -368,7 +368,7 @@ export default function AIPanel({ onDirtyChange }: { onDirtyChange?: (dirty: boo
           <ChevronDown size={17} className={`shrink-0 text-[var(--ui-text-subtle)] transition-transform ${routingOpen ? "rotate-180" : ""}`} aria-hidden="true" />
         </summary>
         {routingMounted && (
-          <div className="mt-3">
+          <div className="settings-disclosure-body">
             <AIRoutingPanel
               onSaved={() => void loadHealth()}
               onDirtyChange={setRoutingDirty}
@@ -379,7 +379,7 @@ export default function AIPanel({ onDirtyChange }: { onDirtyChange?: (dirty: boo
 
       <Card>
         <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-          <SectionTitle desc="这里显示服务端已保存的全局默认配置；单项任务可能通过高级路由使用另一套模型。">默认配置状态</SectionTitle>
+          <SectionTitle desc="任务路由可能会使用单独配置的模型档案。">默认配置状态</SectionTitle>
           <SecondaryBtn onClick={() => void loadHealth()} disabled={healthLoading || configSaving} aria-busy={healthLoading || configSaving} className="shrink-0 px-3 sm:w-auto">
             <RefreshCw size={14} className={healthLoading ? "animate-spin" : ""} /> {healthLoading ? "刷新中…" : "刷新状态"}
           </SecondaryBtn>
@@ -413,8 +413,8 @@ export default function AIPanel({ onDirtyChange }: { onDirtyChange?: (dirty: boo
       </Card>
 
       <Card>
-        <SectionTitle desc="测试只使用服务器上已保存的 AI 配置，并调用每日总结路由；不要粘贴密码、令牌、客户资料或其他敏感内容。">测试 AI 连接</SectionTitle>
-        <p id="ai-test-description" className="text-xs leading-5 text-[var(--ui-text-muted)]">默认合成样例只验证每日总结路由和服务端代理；知识条目提取、周复盘和月复盘路由需要分别配置后再验证。</p>
+        <SectionTitle desc="测试使用服务器上已保存的 AI 配置；请勿输入密码、令牌或客户资料。">测试 AI 连接</SectionTitle>
+        <p id="ai-test-description" className="text-xs leading-5 text-[var(--ui-text-muted)]">合成样例只验证每日总结路由；其他任务需分别配置路由。</p>
         {overallDirty && <p className="mt-2 text-xs text-[var(--ui-warning-text)]" role="status">当前有未保存的 AI 设置，请先保存后再测试，避免测试到旧配置。</p>}
         <TextArea
           value={testContent}

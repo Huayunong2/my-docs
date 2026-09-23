@@ -839,18 +839,12 @@ function HistoryEmptyState({
     : isMonth
       ? "这个月还没有记录"
       : "还没有每日记录";
-  const description = isTrash
-    ? "之后移入回收站的记录会显示在这里。"
-    : isMonth
-      ? "选择其他月份，或写下今天的记录。"
-      : "从今天开始，写下第一条每日记录吧。";
   return (
     <div className="history-empty-state">
       <span className="history-empty-mark" aria-hidden="true">
         <Icon size={20} />
       </span>
       <h2>{title}</h2>
-      <p>{description}</p>
       {!isTrash && (
         <button
           type="button"

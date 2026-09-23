@@ -199,7 +199,7 @@ export default function ReviewItemsPanel({
             <span className="ui-chip h-auto px-2 py-0.5 text-[11px]">{items.length} 道</span>
           </div>
           <p className="mt-1 max-w-2xl text-xs leading-5 text-[var(--ui-text-subtle)]">
-            知识正文负责完整记录，复习题负责主动回忆。一条知识可以拆成多道短题；正文修改后，相关题目会标记为过时。
+            复习题围绕知识条目正文设计；正文更新后，相关题目会标记为过时。
           </p>
         </div>
         <button type="button" onClick={startCreate} className="ui-button-secondary h-11 min-h-11 shrink-0 px-2.5 text-xs md:h-9 md:min-h-9">
@@ -272,7 +272,6 @@ export default function ReviewItemsPanel({
           <div className="mb-3 flex items-center justify-between gap-2">
             <div>
               <div className="text-xs font-bold text-[var(--ui-text)]">{editingId ? "编辑复习题" : "添加复习题"}</div>
-              <p className="mt-1 text-[11px] text-[var(--ui-text-subtle)]">问题和答案分别是主动回忆的两面，不要把整篇正文复制进答案。</p>
             </div>
             <button type="button" onClick={cancelEdit} className="ui-icon-button h-11 w-11 md:h-9 md:w-9" title="取消" aria-label="取消编辑复习题">
               <X size={14} />

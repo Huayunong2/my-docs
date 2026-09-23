@@ -105,6 +105,11 @@
   color-scheme: light only;
   --ui-mobile-nav-height: 56px;
   --ui-mobile-nav-total-height: calc(var(--ui-mobile-nav-height) + env(safe-area-inset-bottom, 0px));
+  --ui-motion-press: 100ms;
+  --ui-motion-fast: 140ms;
+  --ui-motion-standard: 180ms;
+  --ui-motion-enter: 220ms;
+  --ui-motion-ease: cubic-bezier(0.2, 0.7, 0.2, 1);
   --ui-canvas: #eef2f6;
   --ui-surface: rgba(255, 255, 255, 0.98);
   --ui-surface-subtle: #f8fafc;
@@ -112,7 +117,6 @@
   --ui-surface-raised: #ffffff;
   --ui-surface-inset: #e9eef5;
   --ui-surface-hover: #f1f5f9;
-  --ui-surface-selected: var(--color-accent-light);
   --ui-surface-selected: color-mix(in srgb, var(--color-accent) 10%, #ffffff);
   --ui-border: rgba(15, 23, 42, 0.13);
   --ui-border-strong: rgba(15, 23, 42, 0.22);
@@ -282,7 +286,7 @@
   .card-hover:hover { @apply -translate-y-0.5 shadow-md; }
 
   /* ── Smooth page transitions ── */
-  .page-enter { animation: pageIn 0.25s ease-out; }
+  .page-enter { animation: pageIn var(--ui-motion-enter) var(--ui-motion-ease); }
   @keyframes pageIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
 
   /* ── Selection ── */

@@ -1,0 +1,90 @@
+.dialog-window-actions { display: flex; align-items: center; gap: 8px; flex: 0 0 auto; }
+.dialog-position-menu { min-width: 176px; }
+
+/* Center reading dialogs on roomy viewports; compact screens keep their sheet layout. */
+@media (min-width: 768px) {
+  .ft-ai-dialog.dialog-window,
+  .rp-viewer.dialog-window {
+    inset: auto;
+    top: 50%;
+    left: 50%;
+    right: auto;
+    bottom: auto;
+    margin: 0;
+    transform: translate(-50%, -50%);
+  }
+
+  .ft-ai-dialog.dialog-window {
+    width: min(960px, calc(100vw - 48px));
+    height: min(88dvh, 860px);
+    max-height: calc(100dvh - 32px);
+  }
+
+  .rp-viewer.dialog-window {
+    width: min(900px, calc(100vw - 48px));
+    height: min(88dvh, 860px);
+    max-height: calc(100dvh - 32px);
+  }
+}
+
+@media (min-width: 840px) and (min-height: 520px) {
+  .dialog-window[data-window-movable="true"] {
+    translate: var(--dialog-window-x, 0px) var(--dialog-window-y, 0px);
+    will-change: translate;
+  }
+
+  .dialog-drag-handle {
+    cursor: grab;
+    touch-action: none;
+    user-select: none;
+    -webkit-user-select: none;
+  }
+
+  .dialog-drag-handle[data-dragging="true"] { cursor: grabbing; }
+
+  .dialog-position-trigger {
+    display: inline-flex;
+    width: 36px;
+    height: 36px;
+    min-height: 36px;
+    align-items: center;
+    justify-content: center;
+    border-radius: 8px;
+  }
+
+  .dialog-position-menu { min-width: 176px; }
+  .rp-viewer-header-actions { display: flex; align-items: center; gap: 8px; }
+}
+
+@media (min-width: 768px) and (max-width: 839px) {
+  .dialog-drag-handle { cursor: auto; touch-action: auto; }
+}
+
+@media (max-height: 519px) and (min-width: 768px) {
+  .ft-ai-dialog.dialog-window,
+  .rp-viewer.dialog-window {
+    inset: 12px;
+    width: auto;
+    height: auto;
+    max-height: none;
+    transform: none;
+  }
+
+  .dialog-drag-handle { cursor: auto; touch-action: auto; }
+}
+
+@media (max-width: 767px) {
+  .ft-ai-dialog.dialog-window,
+  .rp-viewer.dialog-window {
+    inset: 0;
+    width: 100%;
+    height: 100dvh;
+    max-height: none;
+    border-radius: 0;
+    transform: none;
+    translate: none;
+  }
+
+  .dialog-drag-handle { cursor: auto; touch-action: auto; }
+  .dialog-position-trigger { display: none; }
+}

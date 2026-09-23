@@ -29,11 +29,6 @@ export default function DataSafetyPanel({
           </TabsTrigger>
         </TabsList>
       </Tabs>
-      <p className="wb-muted st-data-note">
-        {view === "backup"
-          ? "为当前数据创建保护点；恢复操作仍需核对备份并确认。"
-          : "选择要迁移的内容，先检查导入预览，再决定是否写入。"}
-      </p>
       <div hidden={view !== "backup"}>
         <BackupPanel refreshToken={backupRefreshToken} />
       </div>
