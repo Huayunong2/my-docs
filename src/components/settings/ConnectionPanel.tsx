@@ -186,7 +186,7 @@ export default function ConnectionPanel({
     <div className="settings-panel-stack flex w-full flex-col gap-5">
       <Card className="settings-connection-card">
         <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-          <SectionTitle desc="输入服务端地址和令牌，测试成功后才会保存到当前设备。修改表单不会立即改变当前连接。">连接服务</SectionTitle>
+          <SectionTitle desc="输入服务端地址和令牌，测试成功后才会保存到当前设备。修改表单不会立即改变当前连接。">服务端连接</SectionTitle>
           <span className={`inline-flex w-fit items-center rounded-full px-2.5 py-1 text-[11px] font-semibold ${isDirty || isUnconfiguredDesktop || Boolean(urlWarning) ? "ui-status-warning" : "ui-status-muted"}`}>
             {connectionStatusLabel}
           </span>
@@ -361,17 +361,17 @@ export default function ConnectionPanel({
         </details>
       </Card>
 
-      <details className="group">
-        <summary className="ui-panel-muted flex cursor-pointer list-none items-center justify-between gap-3 rounded-xl p-4 outline-hidden focus-visible:ring-2 focus-visible:ring-[var(--ui-focus)]/40 sm:p-5">
+      <details className="settings-disclosure-card group">
+        <summary className="settings-disclosure-summary flex cursor-pointer list-none items-center justify-between gap-3 outline-hidden focus-visible:ring-2 focus-visible:ring-[var(--ui-focus)]/40">
           <span className="min-w-0">
             <span className="block text-sm font-semibold text-[var(--ui-text)]">高级与本机设置</span>
             <span className="mt-1 block text-xs leading-5 text-[var(--ui-text-muted)]">本地 AI 测试入口、网络安全提示和本机连接配置。</span>
           </span>
           <ChevronDown size={17} className="shrink-0 text-[var(--ui-text-subtle)] transition-transform group-open:rotate-180" aria-hidden="true" />
         </summary>
-        <div className="mt-3 grid gap-4">
+        <div className="settings-disclosure-body">
           {localAiLink && (
-            <Card>
+            <section className="settings-disclosure-section">
               <SectionTitle desc="只在 localhost、127.0.0.1 或 ::1 上启用的测试入口；适合交给具备浏览器能力的 AI 查看完整页面。">本地 AI 访问（测试）</SectionTitle>
               <p className="text-sm leading-6 text-[var(--ui-text-muted)]">
                 该链接使用公开的测试令牌，不是生产访问令牌。令牌只在当前浏览器会话中使用，页面载入后会从地址栏移除；服务端还会将此令牌限制为 loopback 上的只读请求。
@@ -380,10 +380,10 @@ export default function ConnectionPanel({
                 <Input readOnly value={localAiLink} aria-label="本地 AI 访问链接" className="min-w-0 break-all font-mono text-xs" />
                 <SecondaryBtn onClick={copyLocalAiLink}><Link2 size={15} /> 复制本地链接</SecondaryBtn>
               </div>
-            </Card>
+            </section>
           )}
 
-          <Card>
+          <section className="settings-disclosure-section">
             <SectionTitle>服务端与网络安全</SectionTitle>
             <StatusBox
               tone={urlIsInvalid ? "bad" : urlWarning ? "warn" : "neutral"}
@@ -394,14 +394,14 @@ export default function ConnectionPanel({
               <li>手机丢失或令牌泄露后，用 FORCE_NEW_TOKEN=1 重新部署并换令牌。</li>
               <li>云服务器安全组只放行必要端口。</li>
             </ul>
-          </Card>
+          </section>
 
-          <Card>
+          <section className="settings-disclosure-section">
             <SectionTitle desc="只影响这台设备，不会删除服务器上的今日记录、知识条目或复习历史。">本机连接配置</SectionTitle>
             <div className="flex flex-col gap-2 sm:flex-row">
               <DangerBtn onClick={clearLocalConfig}><Trash2 size={15} /> 清除本机配置</DangerBtn>
             </div>
-          </Card>
+          </section>
         </div>
       </details>
       {dialog}

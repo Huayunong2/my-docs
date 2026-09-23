@@ -19,6 +19,7 @@ import { copyText } from "../lib/clipboard";
 import { toast } from "sonner";
 import MarkdownContent from "./MarkdownContent";
 import { Tabs, TabsList, TabsTrigger } from "./ui/tabs";
+import { DialogPositionMenu, useDialogWindowMovement } from "./ui/dialogWindow";
 import {
   matchesAiSource,
   validKnowledgeCandidate,
@@ -53,6 +54,7 @@ export default function TodayAIPanel(p: Props) {
   });
   const [imported, setImported] = useState<number | null>(null);
   const [skipped, setSkipped] = useState(0);
+  const titleRef = useRef<HTMLHeadingElement>(null);
   const lock = useRef(false);
   const mounted = useRef(true);
   const propsRef = useRef(p);
@@ -173,6 +175,7 @@ export default function TodayAIPanel(p: Props) {
     );
   const item = candidates[active];
   const mode = p.mode || "summary";
+  const movement = useDialogWindowMovement(mode === "summary" ? "AI 总结" : "知识提取", p.mode !== null);
   const copy = async () => {
     try {
       await copyText(summary);
@@ -191,7 +194,14 @@ export default function TodayAIPanel(p: Props) {
       <Dialog.Portal>
         <Dialog.Overlay className="ui-overlay fixed inset-0 z-[70]" />
         <Dialog.Content
-          className="ft-ai-dialog"
+          ref={movement.dialogRef}
+          style={movement.dialogStyle}
+          data-window-movable={movement.canMove || undefined}
+          className="ft-ai-dialog dialog-window"
+          onOpenAutoFocus={(event) => {
+            event.preventDefault();
+            titleRef.current?.focus();
+          }}
           onCloseAutoFocus={(event) => {
             event.preventDefault();
             p.returnFocusRef.current?.focus();
@@ -200,9 +210,9 @@ export default function TodayAIPanel(p: Props) {
             if (saving) event.preventDefault();
           }}
         >
-          <header>
+          <header className="dialog-drag-handle" {...movement.handleProps}>
             <div>
-              <Dialog.Title>
+              <Dialog.Title ref={titleRef} tabIndex={-1}>
                 {mode === "summary" ? "AI 总结" : "知识提取"}
               </Dialog.Title>
               <Dialog.Description>
@@ -210,15 +220,18 @@ export default function TodayAIPanel(p: Props) {
                 {p.title ? ` · ${p.title}` : ""}
               </Dialog.Description>
             </div>
-            <Dialog.Close asChild>
-              <button
-                className="shell-icon"
-                disabled={saving}
-                aria-label="关闭 AI 结果"
-              >
-                <X size={19} />
-              </button>
-            </Dialog.Close>
+            <div className="dialog-window-actions">
+              {movement.canMove && <DialogPositionMenu onMove={movement.moveBy} onCenter={movement.center} />}
+              <Dialog.Close asChild>
+                <button
+                  className="shell-icon"
+                  disabled={saving}
+                  aria-label="关闭 AI 结果"
+                >
+                  <X size={19} />
+                </button>
+              </Dialog.Close>
+            </div>
           </header>
           <Tabs
             value={mode}

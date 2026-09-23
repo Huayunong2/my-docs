@@ -101,7 +101,7 @@ export default function ReviewSettingsPanel({ onDirtyChange }: { onDirtyChange?:
       <Card>
         <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
           <SectionTitle desc="设置只影响之后生成的复习队列，不会修改已记录的复习历史。">
-            复习计划
+            每日复习节奏
           </SectionTitle>
           <span className="ui-status-accent inline-flex w-fit items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px] font-semibold">
             <Check size={12} /> FSRS · 目标保持率 90%
@@ -129,7 +129,7 @@ export default function ReviewSettingsPanel({ onDirtyChange }: { onDirtyChange?:
                 max={100}
                 suffix="张"
                 disabled={mutation.isPending}
-                description="只限制当天首次加入队列的新题；已经到期的复习题不受此上限影响。未使用额度不会结转。"
+                description="只限制每天首次加入的新题；到期题不受影响，额度不结转。"
               />
               <SettingField
                 id="review-session-limit"
@@ -140,7 +140,7 @@ export default function ReviewSettingsPanel({ onDirtyChange }: { onDirtyChange?:
                 max={100}
                 suffix="张"
                 disabled={mutation.isPending}
-                description="每次进入复习页先加载的数量；完成后可以继续加载，不代表当天没有更多到期复习题。"
+                description="每次先加载的数量，完成后可继续加载；不限制当天总到期题数。"
               />
             </div>
 
@@ -148,7 +148,6 @@ export default function ReviewSettingsPanel({ onDirtyChange }: { onDirtyChange?:
               <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
                 <div>
                   <p className="text-xs font-semibold text-[var(--ui-text)]">当前队列（按已保存设置）</p>
-                  <p className="mt-1 text-xs leading-5 text-[var(--ui-text-subtle)]">显示今天的到期题和可加入的新题；保存上方修改后，复习页会按新设置加载。</p>
                 </div>
                 <SecondaryBtn type="button" onClick={() => void duePreviewQuery.refetch()} disabled={duePreviewQuery.isFetching || mutation.isPending} className="shrink-0 sm:w-auto">
                   <RotateCcw size={14} className={duePreviewQuery.isFetching ? "animate-spin" : ""} /> 刷新队列
@@ -170,7 +169,7 @@ export default function ReviewSettingsPanel({ onDirtyChange }: { onDirtyChange?:
             <div className="ui-panel-muted mt-4 p-3.5">
               <p className="text-xs font-semibold text-[var(--ui-text)]">关于 FSRS</p>
               <p className="mt-1 text-xs leading-5 text-[var(--ui-text-muted)]">
-                当前使用 FSRS 调度，期望保持率为 90%。系统会根据你的评分记录计算间隔；原始参数暂由系统维护，避免手动调整造成不稳定的复习负担。
+                FSRS 根据评分调整复习间隔；核心参数由系统维护，以保持复习节奏稳定。
               </p>
             </div>
 

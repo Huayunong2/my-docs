@@ -691,7 +691,7 @@ try {
     "settings search locates category without losing form state",
     async () => {
       await page.locator("#server-url").fill("http://127.0.0.1:5173/api");
-      await page.getByRole("searchbox", { name: "查找设置" }).fill("模型");
+      await page.getByRole("searchbox", { name: "搜索设置分类" }).fill("模型");
       await page.locator(".st-search-results button").click();
       await page.locator("#ai-model").waitFor();
       await page.getByRole("tab", { name: /连接服务/ }).click();

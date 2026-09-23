@@ -13,7 +13,7 @@ import {
 } from "lucide-react";
 import * as api from "../../lib/api";
 import { useConfirmDialog } from "../ui/Feedback";
-import { Card, Input, PrimaryBtn, SecondaryBtn, SectionTitle, StatusBox, type Tone } from "./shared";
+import { Input, PrimaryBtn, SecondaryBtn, SectionTitle, StatusBox, type Tone } from "./shared";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../ui/select";
 
 type ProfileDraft = {
@@ -300,7 +300,7 @@ export default function AIRoutingPanel({
   };
 
   return (
-    <Card>
+    <section className="settings-disclosure-section">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
         <div className="flex min-w-0 items-start gap-3">
           <span className="ui-status-accent mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg">
@@ -444,7 +444,7 @@ export default function AIRoutingPanel({
         </>
       ) : null}
       {dialog}
-    </Card>
+    </section>
   );
 }
 

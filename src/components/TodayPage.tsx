@@ -276,7 +276,11 @@ export default function TodayPage({
   const [saveError, setSaveError] = useState("");
   const [showMobileMore, setShowMobileMore] = useState(false);
   const [metaExpanded, setMetaExpanded] = useState(false);
-  const [mobilePane, setMobilePane] = useState<MobilePane>("edit");
+  const [mobilePane, setMobilePane] = useState<MobilePane>(() =>
+    typeof window !== "undefined" && window.matchMedia?.("(max-width: 767px)").matches
+      ? "preview"
+      : "edit",
+  );
   const [tagSuggestions, setTagSuggestions] = useState<string[]>(
     DEFAULT_TAG_SUGGESTIONS,
   );

@@ -688,6 +688,33 @@ async function shot(name) {
   await page.screenshot({ path: `${out}/${name}.png` });
 }
 const mutations = (path) => writes.filter((item) => item.path === path).length;
+async function assertCentered(selector) {
+  const rect = await page.locator(selector).boundingBox();
+  const viewport = page.viewportSize();
+  assert(rect && viewport);
+  assert(Math.abs(rect.x + rect.width / 2 - viewport.width / 2) < 2, JSON.stringify(rect));
+  assert(Math.abs(rect.y + rect.height / 2 - viewport.height / 2) < 2, JSON.stringify(rect));
+}
+async function assertInsideViewport(selector) {
+  const rect = await page.locator(selector).boundingBox();
+  const viewport = page.viewportSize();
+  assert(rect && viewport);
+  assert(rect.x >= 15 && rect.y >= 15, JSON.stringify(rect));
+  assert(rect.x + rect.width <= viewport.width - 15, JSON.stringify(rect));
+  assert(rect.y + rect.height <= viewport.height - 15, JSON.stringify(rect));
+}
+async function dragDialog(selector, dx, dy) {
+  const before = await page.locator(selector).boundingBox();
+  const handle = await page.locator(`${selector} .dialog-drag-handle`).boundingBox();
+  assert(before && handle);
+  const x = handle.x + handle.width / 2;
+  const y = handle.y + Math.min(24, handle.height / 2);
+  await page.mouse.move(x, y);
+  await page.mouse.down();
+  await page.mouse.move(x + dx, y + dy, { steps: 5 });
+  await page.mouse.up();
+  return { before, after: await page.locator(selector).boundingBox(), handle: `${selector} .dialog-drag-handle` };
+}
 try {
   for (const [path, selector, name] of [
     ["/stats?date=2026-09", ".ft-calendar", "stats"],
@@ -749,6 +776,37 @@ try {
       const count = mutations("/ai/summary");
       await page.getByRole("button", { name: "AI 总结", exact: true }).click();
       await page.locator(".ft-ai-dialog").waitFor();
+      await assertCentered(".ft-ai-dialog");
+      const dragged = await dragDialog(".ft-ai-dialog", 96, 64);
+      assert(dragged.after && dragged.after.x > dragged.before.x + 50);
+      await assertInsideViewport(".ft-ai-dialog");
+      const edgeHandle = await page.locator(dragged.handle).boundingBox();
+      assert(edgeHandle);
+      await page.mouse.move(edgeHandle.x + edgeHandle.width / 2, edgeHandle.y + 20);
+      await page.mouse.down();
+      await page.mouse.move(0, 0, { steps: 5 });
+      await page.mouse.up();
+      await assertInsideViewport(".ft-ai-dialog");
+      await page.getByRole("button", { name: "移动窗口" }).click();
+      await page.getByRole("menuitem", { name: "右移" }).click();
+      const menuMoved = await page.locator(".ft-ai-dialog").boundingBox();
+      assert(menuMoved && menuMoved.x > 15);
+      const dragHandle = page.locator(".ft-ai-dialog > header");
+      await dragHandle.focus();
+      const beforeKeyboardMove = await page.locator(".ft-ai-dialog").boundingBox();
+      await page.keyboard.press("ArrowRight");
+      const afterKeyboardMove = await page.locator(".ft-ai-dialog").boundingBox();
+      assert(beforeKeyboardMove && afterKeyboardMove && afterKeyboardMove.x > beforeKeyboardMove.x);
+      await page.keyboard.press("Home");
+      await assertCentered(".ft-ai-dialog");
+      await page.setViewportSize({ width: 390, height: 844 });
+      await page.waitForTimeout(80);
+      const mobileAi = await page.locator(".ft-ai-dialog").boundingBox();
+      assert(mobileAi && mobileAi.x === 0 && mobileAi.y === 0 && mobileAi.width === 390 && mobileAi.height === 844);
+      assert.equal(await page.getByRole("button", { name: "移动窗口" }).count(), 0);
+      await page.setViewportSize({ width: 1600, height: 1000 });
+      await page.waitForTimeout(80);
+      await assertCentered(".ft-ai-dialog");
       assert.equal(mutations("/ai/summary"), count);
       await page.getByRole("button", { name: "生成总结", exact: true }).click();
       await page.locator(".ft-ai-summary").waitFor();
@@ -756,6 +814,7 @@ try {
       await shot("today-ai-summary");
       await page.getByRole("button", { name: "关闭 AI 结果" }).click();
       await page.getByRole("button", { name: "AI 总结", exact: true }).click();
+      await assertCentered(".ft-ai-dialog");
       assert.equal(mutations("/ai/summary"), count + 1);
       await page.getByRole("button", { name: "关闭 AI 结果" }).click();
     },
@@ -882,6 +941,21 @@ try {
       await shot("search-review-results");
       await page.locator(".ft-result-main").first().click();
       await page.getByRole("dialog").waitFor();
+      await assertCentered(".rp-viewer");
+      const recapDrag = await dragDialog(".rp-viewer", -84, 48);
+      assert(recapDrag.after && recapDrag.after.x < recapDrag.before.x - 40);
+      await assertInsideViewport(".rp-viewer");
+      await page.getByRole("button", { name: "移动窗口" }).click();
+      await page.getByRole("menuitem", { name: "居中" }).click();
+      await assertCentered(".rp-viewer");
+      await page.setViewportSize({ width: 390, height: 844 });
+      await page.waitForTimeout(80);
+      const mobileRecap = await page.locator(".rp-viewer").boundingBox();
+      assert(mobileRecap && mobileRecap.x === 0 && mobileRecap.y === 0 && mobileRecap.width === 390 && mobileRecap.height === 844);
+      assert.equal(await page.getByRole("button", { name: "移动窗口" }).count(), 0);
+      await page.setViewportSize({ width: 1600, height: 1000 });
+      await page.waitForTimeout(80);
+      await assertCentered(".rp-viewer");
       assert.equal(
         await page.getByRole("button", { name: "编辑", exact: true }).count(),
         0,
@@ -898,7 +972,11 @@ try {
       await page.locator(".ft-result").first().waitFor();
       assert(new URL(page.url()).searchParams.get("q") === "所有权");
       await page.getByRole("button", { name: "清除搜索", exact: true }).click();
-      await page.locator(".ft-search-empty").waitFor();
+      await page.waitForFunction(() => {
+        const input = document.querySelector(".ft-search-input input");
+        return input instanceof HTMLInputElement && input.value === "" && document.querySelectorAll(".ft-result").length === 0;
+      });
+      assert.equal(await page.locator(".ft-search-empty").count(), 0);
       assert.equal(await page.locator(".ft-result").count(), 0);
       assert.equal(new URL(page.url()).searchParams.get("q"), null);
     },
@@ -972,7 +1050,8 @@ try {
     await go("/stats?date=2026-09");
     await page.locator(".ft-calendar-grid").waitFor();
     assert.equal(await page.locator(".ft-metric").count(), 4);
-    assert.equal(await page.locator("[data-calendar-cell]").count(), 42);
+    // September 2026 needs five complete calendar weeks; StatsPage now sizes the grid to that minimum.
+    assert.equal(await page.locator("[data-calendar-cell]").count(), 35);
     assert.equal(
       await page
         .getByRole("button", { name: "AI 周复盘", exact: true })

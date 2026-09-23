@@ -248,6 +248,7 @@ export default function StatsPage({
   const [reviewStats, setReviewStats] =
     useState<api.ReviewStatsResponse | null>(null);
   const [heatmap, setHeatmap] = useState<api.DailyReviewCount[]>([]);
+  const [heatmapLoaded, setHeatmapLoaded] = useState(false);
   const [weekReview, setWeekReview] = useState<WeekReview | null>(null);
   const [weeklyReviews, setWeeklyReviews] = useState<Review[]>([]);
   const [monthlyReviews, setMonthlyReviews] = useState<Review[]>([]);
@@ -304,6 +305,7 @@ export default function StatsPage({
   const completion = bounds.daysInMonth
     ? Math.round((coveredDays / bounds.daysInMonth) * 100)
     : 0;
+  const completionPercent = Math.min(100, Math.max(0, completion));
   const coreLoading =
     (loading && !overview) || (monthDataChanged && Boolean(overview));
   const coreError = !overview && !loading && Boolean(error);
@@ -327,9 +329,21 @@ export default function StatsPage({
   );
   const knowledgeSummary = knowledgeSummaryQuery.data;
   const missingDays = weekReady ? weekReview?.missing_days || [] : [];
+  const hasReviewActivity = reviewStats?.daily.some((day) => day.count > 0) ?? false;
+  const hasUpcomingReviews =
+    reviewStats?.upcoming.some((day) => day.count > 0) ?? false;
+  const hasMemoryReviewData = Boolean(
+    reviewStats &&
+      (reviewStats.total_reviews > 0 ||
+        reviewStats.streak_days > 0 ||
+        reviewStats.reviewed_today > 0 ||
+        hasReviewActivity ||
+        hasUpcomingReviews),
+  );
   const calendarCells = useMemo(() => {
     const leading = Array.from({ length: bounds.offset }, () => null);
-    const trailingCount = Math.max(0, 42 - leading.length - days.length);
+    const totalCells = Math.ceil((leading.length + days.length) / 7) * 7;
+    const trailingCount = totalCells - leading.length - days.length;
     return [
       ...leading,
       ...days,
@@ -527,11 +541,14 @@ export default function StatsPage({
     api
       .getReviewHeatmap(365)
       .then((data) => {
-        if (mountedRef.current) setHeatmap(data);
+        if (!mountedRef.current) return;
+        setHeatmap(data);
+        setHeatmapLoaded(true);
       })
       .catch((e) => {
         if (!mountedRef.current) return;
         setHeatmap([]);
+        setHeatmapLoaded(true);
         setHeatmapError(api.getErrorMessage(e) || "复习热力图暂时不可用");
       });
   }, []);
@@ -574,7 +591,6 @@ export default function StatsPage({
       <WorkspaceHeader
         icon={BarChart3}
         title="统计"
-        description=""
         actions={
           <div className="ft-month-nav">
             <button
@@ -601,10 +617,18 @@ export default function StatsPage({
       <div className="ft-stats-toolbar">
         <Tabs value={statsTab} onValueChange={setStatsTab} className="ft-tabs">
           <TabsList aria-label="统计分类">
-            <TabsTrigger value="records">记录概览</TabsTrigger>
-            <TabsTrigger value="memory">记忆复习</TabsTrigger>
-            <TabsTrigger value="knowledge">知识整理</TabsTrigger>
-            <TabsTrigger value="generate">生成复盘</TabsTrigger>
+            <TabsTrigger value="records">
+              <CalendarRange size={15} aria-hidden="true" />记录概览
+            </TabsTrigger>
+            <TabsTrigger value="memory">
+              <Brain size={15} aria-hidden="true" />记忆复习
+            </TabsTrigger>
+            <TabsTrigger value="knowledge">
+              <BookMarked size={15} aria-hidden="true" />知识整理
+            </TabsTrigger>
+            <TabsTrigger value="generate">
+              <Sparkles size={15} aria-hidden="true" />生成复盘
+            </TabsTrigger>
           </TabsList>
         </Tabs>
       </div>
@@ -630,45 +654,111 @@ export default function StatsPage({
             </div>
           )}
           {statsTab === "records" && (
-            <>
+            <section className="ft-stats-view ft-stats-records">
+              <div className="ft-monthly-story">
+                <div className="ft-monthly-story-copy">
+                  <h2>本月概览</h2>
+                  <div className="ft-monthly-story-actions">
+                    <button
+                      className="ui-button-primary"
+                      onClick={() => setStatsTab("generate")}
+                    >
+                      <Sparkles size={15} />
+                      生成周期复盘
+                    </button>
+                    <button
+                      className="ui-button-ghost"
+                      onClick={() => onNavigate("reviews")}
+                    >
+                      浏览复盘库
+                      <ChevronRight size={15} />
+                    </button>
+                  </div>
+                </div>
+                <div className="ft-monthly-story-progress">
+                  <div
+                    className="ft-monthly-ring"
+                    role="img"
+                    aria-label={"本月覆盖率 " + completion + "%"}
+                    style={{
+                      background:
+                        "conic-gradient(var(--ui-accent-solid) " +
+                        completionPercent +
+                        "%, var(--ui-surface-inset) 0)",
+                    }}
+                  >
+                    <div aria-hidden="true">
+                      <strong>{completion}%</strong>
+                      <span>月度覆盖</span>
+                    </div>
+                  </div>
+                  <div className="ft-monthly-legend">
+                    <span>
+                      <i data-kind="record" />
+                      已记录
+                    </span>
+                    <span>
+                      <i data-kind="exempt" />
+                      日期状态
+                    </span>
+                  </div>
+                </div>
+              </div>
               <div className="ft-metrics">
-                <Metric label="记录天数" value={writtenDays} unit="天" />
                 <Metric
-                  label="记录字数"
+                  label="记录天数"
+                  icon={CalendarRange}
+                  value={writtenDays}
+                  unit="天"
+                  note="已保存的今日记录"
+                />
+                <Metric
+                  label="累计字数"
+                  icon={FileText}
                   value={overview?.total_words || 0}
                   unit="字"
+                  note="本月记录中的文字"
                 />
                 <Metric
                   label="连续覆盖"
+                  icon={BarChart3}
                   value={overview?.current_streak || 0}
                   unit="天"
                   note={
                     overview?.streak_exempted_days
-                      ? `含 ${overview.streak_exempted_days} 天日期状态`
-                      : undefined
+                      ? "含 " + overview.streak_exempted_days + " 天日期状态"
+                      : "当前连续记录覆盖天数"
                   }
                 />
                 <Metric
-                  label="本月覆盖"
-                  value={completion}
-                  unit="%"
-                  note={`${writtenDays} 天记录 · ${exemptedDays} 天日期状态 / 全月 ${bounds.daysInMonth} 天`}
+                  label="日期状态"
+                  icon={ShieldCheck}
+                  value={exemptedDays}
+                  unit="天"
+                  note="不计为记录，也不会打断连续覆盖"
                 />
               </div>
               <div className="ft-stats-overview">
                 <section className="ft-panel ft-calendar">
                   <header className="ft-panel-heading">
                     <h2>记录月历</h2>
-                    <span className="ft-caption">
-                      {formatMonthLabel(year, month)}
-                    </span>
+                    <span className="ft-caption">日期编辑 · 盾牌设状态</span>
                   </header>
                   <div className="ft-weekdays">
                     {weekdays.map((day) => (
                       <span key={day}>{day}</span>
                     ))}
                   </div>
-                  <div data-calendar-grid="month" className="ft-calendar-grid">
+                  <div
+                    data-calendar-grid="month"
+                    className="ft-calendar-grid"
+                    style={{
+                      gridTemplateRows:
+                        "repeat(" + calendarCells.length / 7 + ", minmax(0, 1fr))",
+                      height:
+                        "calc(" + calendarCells.length / 7 + " * clamp(52px, 6vw, 64px))",
+                    }}
+                  >
                     {calendarCells.map((day, index) =>
                       day ? (
                         <CalendarDay
@@ -704,23 +794,33 @@ export default function StatsPage({
                     <header className="ft-panel-heading">
                       <h2>每日字数</h2>
                       <span className="ft-caption">
-                        最高 {longestDay?.word_count || 0} 字
+                        {longestDay
+                          ? formatMonthDay(longestDay.date) +
+                            " · " +
+                            longestDay.word_count.toLocaleString() +
+                            " 字"
+                          : "等待第一篇记录"}
                       </span>
                     </header>
                     <div
                       className="ft-word-chart"
                       role="img"
-                      aria-label={`${formatMonthLabel(year, month)}每日记录字数`}
+                      aria-label={formatMonthLabel(year, month) + "每日记录字数"}
                     >
                       {days.map((day) => (
                         <div
                           key={day.date}
-                          title={`${day.date}：${day.word_count} 字`}
+                          title={day.date + "：" + day.word_count + " 字"}
                         >
                           <span
                             style={{
                               height: day.has_article
-                                ? `${Math.max(3, (day.word_count / Math.max(1, longestDay?.word_count || 1)) * 100)}%`
+                                ? Math.max(
+                                    3,
+                                    (day.word_count /
+                                      Math.max(1, longestDay?.word_count || 1)) *
+                                      100,
+                                  ) + "%"
                                 : "3px",
                             }}
                             data-filled={day.has_article}
@@ -741,21 +841,20 @@ export default function StatsPage({
                     </div>
                   </section>
                   <section className="ft-panel ft-quick-review">
-                    <h2>把记录变成下一步</h2>
+                    <h2>周期复盘</h2>
                     <div>
                       <button
                         className="ui-button-primary"
                         onClick={() => setStatsTab("generate")}
                       >
-                        <Sparkles size={15} />
                         生成周期复盘
+                        <ChevronRight size={14} />
                       </button>
                       <button
                         className="ui-button-ghost"
                         onClick={() => onNavigate("reviews")}
                       >
-                        查看复盘
-                        <ChevronRight size={14} />
+                        查看复盘库
                       </button>
                     </div>
                   </section>
@@ -763,6 +862,7 @@ export default function StatsPage({
                     <section className="ft-panel">
                       <header className="ft-panel-heading">
                         <h2>心情记录</h2>
+                        <span className="ft-caption">本月标记</span>
                       </header>
                       <div className="ft-moods">
                         {moodEntries.map(([mood, count]) => (
@@ -776,10 +876,10 @@ export default function StatsPage({
                   )}
                 </div>
               </div>
-            </>
+            </section>
           )}
           {statsTab === "memory" && (
-            <div className="ft-stats-section">
+            <div className="ft-stats-view ft-stats-section ft-stats-memory">
               {reviewStatsError ? (
                 <div className="ui-alert-warn" role="alert">
                   {reviewStatsError}
@@ -791,7 +891,9 @@ export default function StatsPage({
               ) : (
                 <>
                   <div className="ft-section-lead">
-                    <h2>记忆复习</h2>
+                    <div className="ft-section-copy">
+                      <h2>记忆复习</h2>
+                    </div>
                     <button
                       className="ui-button-primary"
                       onClick={() => onNavigate("review")}
@@ -804,69 +906,113 @@ export default function StatsPage({
                   <div className="ft-metrics">
                     <Metric
                       label="累计评分"
+                      icon={Brain}
                       value={reviewStats.total_reviews}
                       unit="次"
                     />
                     <Metric
                       label="连续复习"
+                      icon={HeartPulse}
                       value={reviewStats.streak_days}
                       unit="天"
                     />
                     <Metric
                       label="今日评分"
+                      icon={CalendarRange}
                       value={reviewStats.reviewed_today}
                       unit="次"
                     />
                     <Metric
                       label="当前待复习"
+                      icon={BookMarked}
                       value={reviewStats.due}
                       unit="题"
                     />
                   </div>
-                  <section className="ft-panel">
-                    <header className="ft-panel-heading">
-                      <h2>近 30 天复习</h2>
-                    </header>
-                    <div className="ft-review-chart">
-                      <ResponsiveContainer width="100%" height="100%">
-                        <BarChart data={reviewStats.daily}>
-                          <XAxis dataKey="date" hide />
-                          <Tooltip content={<ChartTooltip />} />
-                          <Bar
-                            dataKey="count"
-                            name="评分次数"
-                            fill="var(--ui-accent-solid)"
-                            radius={[3, 3, 0, 0]}
-                            isAnimationActive={false}
-                          />
-                        </BarChart>
-                      </ResponsiveContainer>
+                  {hasMemoryReviewData ? (
+                    <div className="ft-memory-panels">
+                      <section className="ft-panel">
+                        <header className="ft-panel-heading">
+                          <h2>近 30 天复习</h2>
+                        </header>
+                        <div className="ft-review-chart">
+                          {hasReviewActivity ? (
+                            <ResponsiveContainer width="100%" height="100%">
+                              <BarChart data={reviewStats.daily}>
+                                <XAxis dataKey="date" hide />
+                                <Tooltip content={<ChartTooltip />} />
+                                <Bar
+                                  dataKey="count"
+                                  name="评分次数"
+                                  fill="var(--ui-accent-solid)"
+                                  radius={[3, 3, 0, 0]}
+                                  isAnimationActive={false}
+                                />
+                              </BarChart>
+                            </ResponsiveContainer>
+                          ) : (
+                            <div className="ft-review-empty">
+                              <span aria-hidden="true"><Brain size={17} /></span>
+                              <strong>近 30 天暂无记忆复习</strong>
+                            </div>
+                          )}
+                        </div>
+                        <div className="ft-chart-axis">
+                          <span>{reviewStats.daily[0]?.date}</span>
+                          <span>{reviewStats.daily.at(-1)?.date}</span>
+                        </div>
+                      </section>
+                      <section className="ft-panel ft-upcoming">
+                        <header className="ft-panel-heading">
+                          <h2>接下来 7 天</h2>
+                        </header>
+                        {hasUpcomingReviews ? (
+                          <div>
+                            {reviewStats.upcoming.map((day) => (
+                              <span key={day.date} title={formatDateLabel(day.date)}>
+                                <time>{formatMonthDay(day.date)}</time>
+                                <strong>{day.count}</strong>
+                                <small>题</small>
+                              </span>
+                            ))}
+                          </div>
+                        ) : (
+                          <div className="ft-upcoming-empty">
+                            <span aria-hidden="true"><CalendarRange size={17} /></span>
+                            <strong>未来 7 天暂无待复习题</strong>
+                          </div>
+                        )}
+                      </section>
                     </div>
-                    <div className="ft-chart-axis">
-                      <span>{reviewStats.daily[0]?.date}</span>
-                      <span>{reviewStats.daily.at(-1)?.date}</span>
-                    </div>
-                  </section>
-                  <section className="ft-panel ft-upcoming">
-                    <header className="ft-panel-heading">
-                      <h2>接下来 7 天</h2>
-                    </header>
-                    <div>
-                      {reviewStats.upcoming.map((day) => (
-                        <span key={day.date}>
-                          <time>{formatMonthDay(day.date)}</time>
-                          <strong>{day.count}</strong>
-                        </span>
-                      ))}
-                    </div>
-                  </section>
+                  ) : (
+                    <section className="ft-panel ft-memory-empty-state">
+                      <span className="ft-memory-empty-icon" aria-hidden="true">
+                        <Brain size={19} />
+                      </span>
+                      <div className="ft-memory-empty-copy">
+                        <h3>开始复习后查看趋势</h3>
+                      </div>
+                      <span className="ft-memory-empty-badge">尚无复习记录</span>
+                    </section>
+                  )}
                   <details className="ft-panel ft-heatmap">
                     <summary>
                       一年复习热力图
                       <ChevronRight size={15} />
                     </summary>
                     {heatmapError ? (
-                      <p>{heatmapError}</p>
+                      <p className="ft-heatmap-message" role="status">
+                        {heatmapError}
+                      </p>
+                    ) : !heatmapLoaded ? (
+                      <p className="ft-heatmap-message" role="status">
+                        正在读取年度热力图…
+                      </p>
+                    ) : !heatmap.some((day) => day.count > 0) ? (
+                      <div className="ft-heatmap-empty">
+                        <CalendarRange size={16} aria-hidden="true" />
+                        <p>首次记忆复习后开始记录。</p>
+                      </div>
                     ) : (
                       <div>
                         <div>
@@ -890,9 +1036,11 @@ export default function StatsPage({
             </div>
           )}
           {statsTab === "knowledge" && (
-            <div className="ft-stats-section">
+            <div className="ft-stats-view ft-stats-section ft-stats-knowledge">
               <div className="ft-section-lead">
-                <h2>知识整理</h2>
+                <div className="ft-section-copy">
+                  <h2>知识整理</h2>
+                </div>
                 <button
                   className="ui-button-secondary"
                   onClick={() => onNavigate("knowledge")}
@@ -916,10 +1064,10 @@ export default function StatsPage({
               ) : (
                 <>
                   <div className="ft-metrics">
-                    <Metric label="全部条目" value={knowledgeSummary.total} />
-                    <Metric label="待确认" value={knowledgeSummary.draft} />
-                    <Metric label="已沉淀" value={knowledgeSummary.confirmed} />
-                    <Metric label="已过时" value={knowledgeSummary.outdated} />
+                    <Metric label="全部条目" value={knowledgeSummary.total} icon={BookMarked} />
+                    <Metric label="待确认" value={knowledgeSummary.draft} icon={PencilLine} />
+                    <Metric label="已沉淀" value={knowledgeSummary.confirmed} icon={BookOpenText} />
+                    <Metric label="已过时" value={knowledgeSummary.outdated} icon={CircleHelp} />
                   </div>
                   <section className="ft-panel">
                     <header className="ft-panel-heading">
@@ -950,9 +1098,12 @@ export default function StatsPage({
             </div>
           )}
           {statsTab === "generate" && (
-            <div className="ft-stats-section">
+            <div className="ft-stats-view ft-stats-section ft-stats-generate">
               <div className="ft-section-lead">
-                <h2>生成周期复盘</h2>
+                <div className="ft-section-copy">
+                  <h2>生成周期复盘</h2>
+                  <p>基于选定周期的今日记录生成独立草稿，原始记录保持不变。</p>
+                </div>
                 <button
                   className="ui-button-secondary"
                   onClick={() => onNavigate("reviews")}
@@ -1348,7 +1499,9 @@ function CalendarDay({
   const words = Math.min(100, Math.max(8, Math.round(day.word_count / 8)));
   const canManageExemption = !day.has_article;
   const exemptionTone = getExemptionTone(day.exemption?.reason);
-  const ExemptionIcon = getExemptionIcon(day.exemption?.reason);
+  const ExemptionIcon = day.exemption
+    ? getExemptionIcon(day.exemption.reason)
+    : ShieldCheck;
   const openExemption = (e: MouseEvent<HTMLElement>) => {
     if (!canManageExemption) return;
     e.preventDefault();
@@ -1371,51 +1524,48 @@ function CalendarDay({
       ].join(" ")}
     >
       <div
-        className="pointer-events-none absolute inset-0 overflow-hidden rounded-lg"
+        className="ft-calendar-day-content pointer-events-none absolute inset-0 flex flex-col gap-0.5 p-0.5"
         aria-hidden="true"
       >
-        <span
-          className={[
-            "ui-calendar-date absolute left-1.5 top-1.5 z-10 inline-flex h-5 min-w-5 items-center justify-center rounded-md px-1 text-xs font-semibold sm:left-2 sm:top-2",
-            day.has_article ? "ui-calendar-date-article" : "",
-          ].join(" ")}
-        >
-          {dateNum}
-        </span>
-
-        {day.has_article && (
-          <span className="ui-calendar-doc absolute right-1.5 top-1.5 z-10 inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-md sm:right-2 sm:top-2">
-            <FileText size={11} />
+        <div className="ft-calendar-day-head flex h-5 shrink-0 items-center justify-between gap-1">
+          <span
+            className={[
+              "ui-calendar-date inline-flex h-5 min-w-5 items-center justify-center rounded-md px-1 text-[11px] font-semibold leading-none",
+              day.has_article ? "ui-calendar-date-article" : "",
+            ].join(" ")}
+          >
+            {dateNum}
           </span>
-        )}
+          {day.has_article ? (
+            <span className="ui-calendar-doc inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-md">
+              <FileText size={10} />
+            </span>
+          ) : (
+            <span className="h-5 w-5 shrink-0" />
+          )}
+        </div>
 
         {day.has_article ? (
-          <div className="absolute inset-x-1.5 bottom-1.5 sm:inset-x-2 sm:bottom-2">
-            <div className="ui-calendar-meter-track mb-1 h-0.5 overflow-hidden rounded-full sm:h-1.5">
+          <div className="ft-calendar-day-footer mt-auto min-w-0">
+            <div className="ui-calendar-meter-track mb-0.5 h-0.5 overflow-hidden rounded-full sm:h-1">
               <div
                 className="ui-calendar-meter-fill h-full rounded-full"
-                style={{ width: `${words}%` }}
+                style={{ width: words + "%" }}
               />
             </div>
-            <div className="hidden items-center justify-between gap-1 text-[10px] leading-none text-[var(--ui-text-muted)] sm:flex">
+            <div className="hidden items-center justify-between gap-1 truncate text-[9px] leading-none text-[var(--ui-text-muted)] sm:flex">
               <span className="truncate">{day.word_count} 字</span>
-              {day.mood && <span className="shrink-0">{day.mood}</span>}
+              {day.mood && <span className="max-w-[40%] shrink-0 truncate">{day.mood}</span>}
             </div>
           </div>
         ) : day.exemption ? (
-          <div className="absolute inset-x-1.5 top-1/2 flex -translate-y-1/2 justify-center sm:inset-x-2">
-            <span
-              className={`inline-flex max-w-full items-center gap-1 truncate rounded-full px-1 py-0.5 text-[10px] font-medium sm:px-1.5 ${exemptionTone.pill}`}
-            >
+          <div className="ft-calendar-day-status flex min-h-0 flex-1 items-center justify-center px-1">
+            <span className={"inline-flex max-w-full items-center gap-1 truncate rounded-full px-1 py-0.5 text-[10px] font-medium sm:px-1.5 " + exemptionTone.pill}>
               <ExemptionIcon size={12} />
               <span className="hidden sm:inline">{day.exemption.reason}</span>
             </span>
           </div>
-        ) : (
-          <div className="ui-calendar-empty-icon pointer-events-none absolute inset-0 flex items-center justify-center">
-            <PencilLine size={12} />
-          </div>
-        )}
+        ) : null}
       </div>
 
       <button
@@ -1443,10 +1593,10 @@ function CalendarDay({
           aria-label={`${formatDateLabel(day.date)} ${day.exemption ? "编辑" : "设置"}日期状态`}
           title={`${day.exemption ? "编辑" : "设置"}日期状态`}
           className={[
-            "ui-calendar-action absolute right-1 top-1 z-20 hidden h-7 w-7 items-center justify-center rounded-md transition-colors focus:outline-hidden focus:ring-2 focus:ring-[var(--ui-focus)]/50 sm:inline-flex sm:right-1.5 sm:top-1.5 sm:h-6 sm:w-6 sm:opacity-60 sm:hover:opacity-100",
+            "ui-calendar-action absolute right-1 top-1 z-20 hidden h-5 w-5 items-center justify-center rounded-md transition-colors transition-opacity focus:outline-hidden focus:ring-2 focus:ring-[var(--ui-focus)]/50 sm:inline-flex sm:right-1 sm:top-1",
             day.exemption
-              ? exemptionTone.pill
-              : "ui-calendar-action-default text-[var(--ui-text-subtle)]",
+              ? `${exemptionTone.pill} sm:opacity-100`
+              : "ui-calendar-action-default text-[var(--ui-text-subtle)] sm:opacity-50 sm:hover:opacity-100",
           ].join(" ")}
         >
           <ExemptionIcon size={13} />
@@ -1680,15 +1830,22 @@ function Metric({
   value,
   unit,
   note,
+  icon: Icon,
 }: {
   label: string;
   value: number;
   unit?: string;
   note?: string;
+  icon: LucideIcon;
 }) {
   return (
     <div className="ft-metric" title={note}>
-      <span>{label}</span>
+      <div className="ft-metric-top">
+        <span>{label}</span>
+        <span className="ft-metric-icon" aria-hidden="true">
+          <Icon size={14} strokeWidth={1.8} />
+        </span>
+      </div>
       <strong>
         {value.toLocaleString()}
         <small>{unit}</small>

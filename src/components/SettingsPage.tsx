@@ -1,7 +1,6 @@
 import {
   useCallback,
   useEffect,
-  useRef,
   useState,
   type KeyboardEvent,
   type ReactNode,
@@ -9,6 +8,7 @@ import {
 import { useBlocker } from "@tanstack/react-router";
 import {
   Bot,
+  CheckCircle2,
   DatabaseBackup,
   Palette,
   Plug,
@@ -78,15 +78,11 @@ export default function SettingsPage({
   onConnectionSaved,
 }: SettingsPageProps) {
   const [search, setSearch] = useState("");
-  const [verticalNav, setVerticalNav] = useState(
-    () => window.matchMedia("(min-width: 1024px)").matches,
-  );
   const [tab, setTab] = useState<Tab>(() => initialSettingsTab());
   const [mountedTabs, setMountedTabs] = useState<Set<Tab>>(
     () => new Set([tab]),
   );
   const [dirtyTabs, setDirtyTabs] = useState<Set<Tab>>(new Set());
-  const contentRef = useRef<HTMLDivElement>(null);
   const { confirm, dialog } = useConfirmDialog();
   const markDirty = useCallback((id: Tab, dirty: boolean) => {
     setDirtyTabs((current) => {
@@ -121,6 +117,13 @@ export default function SettingsPage({
     data: "创建保护点、恢复数据或迁移内容，危险操作仍需确认。",
     appearance: "调整明暗模式与强调色，让阅读和操作更舒适。",
   };
+  const tabSummaries: Record<Tab, string> = {
+    connect: "地址、令牌与连接诊断",
+    review: "每日上限与队列预览",
+    ai: "模型服务与任务路由",
+    data: "快照保护与内容迁移",
+    appearance: "明暗模式与强调色",
+  };
   const keywords: Record<Tab, string> = {
     connect: "服务器 地址 令牌 token 网络 诊断",
     review: "FSRS 新题 队列 每天 上限 记忆",
@@ -133,27 +136,6 @@ export default function SettingsPage({
       .toLocaleLowerCase()
       .includes(search.trim().toLocaleLowerCase()),
   );
-  useEffect(() => {
-    const media = window.matchMedia("(min-width: 1024px)");
-    const update = () => setVerticalNav(media.matches);
-    media.addEventListener("change", update);
-    return () => media.removeEventListener("change", update);
-  }, []);
-  useEffect(() => {
-    if (verticalNav) return;
-    const frame = requestAnimationFrame(() => {
-      const selected = document.getElementById(`settings-tab-${tab}`);
-      const container = selected?.parentElement;
-      if (!selected || !container) return;
-      const item = selected.getBoundingClientRect(),
-        box = container.getBoundingClientRect();
-      if (item.right > box.right)
-        container.scrollLeft += item.right - box.right + 8;
-      if (item.left < box.left)
-        container.scrollLeft -= box.left - item.left + 8;
-    });
-    return () => cancelAnimationFrame(frame);
-  }, [tab, verticalNav]);
   const switchTab = (next: Tab) => {
     if (next === tab) return;
     setTab(next);
@@ -172,7 +154,6 @@ export default function SettingsPage({
       writeLocalStorage(settingsTabStorageKey, next);
     }
     requestAnimationFrame(() => {
-      if (contentRef.current) contentRef.current.scrollTop = 0;
       document.getElementById(`settings-tab-${next}`)?.focus();
     });
   };
@@ -204,7 +185,6 @@ export default function SettingsPage({
         current.has(next) ? current : new Set(current).add(next),
       );
       requestAnimationFrame(() => {
-        if (contentRef.current) contentRef.current.scrollTop = 0;
         document.getElementById("settings-tab-" + next)?.focus();
       });
     };
@@ -243,74 +223,100 @@ export default function SettingsPage({
     </div>
   );
 
+  const CurrentTabIcon = tabIcons[tab];
+
   return (
     <div className="wb-page st-page">
       <WorkspaceHeader
         icon={Settings}
         title="设置"
         actions={
-          <span className="st-save-summary" role="status">
-            {dirtyTabs.size
-              ? `${dirtyTabs.size} 个分类有未保存更改`
-              : ""}
+          <span className="st-save-summary" role="status" aria-live="polite">
+            {dirtyTabs.size ? (
+              <>
+                <i aria-hidden="true" />
+                {`${dirtyTabs.size} 个分类有未保存更改`}
+              </>
+            ) : (
+              <>
+                <CheckCircle2 size={15} aria-hidden="true" />
+                所有更改均已保存
+              </>
+            )}
           </span>
         }
       />
       <div className="st-layout">
-        <aside className="st-navigation" aria-label="设置导航">
-          <label className="wb-search st-search">
-            <Search size={15} />
-            <input
-              type="search"
-              value={search}
-              onChange={(event) => setSearch(event.target.value)}
-              placeholder="查找设置…"
-              aria-label="查找设置"
-            />
-            {search && (
-              <button
-                type="button"
-                className="wb-icon-button"
-                aria-label="清除设置搜索"
-                onClick={() => setSearch("")}
-              >
-                <X size={14} />
-              </button>
-            )}
-          </label>
-          {search.trim() ? (
-            <div className="st-search-results" aria-label="设置搜索结果">
-              <p className="wb-eyebrow">{matchedTabs.length} 个相关分类</p>
-              {matchedTabs.map((id) => {
-                const Icon = tabIcons[id];
-                return (
-                  <button
-                    type="button"
-                    key={id}
-                    onClick={() => {
-                      setSearch("");
-                      switchTab(id);
-                    }}
-                  >
-                    <Icon size={17} />
-                    <span>
-                      {labels[id]}
-                      <small>{descriptions[id]}</small>
-                    </span>
-                  </button>
-                );
-              })}
-              {!matchedTabs.length && (
-                <p className="wb-muted">
-                  没有匹配的设置。试试“模型”“备份”或“主题”。
-                </p>
+        <header className="st-overview">
+          <div className="st-overview-tools">
+            <span className="st-storage-note">
+              <ShieldCheck size={15} aria-hidden="true" />
+              记录保存在服务端 · 本机偏好保存在此设备
+            </span>
+            <label className="wb-search st-search">
+              <Search size={15} aria-hidden="true" />
+              <input
+                type="search"
+                value={search}
+                onChange={(event) => setSearch(event.target.value)}
+                placeholder="搜索连接、模型、备份…"
+                aria-label="搜索设置分类"
+              />
+              {search && (
+                <button
+                  type="button"
+                  className="wb-icon-button"
+                  aria-label="清除设置搜索"
+                  onClick={() => setSearch("")}
+                >
+                  <X size={14} />
+                </button>
+              )}
+            </label>
+          </div>
+        </header>
+        <nav className="st-navigation" aria-label="设置分类">
+          {search.trim() && (
+            <div className="st-search-results">
+              <p className="st-search-results-heading" role="status" aria-live="polite">
+                {matchedTabs.length
+                  ? `找到 ${matchedTabs.length} 个相关分类`
+                  : "没有匹配的分类。试试“模型”“备份”或“主题”。"}
+              </p>
+              {matchedTabs.length > 0 && (
+                <div className="st-search-results-list">
+                  {matchedTabs.map((id) => {
+                    const Icon = tabIcons[id];
+                    return (
+                      <button
+                        type="button"
+                        key={id}
+                        className="st-search-result"
+                        onClick={() => {
+                          setSearch("");
+                          switchTab(id);
+                          requestAnimationFrame(() =>
+                            document.getElementById(`settings-tab-${id}`)?.focus(),
+                          );
+                        }}
+                      >
+                        <span className="st-search-result-icon"><Icon size={15} /></span>
+                        <span className="st-search-result-copy">
+                          <strong>{labels[id]}</strong>
+                          <small>{tabSummaries[id]}</small>
+                        </span>
+                        <span className="st-search-result-hint">打开</span>
+                      </button>
+                    );
+                  })}
+                </div>
               )}
             </div>
-          ) : null}
+          )}
           <div
             className="st-nav-tabs"
             role="tablist"
-            aria-orientation={verticalNav ? "vertical" : "horizontal"}
+            aria-orientation="horizontal"
             aria-label="设置分类"
           >
             {settingsTabs.map((id) => {
@@ -320,6 +326,7 @@ export default function SettingsPage({
                   key={id}
                   type="button"
                   id={`settings-tab-${id}`}
+                  className="st-nav-item"
                   role="tab"
                   aria-selected={tab === id}
                   aria-label={
@@ -330,29 +337,32 @@ export default function SettingsPage({
                   onClick={() => switchTab(id)}
                   onKeyDown={(event) => handleTabKeyDown(event, id)}
                 >
-                  <Icon size={17} />
-                  <span>{labels[id]}</span>
-                  {dirtyTabs.has(id) && <i aria-hidden="true" />}
+                  <span className="st-nav-icon"><Icon size={17} /></span>
+                  <span className="st-nav-copy">
+                    <strong>{labels[id]}</strong>
+                    <small>{tabSummaries[id]}</small>
+                  </span>
+                  {dirtyTabs.has(id) && <i className="st-nav-dirty" aria-hidden="true" />}
                 </button>
               );
             })}
           </div>
-          <div className="st-nav-foot">
-            <ShieldCheck size={17} />
-            <p>
-              数据保存在你的服务端。
-              <br />
-              连接与外观偏好保存在本机。
-            </p>
-          </div>
-        </aside>
+        </nav>
         <section className="st-main">
           <header className="st-category-heading">
-            <span className="wb-eyebrow">偏好与配置</span>
-            <h2>{labels[tab]}</h2>
-            <p>{descriptions[tab]}</p>
+            <span className="st-category-icon" aria-hidden="true">
+              <CurrentTabIcon size={18} />
+            </span>
+            <div className="st-category-copy">
+              <span className="st-category-eyebrow">
+                设置分类 {String(settingsTabs.indexOf(tab) + 1).padStart(2, "0")} / {String(settingsTabs.length).padStart(2, "0")}
+              </span>
+              <h2>{labels[tab]}</h2>
+              <p>{descriptions[tab]}</p>
+            </div>
+            {dirtyTabs.has(tab) && <span className="st-category-unsaved">尚未保存</span>}
           </header>
-          <div ref={contentRef} className="st-content">
+          <div className="st-content">
             {panel(
               "connect",
               <ConnectionPanel

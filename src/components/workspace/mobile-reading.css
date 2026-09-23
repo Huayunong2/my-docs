@@ -1,0 +1,166 @@
+/* Mobile reading pass: retain the established routes and controls, then give
+   record, knowledge, review and recap text room to lead. */
+@media (max-width: 767px) {
+  :root { --ui-mobile-nav-height: 60px; }
+
+  #main-content {
+    scroll-padding-block: 12px calc(var(--ui-mobile-nav-total-height) + 18px);
+    overscroll-behavior-y: contain;
+  }
+
+  #main-content :is(.wb-page, .ft-page) {
+    padding: 20px 16px calc(var(--ui-mobile-nav-total-height) + 24px);
+  }
+
+  #main-content :is(.wb-page, .ft-page) .wb-header {
+    align-items: flex-start;
+    gap: 12px;
+    margin-bottom: 20px;
+  }
+
+  #main-content .wb-heading { align-items: flex-start; }
+  #main-content .wb-heading h1 {
+    font-size: 26px;
+    line-height: 1.35;
+    letter-spacing: -0.025em;
+    overflow-wrap: anywhere;
+  }
+  #main-content .wb-heading p { font-size: 14px; line-height: 1.7; }
+  #main-content .wb-header-actions { gap: 8px; flex-wrap: wrap; }
+
+  .shell-mobile-nav {
+    min-height: var(--ui-mobile-nav-total-height);
+    padding-top: 5px;
+    background: var(--ui-surface-raised);
+    box-shadow: var(--ui-shadow-mobile-nav);
+  }
+  .shell-mobile-link {
+    min-height: 52px;
+    gap: 4px;
+    font-size: 11px;
+    font-weight: 500;
+  }
+
+  #main-content :is(.wb-page, .ft-page) :is(button, a, [role="tab"], summary) {
+    scroll-margin-block: 12px calc(var(--ui-mobile-nav-total-height) + 12px);
+  }
+
+  #main-content .markdown-content,
+  .article-detail-surface .markdown-content,
+  .rp-viewer .markdown-content {
+    max-width: 40em;
+    margin-inline: auto;
+    font-size: 16px;
+    line-height: 1.85;
+    overflow-wrap: anywhere;
+  }
+  #main-content .markdown-content > p,
+  .article-detail-surface .markdown-content > p,
+  .rp-viewer .markdown-content > p { margin-bottom: 1.1em; line-height: 1.85; }
+  #main-content .markdown-content :is(ul, ol),
+  .article-detail-surface .markdown-content :is(ul, ol),
+  .rp-viewer .markdown-content :is(ul, ol) { padding-inline-start: 1.35em; line-height: 1.8; }
+  #main-content .markdown-content li + li,
+  .article-detail-surface .markdown-content li + li,
+  .rp-viewer .markdown-content li + li { margin-top: 0.35em; }
+  #main-content .markdown-content :is(h1, h2, h3),
+  .article-detail-surface .markdown-content :is(h1, h2, h3),
+  .rp-viewer .markdown-content :is(h1, h2, h3) { line-height: 1.4; overflow-wrap: anywhere; text-wrap: pretty; }
+  #main-content .markdown-content h1,
+  .article-detail-surface .markdown-content h1,
+  .rp-viewer .markdown-content h1 { font-size: 1.65rem; }
+  #main-content .markdown-content h2,
+  .article-detail-surface .markdown-content h2,
+  .rp-viewer .markdown-content h2 { margin-block: 1.8em 0.7em; font-size: 1.35rem; }
+  #main-content .markdown-content h3,
+  .article-detail-surface .markdown-content h3,
+  .rp-viewer .markdown-content h3 { margin-block: 1.45em 0.55em; font-size: 1.125rem; }
+  #main-content :is(input:not([type="checkbox"]):not([type="radio"]):not([type="range"]), select, textarea) { font-size: 16px; }
+
+  /* Today: preview first; let it flow with the page instead of scrolling inside it. */
+  #main-content .page-surface-today { height: auto; min-height: 100%; padding-bottom: calc(var(--ui-mobile-nav-total-height) + 20px); }
+  #main-content .page-surface-today .today-title-input { font-size: 27px; line-height: 1.4; }
+  #main-content .page-surface-today .today-actions :is(button, summary) { min-height: 44px; }
+  #main-content .page-surface-today .today-workspace { flex: 1 0 auto; padding-bottom: 16px; }
+  #main-content .page-surface-today .today-writing-surface { height: 56dvh; min-height: 320px; }
+  #main-content .page-surface-today .today-preview-surface { height: auto; min-height: 0; max-height: none; overflow: visible; padding: 20px 16px 24px; }
+  #main-content .page-surface-today .today-preview-surface > div { max-width: 40em; }
+
+  /* Records and search: show enough text to distinguish an entry before open. */
+  #main-content .ft-history .history-card-main { padding: 16px 15px 10px; }
+  #main-content .ft-history .history-card-title { font-size: 16px; line-height: 1.5; }
+  #main-content .ft-history .history-card-preview {
+    display: -webkit-box;
+    -webkit-line-clamp: 4;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+    font-size: 14px;
+    line-height: 1.75;
+  }
+  #main-content .ft-history .history-card-context { max-width: 100%; font-size: 12px; }
+  .history-detail-dialog-frame { padding: max(8px, env(safe-area-inset-top, 0px)) 8px max(8px, env(safe-area-inset-bottom, 0px)); }
+  .history-detail-dialog-surface { inset: max(8px, env(safe-area-inset-top, 0px)) 8px max(8px, env(safe-area-inset-bottom, 0px)); border-radius: 18px; }
+  .article-detail-surface .article-detail-title { font-size: 22px; line-height: 1.45; }
+  .article-detail-body .ui-reader { max-width: 40em; font-size: 16px; line-height: 1.85; }
+  #main-content .ft-search { padding-bottom: calc(var(--ui-mobile-nav-total-height) + 20px); }
+  #main-content .ft-search-results { padding-bottom: calc(var(--ui-mobile-nav-total-height) + 20px); }
+  #main-content .ft-search-input { min-height: 52px; }
+  #main-content .ft-search-input .ui-button-primary { min-height: 44px; }
+  #main-content .ft-result { align-items: flex-start; gap: 12px; padding-block: 18px; }
+  #main-content .ft-result-main h2 { font-size: 16px; line-height: 1.5; }
+  #main-content .ft-result-main p { display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical; font-size: 14px; line-height: 1.75; }
+  #main-content :is(.ft-result-meta, .ft-result-tags) { gap: 8px; font-size: 12px; line-height: 1.6; }
+
+  /* Knowledge: keep the detail page quiet and give the card body the width. */
+  #main-content .knowledge-hub { padding: 18px 16px calc(var(--ui-mobile-nav-total-height) + 24px); }
+  #main-content .kl-reading { max-width: 40em; padding: 24px 4px 40px; }
+  #main-content .kl-reading > h2 { font-size: 28px; line-height: 1.4; }
+  #main-content :is(.kl-reading-byline, .kl-reading-taxonomy span) { font-size: 12px; line-height: 1.6; }
+  #main-content .kl-reading-content { margin-top: 24px; padding-top: 22px; font-size: 16px; line-height: 1.85; }
+  #main-content .kl-reading-content .markdown-content { font-size: 16px; line-height: 1.85; }
+  #main-content .kl-reading-actions { gap: 8px; margin-top: 24px; }
+  #main-content .kl-reading-actions button,
+  #main-content .kl-reader-source summary { min-height: 44px; font-size: 13px; }
+  #main-content .kl-card-preview { min-height: 0; -webkit-line-clamp: 3; font-size: 13px; line-height: 1.7; }
+  #main-content .kl-card-link h3 { font-size: 15px; line-height: 1.5; }
+  #main-content .kl-card-meta { font-size: 11px; line-height: 1.6; }
+
+  /* Review: one reading flow, then answer and reachable grading. */
+  #main-content .rs-session { max-height: none; overflow: visible; }
+  #main-content .rs-study-content { max-height: none; overflow: visible; flex: 0 0 auto; }
+  #main-content .rs-session-bar { position: sticky; z-index: 2; top: 0; padding: 10px 14px; background: var(--ui-surface-raised); }
+  #main-content :is(.rs-session-bar > span, .rs-question-meta) { font-size: 12px; line-height: 1.6; }
+  #main-content .rs-context-title { font-size: 15px; line-height: 1.65; }
+  #main-content .rs-prompt .markdown-content { font-size: 18px; line-height: 1.85; }
+  #main-content .rs-answer .markdown-content { font-size: 16px; line-height: 1.85; }
+  #main-content :is(.rs-hint p, .rs-evidence blockquote) { font-size: 14px; line-height: 1.75; }
+  #main-content .rs-answer-actions { padding: 16px; }
+  #main-content .rs-grade-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+  #main-content .rs-grade-grid button { min-height: 68px; gap: 6px; padding: 8px 9px; font-size: 16px; }
+  #main-content .rs-grade-grid small { font-size: 12px; }
+
+  /* Period recaps: readable previews and a full-height reading surface. */
+  #main-content .rp-period-copy h3 { font-size: 16px; line-height: 1.5; }
+  #main-content .rp-period-copy > p { font-size: 14px; line-height: 1.75; }
+  #main-content :is(.rp-period-meta, .rp-period-footer) { font-size: 12px; line-height: 1.6; }
+  .rp-viewer { padding-top: env(safe-area-inset-top, 0px); }
+  .rp-viewer .review-viewer-body { padding: 22px 18px; }
+  .rp-viewer .review-viewer-body > div { max-width: 40em; }
+  .rp-viewer-footer { padding-bottom: calc(12px + env(safe-area-inset-bottom, 0px)); }
+
+  /* Analytics, settings and trash stay readable without hiding functions. */
+  #main-content .ft-stats .ft-panel-heading .ft-caption { overflow: visible; white-space: normal; font-size: 11px; line-height: 1.5; }
+  #main-content .ft-stats .ft-metric p { font-size: 11px; line-height: 1.6; }
+  #main-content :is(.st-overview-copy p, .st-category-copy p, .st-content .settings-card p, .st-content .settings-disclosure-section p) { font-size: 13px; line-height: 1.75; }
+  #main-content .page-surface-knowledge-trash .knowledge-card-row { align-items: flex-start; gap: 10px; padding: 15px 12px; }
+  #main-content .page-surface-knowledge-trash .knowledge-card-row :is(h2, p) { white-space: normal; overflow: visible; text-overflow: clip; overflow-wrap: anywhere; }
+  #main-content .page-surface-knowledge-trash .knowledge-card-row h2 { font-size: 15px; line-height: 1.5; }
+  #main-content .page-surface-knowledge-trash .knowledge-card-row p { font-size: 14px; line-height: 1.7; }
+}
+
+@media (max-width: 380px) {
+  #main-content :is(.wb-page, .ft-page) { padding-inline: 13px; }
+  #main-content .page-surface-today .today-workspace { padding-inline: 13px; }
+  #main-content .ft-stats .ft-month-nav > span { min-width: 0; }
+  #main-content .rs-grade-grid { gap: 8px; }
+}

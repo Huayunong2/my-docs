@@ -465,13 +465,7 @@ export default function SearchPage({
           </div>
         )}
         <div ref={resultRef} className="ft-search-results" aria-busy={loading}>
-          {!searched ? (
-            <div className="ft-search-empty">
-              <Search size={34} strokeWidth={1.3} />
-              <h2>找回需要的内容</h2>
-              <p>搜索记录、知识条目与周期复盘</p>
-            </div>
-          ) : error ? (
+          {!searched ? null : error ? (
             <div className="ft-search-empty" role="alert">
               <AlertTriangle size={30} />
               <h2>暂时无法完成搜索</h2>
