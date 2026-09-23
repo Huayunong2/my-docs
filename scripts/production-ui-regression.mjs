@@ -412,6 +412,13 @@ await context.route("**/*", async (route) => {
       });
     }
 
+    if (path === "/knowledge-cards/labels") {
+      const ids = url.searchParams.getAll("id");
+      const labels = cards.map(({ id, title }) => ({ id, title }));
+      return send(url.searchParams.get("all") === "true"
+        ? labels
+        : ids.flatMap((id) => labels.filter((label) => label.id === id)));
+    }
     if (path === "/knowledge-cards" && method === "GET") return send(cards);
     if (path === "/review/due")
       return send({
@@ -425,6 +432,28 @@ await context.route("**/*", async (route) => {
           reviewed_today: reviewedToday,
           total_confirmed: 21,
         },
+      });
+    if (path === "/review/stats/snapshot")
+      return send({
+        stats: {
+          total_reviews: 40,
+          reviewed_today: reviewedToday,
+          due: queue.length,
+          total_confirmed: 21,
+          learning: 15,
+          mature: 6,
+          new_cards: 0,
+          streak_days: 5,
+          daily: Array.from({ length: 7 }, (_, i) => ({
+            date: `2026-09-${i + 10}`,
+            count: i + 1,
+          })),
+          upcoming: Array.from({ length: 7 }, (_, i) => ({
+            date: `2026-09-${23 + i}`,
+            count: [2, 0, 5, 3, 1, 0, 4][i],
+          })),
+        },
+        heatmap: [],
       });
     if (path === "/review/stats")
       return send({

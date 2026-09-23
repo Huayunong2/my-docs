@@ -232,6 +232,12 @@ pub(crate) struct ReviewCard {
     pub(crate) first_reviewed_at: String,
 }
 
+#[derive(Debug, Serialize, Clone, PartialEq, Eq)]
+pub(crate) struct KnowledgeCardLabel {
+    pub(crate) id: String,
+    pub(crate) title: String,
+}
+
 #[derive(Debug, Serialize)]
 pub(crate) struct KnowledgeCardsPage {
     pub(crate) cards: Vec<KnowledgeCard>,
@@ -439,13 +445,13 @@ pub(crate) struct ReviewGradePreview {
     pub(crate) next_review_at: String,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, PartialEq, Eq)]
 pub(crate) struct DailyReviewCount {
     pub(crate) date: String,
     pub(crate) count: i64,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, PartialEq, Eq)]
 pub(crate) struct ReviewStatsResponse {
     pub(crate) total_reviews: i64,
     pub(crate) streak_days: i64,
@@ -457,6 +463,12 @@ pub(crate) struct ReviewStatsResponse {
     pub(crate) new_cards: i64,
     pub(crate) upcoming: Vec<DailyReviewCount>,
     pub(crate) daily: Vec<DailyReviewCount>,
+}
+
+#[derive(Debug, Serialize, PartialEq, Eq)]
+pub(crate) struct ReviewStatsSnapshot {
+    pub(crate) stats: ReviewStatsResponse,
+    pub(crate) heatmap: Vec<DailyReviewCount>,
 }
 
 #[derive(Debug, Serialize)]

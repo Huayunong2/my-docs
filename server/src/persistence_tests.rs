@@ -35,6 +35,110 @@ fn saving_a_daily_record_applies_record_invariants() {
 }
 
 #[test]
+fn article_export_batch_preserves_order_duplicates_and_space_order() {
+    let mut db = Database::new_in_memory().expect("in-memory database");
+    let first = db
+        .articles()
+        .save(ArticleDraft {
+            date: "2026-08-01".into(),
+            title: "第一条".into(),
+            content: "first".into(),
+            mood: "".into(),
+            tags: vec![],
+            spaces: vec!["Zeta".into(), "Alpha".into()],
+        })
+        .expect("save first record");
+    let second = db
+        .articles()
+        .save(ArticleDraft {
+            date: "2026-08-02".into(),
+            title: "第二条".into(),
+            content: "second".into(),
+            mood: "".into(),
+            tags: vec![],
+            spaces: vec![],
+        })
+        .expect("save second record");
+    let deleted = db
+        .articles()
+        .save(ArticleDraft {
+            date: "2026-08-03".into(),
+            title: "已删除".into(),
+            content: "deleted".into(),
+            mood: "".into(),
+            tags: vec![],
+            spaces: vec![],
+        })
+        .expect("save deleted record");
+    db.articles().delete(&deleted.id).expect("soft delete");
+
+    let requested = vec![
+        second.id.clone(),
+        "missing-id".into(),
+        first.id.clone(),
+        second.id.clone(),
+        deleted.id,
+    ];
+    let records = db.articles().by_ids(&requested).expect("batch export read");
+    assert_eq!(
+        records
+            .iter()
+            .map(|article| article.id.as_str())
+            .collect::<Vec<_>>(),
+        vec![second.id.as_str(), first.id.as_str(), second.id.as_str()]
+    );
+    assert_eq!(records[1].spaces, vec!["Alpha", "Zeta"]);
+}
+
+#[test]
+fn knowledge_label_lookup_is_lightweight_ordered_and_active_only() {
+    let mut db = Database::new_in_memory().expect("in-memory database");
+    let first = db
+        .knowledge()
+        .save(card_draft("confirmed"))
+        .expect("save first");
+    let mut second_draft = card_draft("confirmed");
+    second_draft.title = "第二张卡".into();
+    let second = db.knowledge().save(second_draft).expect("save second");
+    let mut deleted_draft = card_draft("confirmed");
+    deleted_draft.title = "已删除卡".into();
+    let deleted = db.knowledge().save(deleted_draft).expect("save deleted");
+    db.knowledge()
+        .batch_update(std::slice::from_ref(&deleted.id), "delete", &[])
+        .expect("delete card");
+
+    let requested = vec![
+        second.id.clone(),
+        deleted.id,
+        first.id.clone(),
+        second.id.clone(),
+    ];
+    let labels = db
+        .knowledge()
+        .labels(Some(&requested))
+        .expect("load requested labels");
+    assert_eq!(
+        labels
+            .iter()
+            .map(|label| label.id.as_str())
+            .collect::<Vec<_>>(),
+        vec![second.id.as_str(), first.id.as_str(), second.id.as_str()]
+    );
+    let all_labels = db.knowledge().labels(None).expect("load title index");
+    let all_cards = db.knowledge().list().expect("load compatibility list");
+    assert_eq!(
+        all_labels
+            .iter()
+            .map(|label| (&label.id, &label.title))
+            .collect::<Vec<_>>(),
+        all_cards
+            .iter()
+            .map(|card| (&card.id, &card.title))
+            .collect::<Vec<_>>()
+    );
+}
+
+#[test]
 fn daily_record_listing_and_trash_are_paginated_and_reversible() {
     let mut db = Database::new_in_memory().expect("in-memory database");
     let first = db
@@ -2479,6 +2583,41 @@ fn review_stats_reports_new_card_cap_and_upcoming_days() {
 }
 
 #[test]
+fn review_stats_snapshot_matches_legacy_stats_and_heatmap_endpoints() {
+    let mut db = Database::new_in_memory().expect("in-memory database");
+    let card = db
+        .knowledge()
+        .save(card_draft("confirmed"))
+        .expect("save card");
+    db.knowledge()
+        .apply_grade(GradeUpdate {
+            id: &card.id,
+            grade: "good",
+            stability: 3.0,
+            difficulty: 5.0,
+            interval_days: 3.0,
+            next_review_at: "2026-07-19",
+            today: "2026-07-16",
+        })
+        .expect("grade card");
+
+    let expected_stats = db
+        .knowledge()
+        .review_stats("2026-07-16")
+        .expect("legacy review stats");
+    let expected_heatmap = db
+        .knowledge()
+        .review_heatmap(7, "2026-07-16")
+        .expect("legacy heatmap");
+    let snapshot = db
+        .knowledge()
+        .review_stats_snapshot("2026-07-16", 7)
+        .expect("combined review snapshot");
+    assert_eq!(snapshot.stats, expected_stats);
+    assert_eq!(snapshot.heatmap, expected_heatmap);
+}
+
+#[test]
 fn review_history_and_heatmap_track_per_day_counts() {
     let mut db = Database::new_in_memory().expect("in-memory database");
     let card = db
@@ -2668,14 +2807,63 @@ fn related_ids_are_resolved_bidirectionally_on_read() {
 
     // B 读取时反向合成出 A
     let b_view = db.knowledge().find(&b.id).expect("find B").expect("exists");
-    assert!(b_view.related_ids.contains(&a.id), "B 应反向显示 A");
+    assert_eq!(b_view.related_ids, vec![a.id.clone()], "B 应反向显示 A");
     // A 仍显示 B
     let a_view = db.knowledge().find(&a.id).expect("find A").expect("exists");
-    assert!(a_view.related_ids.contains(&b.id));
+    assert_eq!(a_view.related_ids, vec![b.id.clone()]);
     // list 同样双向
     let all = db.knowledge().list().expect("list");
     let b_in_list = all.iter().find(|c| c.id == b.id).unwrap();
     assert!(b_in_list.related_ids.contains(&a.id));
+}
+
+#[test]
+fn declared_related_ids_precede_reverse_links_in_stable_order() {
+    let mut db = Database::new_in_memory().expect("in-memory database");
+    let mut target_draft = card_draft("confirmed");
+    target_draft.title = "目标".into();
+    let target = db.knowledge().save(target_draft).expect("save target");
+    let mut direct_draft = card_draft("confirmed");
+    direct_draft.title = "声明关联".into();
+    let direct = db
+        .knowledge()
+        .save(direct_draft)
+        .expect("save direct target");
+    let mut first_draft = card_draft("confirmed");
+    first_draft.title = "反向一".into();
+    let first = db.knowledge().save(first_draft).expect("save first source");
+    let mut second_draft = card_draft("confirmed");
+    second_draft.title = "反向二".into();
+    let second = db
+        .knowledge()
+        .save(second_draft)
+        .expect("save second source");
+
+    let mut target_update = card_draft("confirmed");
+    target_update.title = "目标".into();
+    target_update.related_ids = vec![direct.id.clone()];
+    db.knowledge()
+        .update(&target.id, target_update)
+        .expect("declare forward relation");
+    for source in [&first, &second] {
+        let mut update = card_draft("confirmed");
+        update.title = source.title.clone();
+        update.related_ids = vec![target.id.clone()];
+        db.knowledge()
+            .update(&source.id, update)
+            .expect("declare reverse relation");
+    }
+
+    let target_view = db
+        .knowledge()
+        .find(&target.id)
+        .expect("read target")
+        .expect("target exists");
+    assert_eq!(target_view.declared_related_ids, vec![direct.id.clone()]);
+    assert_eq!(
+        target_view.related_ids,
+        vec![direct.id, first.id, second.id]
+    );
 }
 
 #[test]

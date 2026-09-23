@@ -7,7 +7,7 @@ use crate::backups;
 use crate::day_exemptions;
 use crate::db::{ArchiveImportError, ArticleDraft, Database};
 use crate::exports;
-use crate::helpers::{app_data_dir, backups_dir};
+use crate::helpers::{app_data_dir, backups_dir, run_blocking};
 use crate::knowledge;
 use crate::middleware::{
     add_security_headers, configured_cors, require_api_token, validate_security_configuration,
@@ -19,9 +19,9 @@ use crate::stats;
 
 use axum::{
     extract::{DefaultBodyLimit, State},
-    http::StatusCode,
+    http::{header, HeaderMap, HeaderValue, StatusCode},
     middleware,
-    response::Json,
+    response::{IntoResponse, Json, Response},
     Router,
 };
 use std::sync::{Arc, Mutex};
@@ -133,72 +133,88 @@ async fn detailed_health_check(
     })))
 }
 
-async fn export_full(
-    State(db): State<AppState>,
-) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
-    let mut db = db
-        .lock()
-        .map_err(|error| (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()))?;
-    db.portable_archive()
-        .export_json()
-        .map(Json)
-        .map_err(|error| (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()))
+async fn export_full(State(db): State<AppState>) -> Result<Response, (StatusCode, String)> {
+    let body = run_blocking(move || {
+        let archive = {
+            let mut db = db
+                .lock()
+                .map_err(|error| (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()))?;
+            db.portable_archive()
+                .export_json()
+                .map_err(|error| (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()))?
+        };
+        serde_json::to_vec(&archive)
+            .map_err(|error| (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()))
+    })
+    .await?;
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_static("application/json"),
+    );
+    Ok((headers, body).into_response())
 }
 
 async fn import_full(
     State(db): State<AppState>,
     Json(payload): Json<serde_json::Value>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
-    let mut db = db
-        .lock()
-        .map_err(|error| (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()))?;
-    let report = db
-        .portable_archive()
-        .import_json(payload)
-        .map_err(|error| match error {
-            ArchiveImportError::Invalid(_) | ArchiveImportError::Json(_) => {
-                (StatusCode::BAD_REQUEST, error.to_string())
-            }
-            ArchiveImportError::Storage(_) => {
-                (StatusCode::INTERNAL_SERVER_ERROR, error.to_string())
-            }
-        })?;
-    Ok(Json(serde_json::json!({
-        "imported_articles": report.imported_articles,
-        "imported_reviews": report.imported_reviews,
-        "imported_knowledge_cards": report.imported_knowledge_cards,
-    })))
+    let result = run_blocking(move || {
+        let mut db = db
+            .lock()
+            .map_err(|error| (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()))?;
+        let report = db
+            .portable_archive()
+            .import_json(payload)
+            .map_err(|error| match error {
+                ArchiveImportError::Invalid(_) | ArchiveImportError::Json(_) => {
+                    (StatusCode::BAD_REQUEST, error.to_string())
+                }
+                ArchiveImportError::Storage(_) => {
+                    (StatusCode::INTERNAL_SERVER_ERROR, error.to_string())
+                }
+            })?;
+        Ok(serde_json::json!({
+            "imported_articles": report.imported_articles,
+            "imported_reviews": report.imported_reviews,
+            "imported_knowledge_cards": report.imported_knowledge_cards,
+        }))
+    })
+    .await?;
+    Ok(Json(result))
 }
 
 async fn import_articles(
     State(db): State<AppState>,
     Json(payload): Json<Vec<CreateArticlePayload>>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
-    let mut db = db
-        .lock()
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-    let mut imported = 0u32;
-    let mut skipped = 0u32;
-    for item in payload {
-        if item.content.trim().is_empty() {
-            skipped += 1;
-            continue;
+    let result = run_blocking(move || {
+        let mut db = db
+            .lock()
+            .map_err(|error| (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()))?;
+        let mut imported = 0u32;
+        let mut skipped = 0u32;
+        for item in payload {
+            if item.content.trim().is_empty() {
+                skipped += 1;
+                continue;
+            }
+            db.articles()
+                .save(ArticleDraft {
+                    date: item.date,
+                    title: item.title,
+                    content: item.content,
+                    mood: item.mood,
+                    tags: item.tags.unwrap_or_default(),
+                    spaces: item.spaces.unwrap_or_default(),
+                })
+                .map_err(|error| (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()))?;
+            imported += 1;
         }
-        db.articles()
-            .save(ArticleDraft {
-                date: item.date,
-                title: item.title,
-                content: item.content,
-                mood: item.mood,
-                tags: item.tags.unwrap_or_default(),
-                spaces: item.spaces.unwrap_or_default(),
-            })
-            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-        imported += 1;
-    }
-    Ok(Json(
-        serde_json::json!({ "imported": imported, "skipped": skipped }),
-    ))
+        Ok(serde_json::json!({ "imported": imported, "skipped": skipped }))
+    })
+    .await?;
+    Ok(Json(result))
 }
 
 fn build_router(db: Database) -> Router {
@@ -299,6 +315,10 @@ fn build_router(db: Database) -> Router {
             axum::routing::get(knowledge::list_cards).post(knowledge::create_card),
         )
         .route(
+            "/knowledge-cards/labels",
+            axum::routing::get(knowledge::card_labels),
+        )
+        .route(
             "/knowledge-cards/tags",
             axum::routing::get(knowledge::list_tags),
         )
@@ -391,6 +411,10 @@ fn build_router(db: Database) -> Router {
             axum::routing::get(review::preview_card),
         )
         .route("/review/stats", axum::routing::get(review::review_stats))
+        .route(
+            "/review/stats/snapshot",
+            axum::routing::get(review::review_stats_snapshot),
+        )
         .route(
             "/review/heatmap",
             axum::routing::get(review::review_heatmap),

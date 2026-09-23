@@ -1979,6 +1979,9 @@ export default function KnowledgePage({
   if (qualityFilter) libraryFilters.push({ label: qualityOptions.find(([value]) => value === qualityFilter)?.[1] || qualityFilter, onRemove: () => changeQuality("") });
   useEffect(() => {
     detailScrollRef.current?.scrollTo({ top: 0 });
+    if (window.matchMedia("(max-width: 1023px)").matches) {
+      document.getElementById("main-content")?.scrollTo({ top: 0 });
+    }
     if (!detailVisible || awaitingDetail) return;
     const frame = window.requestAnimationFrame(() => {
       document.getElementById(readerTab === "read" ? "knowledge-reading-title" : readerTab === "edit" ? "knowledge-card-title" : "knowledge-review-panel")?.focus({ preventScroll: true });

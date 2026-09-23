@@ -1561,3 +1561,118 @@
     padding-left: 0;
   }
 }
+
+/* Narrow screens browse and read as one naturally scrolling page. */
+@media (max-width: 1023px) {
+  .knowledge-hub {
+    height: auto;
+    min-height: 100%;
+    padding-bottom: 24px;
+  }
+  .kl-workspace {
+    display: flex;
+    flex: 1 0 auto;
+    flex-direction: column;
+    gap: 0;
+    min-height: 0;
+  }
+  .kl-library,
+  .kl-detail {
+    flex: none;
+    min-height: 0;
+    overflow: visible;
+  }
+  .kl-library-scroll,
+  .kl-detail-scroll {
+    flex: none;
+    min-height: 0;
+    overflow: visible;
+  }
+}
+@media (max-width: 767px) {
+  .kl-page-header {
+    padding-inline: 16px;
+  }
+  .kl-library,
+  .kl-detail {
+    border: 0;
+    border-radius: 0;
+    background: transparent;
+    box-shadow: none;
+  }
+  .kl-library-top {
+    padding: 12px 16px 0;
+  }
+  .kl-library-scroll {
+    padding: 0 16px 16px;
+  }
+  .kl-collection {
+    gap: 10px;
+  }
+  .kl-card-top {
+    padding: 14px 16px 0 50px;
+  }
+  .kl-card-link {
+    padding: 10px 16px 14px;
+  }
+  .kl-card-tags {
+    flex-wrap: wrap;
+    min-height: 0;
+    margin-top: 11px;
+  }
+  .kl-card-check {
+    top: 4px;
+    left: 4px;
+  }
+  .kl-detail-toolbar {
+    position: sticky;
+    top: 0;
+    z-index: 20;
+    padding: 6px 16px;
+    background: var(--ui-canvas);
+  }
+  .kl-detail-tabs {
+    position: sticky;
+    top: 56px;
+    z-index: 19;
+    gap: 24px;
+    padding-inline: 16px;
+    background: var(--ui-canvas);
+  }
+  .kl-detail-scroll > [role="alert"],
+  .kl-detail-scroll > [role="status"],
+  .kl-notice {
+    margin-inline: 16px;
+  }
+  .kl-review {
+    width: 100%;
+    max-width: none;
+    padding: 20px 16px 28px;
+  }
+  .kl-collection[data-layout="compact"] {
+    gap: 10px;
+  }
+  .kl-collection[data-layout="compact"] .kl-card {
+    padding: 0;
+    border: 1px solid var(--kl-line);
+    border-radius: 10px;
+  }
+  .kl-collection[data-layout="compact"] .kl-card-top {
+    padding: 14px 16px 0 50px;
+  }
+  .kl-collection[data-layout="compact"] .kl-card-link {
+    padding: 10px 16px 14px;
+  }
+  .kl-collection[data-layout="compact"] .kl-card-tags {
+    display: none;
+  }
+  .kl-collection[data-layout="compact"] .kl-card-meta {
+    margin-top: 7px;
+    padding: 0 25px 0 0;
+    border: 0;
+  }
+  .kl-collection[data-layout="compact"] .kl-card-check {
+    top: 4px;
+    left: 4px;
+  }
+}

@@ -1,4 +1,13 @@
-import { createContext, Suspense, useCallback, useContext, useEffect, useMemo, useState } from "react";
+import {
+  createContext,
+  Suspense,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useState,
+  type CSSProperties,
+} from "react";
 import { MotionConfig } from "framer-motion";
 import { Outlet, useLocation, useNavigate as useRouterNavigate } from "@tanstack/react-router";
 import { useQuery } from "@tanstack/react-query";
@@ -10,6 +19,21 @@ import CommandPalette from "./components/CommandPalette";
 import * as api from "./lib/api";
 import { connectionReturnStorageKey, readLocalStorage, readSessionStorage, removeSessionStorage, writeLocalStorage } from "./lib/storage";
 import { colorSchemeForMode, nextExplicitThemeMode, resolveDarkTheme, themeColorForMode, type ThemeMode } from "./lib/theme";
+import {
+  defaultWallpaperPreference,
+  defaultWallpaperPreferences,
+  loadWallpaperImage,
+  loadWallpaperPreferences,
+  normalizeWallpaperPreference,
+  resetWallpaper as resetWallpaperStorage,
+  saveWallpaperImage as persistWallpaperImage,
+  saveWallpaperPreference,
+  wallpaperModuleForPage,
+  type WallpaperImageTarget,
+  type WallpaperModule,
+  type WallpaperPreference,
+  type WallpaperPreferences,
+} from "./lib/wallpapers";
 
 export type Page = "today" | "history" | "archive" | "search" | "stats" | "reviews" | "review" | "knowledge" | "settings";
 export type { ThemeMode } from "./lib/theme";
@@ -83,6 +107,17 @@ export interface AppShellContextValue {
   onChangeThemeMode: (mode: ThemeMode) => void;
   accentTheme: string;
   onChangeAccentTheme: (theme: string) => void;
+  wallpaperPreferences: WallpaperPreferences;
+  onChangeWallpaperPreference: (
+    module: WallpaperModule,
+    preference: WallpaperPreference,
+  ) => Promise<boolean>;
+  onSaveWallpaperImage: (
+    module: WallpaperModule,
+    target: WallpaperImageTarget,
+    file: File,
+  ) => Promise<boolean>;
+  onResetWallpaper: (module: WallpaperModule) => Promise<boolean>;
 }
 
 const AppShellContext = createContext<AppShellContextValue | null>(null);
@@ -114,8 +149,30 @@ export function AppShell() {
     if (typeof window !== "undefined") return readLocalStorage("accentTheme") || "";
     return "";
   });
+  const [wallpaperPreferences, setWallpaperPreferences] = useState<WallpaperPreferences>(
+    () => defaultWallpaperPreferences(),
+  );
+  const [loadedCustomWallpaper, setLoadedCustomWallpaper] = useState<{
+    module: WallpaperModule;
+    desktopUrl: string;
+    mobileUrl: string;
+  } | null>(null);
 
   const dark = resolveDarkTheme(themeMode, systemDark);
+
+  useEffect(() => {
+    let current = true;
+    void loadWallpaperPreferences()
+      .then((preferences) => {
+        if (current) setWallpaperPreferences(preferences);
+      })
+      .catch(() => {
+        // Wallpaper storage is optional; keep the built-in defaults if it is unavailable.
+      });
+    return () => {
+      current = false;
+    };
+  }, []);
 
   // 侧栏「今日到期」角标：useQuery 缓存 + 每分钟自动刷新；失败时静默隐藏。
   const { data: dueCount } = useQuery({
@@ -158,6 +215,47 @@ export function AppShell() {
   const changeAccentTheme = useCallback((theme: string) => {
     setAccentTheme(theme);
     if (typeof window !== "undefined") writeLocalStorage("accentTheme", theme);
+  }, []);
+  const changeWallpaperPreference = useCallback(
+    async (module: WallpaperModule, preference: WallpaperPreference) => {
+      const normalized = normalizeWallpaperPreference(module, preference);
+      try {
+        await saveWallpaperPreference(module, normalized);
+        setWallpaperPreferences((current) => ({ ...current, [module]: normalized }));
+        return true;
+      } catch {
+        return false;
+      }
+    },
+    [],
+  );
+  const saveWallpaperImage = useCallback(
+    async (module: WallpaperModule, target: WallpaperImageTarget, file: File) => {
+      const preference = normalizeWallpaperPreference(module, {
+        ...wallpaperPreferences[module],
+        source: "custom",
+      });
+      try {
+        await persistWallpaperImage(module, target, file, preference);
+        setWallpaperPreferences((current) => ({ ...current, [module]: preference }));
+        return true;
+      } catch {
+        return false;
+      }
+    },
+    [wallpaperPreferences],
+  );
+  const resetModuleWallpaper = useCallback(async (module: WallpaperModule) => {
+    try {
+      await resetWallpaperStorage(module);
+      setWallpaperPreferences((current) => ({
+        ...current,
+        [module]: defaultWallpaperPreference(module),
+      }));
+      return true;
+    } catch {
+      return false;
+    }
   }, []);
 
   const go = useCallback((to: string, search: Record<string, unknown> = {}, params?: Record<string, string>) => {
@@ -334,6 +432,67 @@ export function AppShell() {
   }, [go, routerNavigate]);
 
   const currentPage = useMemo(() => pageFromPath(location.pathname), [location.pathname]);
+  const wallpaperModule = wallpaperModuleForPage(currentPage);
+  const wallpaperPreference = wallpaperPreferences[wallpaperModule];
+
+  useEffect(() => {
+    let current = true;
+    const objectUrls = new Set<string>();
+    setLoadedCustomWallpaper(null);
+
+    if (wallpaperPreference.source !== "custom") {
+      return () => {
+        current = false;
+      };
+    }
+
+    void loadWallpaperImage(wallpaperModule)
+      .then((record) => {
+        if (!current || !record) return;
+        const desktopBlob = record.desktopBlob ?? record.mobileBlob;
+        const mobileBlob = record.mobileBlob ?? record.desktopBlob;
+        if (!desktopBlob || !mobileBlob) return;
+        const makeUrl = (blob: Blob) => {
+          const url = URL.createObjectURL(blob);
+          objectUrls.add(url);
+          return url;
+        };
+        const desktopUrl = makeUrl(desktopBlob);
+        const mobileUrl =
+          mobileBlob === desktopBlob ? desktopUrl : makeUrl(mobileBlob);
+        setLoadedCustomWallpaper({
+          module: wallpaperModule,
+          desktopUrl,
+          mobileUrl,
+        });
+      })
+      .catch(() => {
+        if (current) setLoadedCustomWallpaper(null);
+      });
+
+    return () => {
+      current = false;
+      objectUrls.forEach((url) => URL.revokeObjectURL(url));
+    };
+  }, [wallpaperModule, wallpaperPreference.source]);
+
+  const activeWallpaper =
+    wallpaperPreference.source === "anime-night"
+      ? {
+          desktopUrl: "/backgrounds/stats-overview-desktop.png",
+          mobileUrl: "/backgrounds/stats-overview-mobile.png",
+        }
+      : wallpaperPreference.source === "custom" &&
+          loadedCustomWallpaper?.module === wallpaperModule
+        ? loadedCustomWallpaper
+        : null;
+  const wallpaperStyle = activeWallpaper
+    ? ({
+        "--module-wallpaper-desktop": `url("${activeWallpaper.desktopUrl}")`,
+        "--module-wallpaper-mobile": `url("${activeWallpaper.mobileUrl}")`,
+        "--module-wallpaper-overlay": String(wallpaperPreference.overlay / 100),
+      } as CSSProperties)
+    : undefined;
 
   useEffect(() => {
     document.title = `${titleForPath(location.pathname)} — 每日总结`;
@@ -358,6 +517,10 @@ export function AppShell() {
     onChangeThemeMode: changeThemeMode,
     accentTheme,
     onChangeAccentTheme: changeAccentTheme,
+    wallpaperPreferences,
+    onChangeWallpaperPreference: changeWallpaperPreference,
+    onSaveWallpaperImage: saveWallpaperImage,
+    onResetWallpaper: resetModuleWallpaper,
   };
 
   return (
@@ -384,7 +547,14 @@ export function AppShell() {
                 dueCount={dueCount}
               />
             )}
-            <main id="main-content" className="app-content min-h-0 min-w-0 flex-1 overflow-x-hidden overflow-y-auto" tabIndex={-1}>
+            <main
+              id="main-content"
+              className="app-content min-h-0 min-w-0 flex-1 overflow-x-hidden overflow-y-auto"
+              data-wallpaper-module={wallpaperModule}
+              data-wallpaper-active={activeWallpaper ? "true" : "false"}
+              style={wallpaperStyle}
+              tabIndex={-1}
+            >
               <Suspense fallback={<PageFallback />}>
                 <Outlet />
               </Suspense>

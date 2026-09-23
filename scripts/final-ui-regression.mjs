@@ -99,6 +99,7 @@ let queue = cards.slice(0, 3).map((card, i) => ({
   review_interval_days: 3,
   review_ease: 2.5,
 }));
+let failStatsSnapshot = false;
 let reviewedToday = 4,
   failGrade = false,
   failConnection = false,
@@ -402,6 +403,13 @@ await context.route("**/*", async (route) => {
       });
     }
 
+    if (path === "/knowledge-cards/labels") {
+      const ids = url.searchParams.getAll("id");
+      const labels = cards.map(({ id, title }) => ({ id, title }));
+      return send(url.searchParams.get("all") === "true"
+        ? labels
+        : ids.flatMap((id) => labels.filter((label) => label.id === id)));
+    }
     if (path === "/knowledge-cards" && method === "GET") return send(cards);
     if (path === "/review/due")
       return send({
@@ -416,6 +424,27 @@ await context.route("**/*", async (route) => {
           total_confirmed: 21,
         },
       });
+    if (path === "/review/stats/snapshot") {
+      if (failStatsSnapshot) return send({ error: "Synthetic snapshot unavailable" }, 503);
+      return send({
+        stats: {
+          total_reviews: 40,
+          reviewed_today: reviewedToday,
+          due: queue.length,
+          total_confirmed: 21,
+          learning: 15,
+          mature: 6,
+          new_cards: 0,
+          streak_days: 5,
+          daily: [],
+          upcoming: Array.from({ length: 7 }, (_, i) => ({
+            date: `2026-09-${23 + i}`,
+            count: [2, 0, 5, 3, 1, 0, 4][i],
+          })),
+        },
+        heatmap: [],
+      });
+    }
     if (path === "/review/stats")
       return send({
         total_reviews: 40,
@@ -1046,6 +1075,20 @@ try {
       assert.equal(writes.length, before);
     },
   );
+  await check("stats snapshot falls back to the legacy endpoints", async () => {
+    failStatsSnapshot = true;
+    const requestStart = requests.length;
+    await go("/stats?date=2026-09");
+    await page.locator(".ft-calendar-grid").waitFor();
+    await page.getByRole("tab", { name: "记忆复习", exact: true }).click();
+    await page.getByText("累计评分", { exact: true }).waitFor();
+    const paths = requests.slice(requestStart).map((request) => request.path);
+    assert(paths.includes("/review/stats/snapshot"));
+    assert(paths.includes("/review/stats"));
+    assert(paths.includes("/review/heatmap"));
+    failStatsSnapshot = false;
+    await page.getByRole("tab", { name: "记录概览", exact: true }).click();
+  });
   await check("stats moves redundant sections behind task tabs", async () => {
     await go("/stats?date=2026-09");
     await page.locator(".ft-calendar-grid").waitFor();

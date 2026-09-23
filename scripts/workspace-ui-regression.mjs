@@ -74,12 +74,15 @@ let cards = Array.from({ length: 30 }, (_, i) => {
     content_version: 1,
   };
 });
+cards[0].related_ids = [cards[1].id];
+cards[0].declared_related_ids = [cards[1].id];
 const originalCards = structuredClone(cards);
 let deletedCards = [];
 let writes = [],
   requests = [],
   failUpdate = false,
-  failList = false;
+  failList = false,
+  failLabelLookup = false;
 let queue = cards.slice(0, 3).map((card, i) => ({
   ...card,
   id: `question-${i + 1}`,
@@ -233,6 +236,17 @@ await context.route("**/*", async (route) => {
       });
     if (method !== "GET")
       writes.push({ path, method, body: request.postData() });
+    if (path === "/knowledge-cards/labels") {
+      if (failLabelLookup) {
+        failLabelLookup = false;
+        return send({ error: "Synthetic title-index failure" }, 503);
+      }
+      const ids = url.searchParams.getAll("id");
+      const labels = cards.map(({ id, title }) => ({ id, title }));
+      return send(url.searchParams.get("all") === "true"
+        ? labels
+        : ids.flatMap((id) => labels.filter((label) => label.id === id)));
+    }
     if (path === "/knowledge-cards" && method === "GET") return send(cards);
     if (path === "/review/due")
       return send({
@@ -246,6 +260,25 @@ await context.route("**/*", async (route) => {
           reviewed_today: reviewedToday,
           total_confirmed: 21,
         },
+      });
+    if (path === "/review/stats/snapshot")
+      return send({
+        stats: {
+          total_reviews: 40,
+          reviewed_today: reviewedToday,
+          due: queue.length,
+          total_confirmed: 21,
+          learning: 15,
+          mature: 6,
+          new_cards: 0,
+          streak_days: 5,
+          daily: [],
+          upcoming: Array.from({ length: 7 }, (_, i) => ({
+            date: `2026-09-${23 + i}`,
+            count: [2, 0, 5, 3, 1, 0, 4][i],
+          })),
+        },
+        heatmap: [],
       });
     if (path === "/review/stats")
       return send({
@@ -583,8 +616,17 @@ try {
       ),
     );
   });
+  const fullKnowledgeReadsBeforeReview = requests.filter(
+    (request) => request.path === "/knowledge-cards" && request.method === "GET",
+  ).length;
   await go("/review");
   await page.locator(".rs-ready").waitFor();
+  await check("review does not download the full knowledge library on entry", async () => {
+    assert.equal(
+      requests.filter((request) => request.path === "/knowledge-cards" && request.method === "GET").length,
+      fullKnowledgeReadsBeforeReview,
+    );
+  });
   await check("review does not reveal or grade before starting", async () => {
     await page.locator("h1").click();
     await page.keyboard.press("Space");
@@ -603,6 +645,9 @@ try {
       await page.locator(".rs-question").focus();
       await page.keyboard.press("Space");
       await page.locator(".rs-answer").waitFor();
+      await page.locator(".rs-evidence summary").click();
+      await page.getByRole("button", { name: cards[1].title }).waitFor();
+      assert(requests.some((request) => request.path === "/knowledge-cards/labels" && request.q.includes("id=demo-2")));
       await page.waitForTimeout(100);
       await shot("review-answer");
       const before = writes.filter((w) => w.path.endsWith("/grade")).length;
@@ -618,8 +663,13 @@ try {
   );
   await page.getByRole("button", { name: "显示答案", exact: true }).click();
   await page.locator(".rs-evidence summary").click();
+  failLabelLookup = true;
+  await page.getByRole("button", { name: "编辑知识条目", exact: true }).click();
+  await page.getByText(/无法加载知识条目编辑信息/).waitFor();
+  assert.equal(await page.getByRole("textbox", { name: "知识标题", exact: true }).count(), 0);
   await page.getByRole("button", { name: "编辑知识条目", exact: true }).click();
   await page.getByRole("textbox", { name: "知识标题", exact: true }).waitFor();
+  assert(requests.some((request) => request.path === "/knowledge-cards/labels" && request.q === "?all=true"));
   await check(
     "review shortcuts ignore text entry inside the editor",
     async () => {

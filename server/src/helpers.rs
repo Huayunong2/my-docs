@@ -53,6 +53,16 @@ pub(crate) fn exports_dir() -> PathBuf {
 pub(crate) fn backups_dir() -> PathBuf {
     app_data_dir().join("backups")
 }
+pub(crate) async fn run_blocking<T, F>(task: F) -> Result<T, (StatusCode, String)>
+where
+    T: Send + 'static,
+    F: FnOnce() -> Result<T, (StatusCode, String)> + Send + 'static,
+{
+    tokio::task::spawn_blocking(task)
+        .await
+        .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "后台操作失败".into()))?
+}
+
 pub(crate) fn parse_date(date: &str) -> Result<NaiveDate, (StatusCode, String)> {
     NaiveDate::parse_from_str(date, "%Y-%m-%d")
         .map_err(|_| (StatusCode::BAD_REQUEST, format!("Invalid date: {}", date)))

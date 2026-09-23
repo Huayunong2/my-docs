@@ -34,6 +34,13 @@ pub(crate) struct KnowledgeSummaryQuery {
     pub(crate) project: Option<String>,
 }
 
+#[derive(Debug, Deserialize)]
+pub(crate) struct KnowledgeLabelsQuery {
+    #[serde(default)]
+    id: Vec<String>,
+    all: Option<bool>,
+}
+
 #[derive(Debug)]
 struct AnalyzeJobChunkState {
     index: usize,
@@ -678,14 +685,6 @@ pub(crate) async fn list_cards(
         }
     }
 
-    let mut db = db
-        .lock()
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-    let rows = db
-        .knowledge()
-        .list()
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-
     let query = q.q.unwrap_or_default().trim().to_lowercase();
     let card_type_filter = q.card_type.unwrap_or_default();
     let status_filter = q.status.unwrap_or_default();
@@ -693,58 +692,102 @@ pub(crate) async fn list_cards(
     let tag_filter = q.tag.unwrap_or_default();
     let project_filter = q.project.unwrap_or_default();
     let quality_filter = q.quality.unwrap_or_default();
-    let mut cards = Vec::new();
-    for card in rows {
-        if !card_type_filter.is_empty() && card.card_type != card_type_filter {
-            continue;
-        }
-        if !status_filter.is_empty() && status_filter != "all" && card.status != status_filter {
-            continue;
-        }
-        if usage_filter == "never_used" && card.usage_count != 0 {
-            continue;
-        }
-        if !tag_filter.is_empty() && !card.tags.iter().any(|t| t == &tag_filter) {
-            continue;
-        }
-        if !project_filter.is_empty()
-            && !card
-                .projects
-                .iter()
-                .any(|project| project.eq_ignore_ascii_case(&project_filter))
-        {
-            continue;
-        }
-        if !quality_filter.is_empty() {
-            let matches = match quality_filter.as_str() {
-                "missing_source" => {
-                    card.source_excerpt.trim().is_empty()
-                        || (card.source_date.trim().is_empty()
-                            && card.source_article_id.trim().is_empty()
-                            && card.source_review_id.trim().is_empty())
+    run_blocking(move || {
+        let rows = {
+            let mut db = db
+                .lock()
+                .map_err(|error| (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()))?;
+            db.knowledge()
+                .list()
+                .map_err(|error| (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()))?
+        };
+        let mut cards = Vec::new();
+        for card in rows {
+            if !card_type_filter.is_empty() && card.card_type != card_type_filter {
+                continue;
+            }
+            if !status_filter.is_empty() && status_filter != "all" && card.status != status_filter {
+                continue;
+            }
+            if usage_filter == "never_used" && card.usage_count != 0 {
+                continue;
+            }
+            if !tag_filter.is_empty() && !card.tags.iter().any(|tag| tag == &tag_filter) {
+                continue;
+            }
+            if !project_filter.is_empty()
+                && !card
+                    .projects
+                    .iter()
+                    .any(|project| project.eq_ignore_ascii_case(&project_filter))
+            {
+                continue;
+            }
+            if !quality_filter.is_empty() {
+                let matches = match quality_filter.as_str() {
+                    "missing_source" => {
+                        card.source_excerpt.trim().is_empty()
+                            || (card.source_date.trim().is_empty()
+                                && card.source_article_id.trim().is_empty()
+                                && card.source_review_id.trim().is_empty())
+                    }
+                    "missing_project" => card.projects.is_empty(),
+                    "missing_tags" => card.tags.is_empty(),
+                    "short_content" => card.content.trim().chars().count() < 24,
+                    _ => false,
+                };
+                if !matches {
+                    continue;
                 }
-                "missing_project" => card.projects.is_empty(),
-                "missing_tags" => card.tags.is_empty(),
-                "short_content" => card.content.trim().chars().count() < 24,
-                _ => false,
-            };
-            if !matches {
-                continue;
             }
-        }
-        if !query.is_empty() {
-            let haystack =
-                format!("{} {} {}", card.title, card.content, card.tags.join(" ")).to_lowercase();
-            if !haystack.contains(&query) {
-                continue;
+            if !query.is_empty() {
+                let haystack = format!("{} {} {}", card.title, card.content, card.tags.join(" "))
+                    .to_lowercase();
+                if !haystack.contains(&query) {
+                    continue;
+                }
             }
+            cards.push(card);
         }
-        cards.push(card);
-    }
-    Ok(Json(cards))
+        Ok(Json(cards))
+    })
+    .await
 }
 
 /// 回收站只返回软删除卡片；正文和关系仍保留在数据库中，供恢复操作使用。
+pub(crate) async fn card_labels(
+    State(db): State<AppState>,
+    Query(query): Query<KnowledgeLabelsQuery>,
+) -> Result<Json<Vec<KnowledgeCardLabel>>, (StatusCode, String)> {
+    let all = query.all == Some(true);
+    if (all && !query.id.is_empty())
+        || (!all && (query.id.is_empty() || query.all == Some(false)))
+        || query.id.len() > 64
+        || query
+            .id
+            .iter()
+            .any(|id| id.is_empty() || id.chars().count() > 128)
+    {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "请指定 all=true 或有效的知识条目 ID".into(),
+        ));
+    }
+
+    let db = db.clone();
+    let ids = query.id;
+    run_blocking(move || {
+        let mut db = db
+            .lock()
+            .map_err(|error| (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()))?;
+        db.knowledge()
+            .labels((!all).then_some(ids.as_slice()))
+            .map(Json)
+            .map_err(|error| (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()))
+    })
+    .await
+}
+
 pub(crate) async fn list_trash(
     State(db): State<AppState>,
 ) -> Result<Json<Vec<KnowledgeCard>>, (StatusCode, String)> {
@@ -795,38 +838,41 @@ pub(crate) async fn query_cards(
             return Err((StatusCode::BAD_REQUEST, "Invalid quality filter".into()));
         }
     }
-    let sort = q.sort.as_deref().unwrap_or("updated");
-    if !valid_card_sort(sort) {
-        return Err((StatusCode::BAD_REQUEST, "Invalid card sort".into()));
-    }
     let page = q.page.unwrap_or(1).max(1);
     let page_size = q.page_size.unwrap_or(24).clamp(1, 100);
-
-    let mut db = db
-        .lock()
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-    let (cards, total) = db
-        .knowledge()
-        .query_page(KnowledgePageQuery {
-            query: q.q.as_deref().unwrap_or_default(),
-            card_type: q.card_type.as_deref(),
-            status: q.status.as_deref(),
-            usage: q.usage.as_deref(),
-            tag: q.tag.as_deref(),
-            project: q.project.as_deref(),
-            quality: q.quality.as_deref(),
-            sort,
+    let sort = q.sort.unwrap_or_else(|| "updated".into());
+    if !valid_card_sort(&sort) {
+        return Err((StatusCode::BAD_REQUEST, "Invalid card sort".into()));
+    }
+    let query = q.q.unwrap_or_default();
+    run_blocking(move || {
+        let mut db = db
+            .lock()
+            .map_err(|error| (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()))?;
+        let (cards, total) = db
+            .knowledge()
+            .query_page(KnowledgePageQuery {
+                query: &query,
+                card_type: q.card_type.as_deref(),
+                status: q.status.as_deref(),
+                usage: q.usage.as_deref(),
+                tag: q.tag.as_deref(),
+                project: q.project.as_deref(),
+                quality: q.quality.as_deref(),
+                sort: &sort,
+                page,
+                page_size,
+            })
+            .map_err(|error| (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()))?;
+        Ok(Json(KnowledgeCardsPage {
+            cards,
+            total,
             page,
             page_size,
-        })
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-    Ok(Json(KnowledgeCardsPage {
-        cards,
-        total,
-        page,
-        page_size,
-        has_more: page.saturating_mul(page_size) < total,
-    }))
+            has_more: page.saturating_mul(page_size) < total,
+        }))
+    })
+    .await
 }
 
 /// 返回所有已用标签及其计数，按使用频次降序、同频次按名称排序。

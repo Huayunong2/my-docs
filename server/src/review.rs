@@ -1,14 +1,16 @@
 use crate::db::{Database, GradeUpdate};
-use crate::helpers::format_date;
+use crate::helpers::{format_date, run_blocking};
 use crate::models::{
     DueQuery, DueReviewResponse, GradeCardPayload, HeatmapQuery, KnowledgeCard, ReviewGradePreview,
-    ReviewHistoryEntry, ReviewSettings, ReviewStatsResponse, UpdateReviewSettingsPayload,
+    ReviewHistoryEntry, ReviewSettings, ReviewStatsResponse, ReviewStatsSnapshot,
+    UpdateReviewSettingsPayload,
 };
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::Json;
 use chrono::{Duration, Local, NaiveDate};
 use fsrs::{MemoryState, FSRS};
+use serde::Deserialize;
 use std::sync::{Arc, Mutex};
 
 type AppState = Arc<Mutex<Database>>;
@@ -248,13 +250,39 @@ pub(crate) async fn review_stats(
     State(db): State<AppState>,
 ) -> Result<Json<ReviewStatsResponse>, (StatusCode, String)> {
     let today = Local::now().format("%Y-%m-%d").to_string();
-    let mut db = db
-        .lock()
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-    db.knowledge()
-        .review_stats(&today)
-        .map(Json)
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))
+    run_blocking(move || {
+        let mut db = db
+            .lock()
+            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        db.knowledge()
+            .review_stats(&today)
+            .map(Json)
+            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))
+    })
+    .await
+}
+
+#[derive(Debug, Deserialize)]
+pub(crate) struct ReviewStatsSnapshotQuery {
+    days: Option<i64>,
+}
+
+pub(crate) async fn review_stats_snapshot(
+    State(db): State<AppState>,
+    Query(query): Query<ReviewStatsSnapshotQuery>,
+) -> Result<Json<ReviewStatsSnapshot>, (StatusCode, String)> {
+    let today = Local::now().format("%Y-%m-%d").to_string();
+    let days = query.days.unwrap_or(365).clamp(7, 730);
+    run_blocking(move || {
+        let mut db = db
+            .lock()
+            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        db.knowledge()
+            .review_stats_snapshot(&today, days)
+            .map(Json)
+            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))
+    })
+    .await
 }
 
 pub(crate) async fn review_history(
@@ -276,13 +304,16 @@ pub(crate) async fn review_heatmap(
 ) -> Result<Json<Vec<crate::models::DailyReviewCount>>, (StatusCode, String)> {
     let days = query.days.unwrap_or(365).clamp(7, 730);
     let today = Local::now().format("%Y-%m-%d").to_string();
-    let mut db = db
-        .lock()
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-    db.knowledge()
-        .review_heatmap(days, &today)
-        .map(Json)
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))
+    run_blocking(move || {
+        let mut db = db
+            .lock()
+            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        db.knowledge()
+            .review_heatmap(days, &today)
+            .map(Json)
+            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))
+    })
+    .await
 }
 
 pub(crate) async fn touch_card(

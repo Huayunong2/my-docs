@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { getDueReviewCards, getKnowledgeCard, getKnowledgeSummary, getReviewPreview, getReviewSettings, getReviewStats, gradeReviewCard, queryKnowledgeCards, touchKnowledgeCard, updateReviewSettings } from "./api";
+import { getDueReviewCards, getKnowledgeCard, getKnowledgeCardLabels, getKnowledgeSummary, getReviewPreview, getReviewSettings, getReviewStats, getReviewStatsSnapshot, gradeReviewCard, queryKnowledgeCards, touchKnowledgeCard, updateReviewSettings } from "./api";
 
 function storage(values: Record<string, string>) {
   return {
@@ -106,6 +106,56 @@ describe("review scheduling API", () => {
     expect(res.total_reviews).toBe(12);
     expect(res.streak_days).toBe(3);
     expect(res.daily[0].count).toBe(2);
+  });
+
+  it("loads only requested knowledge labels in request order", async () => {
+    vi.stubGlobal("window", { __TAURI_INTERNALS__: {} });
+    vi.stubGlobal("localStorage", storage({ server_url: "https://example.test/api" }));
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse([
+      { id: "card/1", title: "关联卡" },
+    ]));
+    vi.stubGlobal("fetch", fetchMock);
+    const controller = new AbortController();
+
+    const labels = await getKnowledgeCardLabels(["card/1", "card-2"], {
+      signal: controller.signal,
+    });
+
+    expect(fetchMock.mock.calls[0][0]).toBe(
+      "https://example.test/api/knowledge-cards/labels?id=card%2F1&id=card-2",
+    );
+    expect(fetchMock.mock.calls[0][1].signal).toBe(controller.signal);
+    expect(labels).toEqual([{ id: "card/1", title: "关联卡" }]);
+  });
+
+  it("loads the lightweight knowledge title index only when requested", async () => {
+    vi.stubGlobal("window", { __TAURI_INTERNALS__: {} });
+    vi.stubGlobal("localStorage", storage({ server_url: "https://example.test/api" }));
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse([]));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await getKnowledgeCardLabels();
+
+    expect(fetchMock.mock.calls[0][0]).toBe(
+      "https://example.test/api/knowledge-cards/labels?all=true",
+    );
+  });
+
+  it("loads combined review stats and heatmap", async () => {
+    vi.stubGlobal("window", { __TAURI_INTERNALS__: {} });
+    vi.stubGlobal("localStorage", storage({ server_url: "https://example.test/api" }));
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({
+      stats: { total_reviews: 4, streak_days: 2, daily: [], upcoming: [] },
+      heatmap: [{ date: "2026-08-01", count: 1 }],
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const snapshot = await getReviewStatsSnapshot(365);
+
+    expect(fetchMock.mock.calls[0][0]).toBe(
+      "https://example.test/api/review/stats/snapshot?days=365",
+    );
+    expect(snapshot.heatmap[0].count).toBe(1);
   });
 
   it("loads and updates persisted review settings", async () => {
