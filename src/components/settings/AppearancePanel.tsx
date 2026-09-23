@@ -1,4 +1,10 @@
-import { useEffect, useRef, useState, type ChangeEvent } from "react";
+import {
+  useEffect,
+  useRef,
+  useState,
+  type ChangeEvent,
+  type CSSProperties,
+} from "react";
 import {
   Check,
   ImagePlus,
@@ -80,6 +86,7 @@ export default function AppearancePanel({
   themeMode,
   onChangeThemeMode,
   wallpaperPreferences,
+  wallpaperPreferencesReady,
   onChangeWallpaperPreference,
   onSaveWallpaperImage,
   onResetWallpaper,
@@ -89,6 +96,7 @@ export default function AppearancePanel({
   themeMode: ThemeMode;
   onChangeThemeMode: (mode: ThemeMode) => void;
   wallpaperPreferences: WallpaperPreferences;
+  wallpaperPreferencesReady: boolean;
   onChangeWallpaperPreference: (
     module: WallpaperModule,
     preference: WallpaperPreference,
@@ -115,6 +123,7 @@ export default function AppearancePanel({
   );
   const overlayRef = useRef(overlayDraft);
   const preference = wallpaperPreferences[wallpaperModule];
+  const wallpaperDisabled = !wallpaperPreferencesReady || !!savingTarget;
   const moduleLabel =
     wallpaperModules.find((item) => item.id === wallpaperModule)?.label ??
     "当前模块";
@@ -189,7 +198,7 @@ export default function AppearancePanel({
       ? `url("${previewImage.mobileUrl}")`
       : "none",
     "--wallpaper-preview-overlay": String(overlayDraft / 100),
-  } as React.CSSProperties;
+  } as CSSProperties;
 
   const updatePreference = async (
     patch: Partial<WallpaperPreference>,
@@ -269,8 +278,9 @@ export default function AppearancePanel({
       });
       return;
     }
-    overlayRef.current = 64;
-    setOverlayDraft(64);
+    const defaultPreference = defaultWallpaperPreference(wallpaperModule);
+    overlayRef.current = defaultPreference.overlay;
+    setOverlayDraft(defaultPreference.overlay);
     setImageRevision((revision) => revision + 1);
     setFeedback({ kind: "success", text: `${moduleLabel}已恢复项目默认壁纸。` });
   };
@@ -361,7 +371,7 @@ export default function AppearancePanel({
             type="button"
             className="st-wallpaper-choice"
             aria-pressed={preference.source === "none"}
-            disabled={!!savingTarget}
+            disabled={wallpaperDisabled}
             onClick={() => chooseSource("none")}
           >
             <span className="st-wallpaper-choice-mark" aria-hidden="true" />
@@ -372,7 +382,7 @@ export default function AppearancePanel({
             type="button"
             className="st-wallpaper-choice"
             aria-pressed={preference.source === "anime-night"}
-            disabled={!!savingTarget}
+            disabled={wallpaperDisabled}
             onClick={() => chooseSource("anime-night")}
           >
             <span className="st-wallpaper-choice-mark st-wallpaper-choice-art" aria-hidden="true" />
@@ -383,7 +393,7 @@ export default function AppearancePanel({
             type="button"
             className="st-wallpaper-choice"
             aria-pressed={preference.source === "custom"}
-            disabled={!!savingTarget || !customPreview}
+            disabled={wallpaperDisabled || !customPreview}
             onClick={() => chooseSource("custom")}
           >
             <span className="st-wallpaper-choice-mark st-wallpaper-choice-custom" aria-hidden="true">
@@ -396,6 +406,7 @@ export default function AppearancePanel({
         <div
           className="st-wallpaper-preview"
           style={previewStyle}
+          role="group"
           aria-label={`${moduleLabel}壁纸预览`}
         >
           <div className="st-wallpaper-preview-heading">
@@ -416,7 +427,7 @@ export default function AppearancePanel({
               className="sr-only"
               type="file"
               accept="image/png,image/jpeg,image/webp"
-              disabled={!!savingTarget}
+              disabled={wallpaperDisabled}
               onChange={handleFileChange("desktop")}
             />
           </label>
@@ -427,7 +438,7 @@ export default function AppearancePanel({
               className="sr-only"
               type="file"
               accept="image/png,image/jpeg,image/webp"
-              disabled={!!savingTarget}
+              disabled={wallpaperDisabled}
               onChange={handleFileChange("mobile")}
             />
           </label>
@@ -461,7 +472,10 @@ export default function AppearancePanel({
           onKeyUp={commitOverlay}
           onBlur={commitOverlay}
         />
-        {wallpaperLoading && (
+        {!wallpaperPreferencesReady && (
+          <p className="st-wallpaper-status" role="status">正在读取本地壁纸设置…</p>
+        )}
+        {wallpaperLoading && wallpaperPreferencesReady && (
           <p className="st-wallpaper-status" role="status">正在读取本地图片…</p>
         )}
         {missingCustomImage && (
@@ -479,12 +493,12 @@ export default function AppearancePanel({
         )}
         <div className="st-wallpaper-footer">
           <p className="wb-muted">
-            支持 PNG、JPEG、WebP，单张不超过 20 MiB / 16 MP。只上传一张时会在另一端适配使用。壁纸保存在当前设备，不会上传服务器。
+            支持 PNG、JPEG、WebP，单张不超过 20 MiB / 16 MP。只上传一张时会在另一端适配使用。恢复模块默认会删除该模块的自定义图片。壁纸保存在当前设备，不会上传服务器；清除浏览器或应用数据后需要重新上传。
           </p>
           <button
             type="button"
             className="ui-button-secondary st-wallpaper-reset"
-            disabled={!!savingTarget}
+            disabled={wallpaperDisabled}
             onClick={() => void handleReset()}
           >
             <RotateCcw size={15} />

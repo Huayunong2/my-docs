@@ -392,6 +392,7 @@ function SettingsRoute() {
       themeMode={shell.themeMode}
       onChangeThemeMode={shell.onChangeThemeMode}
       wallpaperPreferences={shell.wallpaperPreferences}
+      wallpaperPreferencesReady={shell.wallpaperPreferencesReady}
       onChangeWallpaperPreference={shell.onChangeWallpaperPreference}
       onSaveWallpaperImage={shell.onSaveWallpaperImage}
       onResetWallpaper={shell.onResetWallpaper}

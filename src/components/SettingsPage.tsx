@@ -74,6 +74,7 @@ interface SettingsPageProps {
   themeMode: ThemeMode;
   onChangeThemeMode: (mode: ThemeMode) => void;
   wallpaperPreferences: WallpaperPreferences;
+  wallpaperPreferencesReady: boolean;
   onChangeWallpaperPreference: (
     module: WallpaperModule,
     preference: WallpaperPreference,
@@ -93,6 +94,7 @@ export default function SettingsPage({
   themeMode,
   onChangeThemeMode,
   wallpaperPreferences,
+  wallpaperPreferencesReady,
   onChangeWallpaperPreference,
   onSaveWallpaperImage,
   onResetWallpaper,
@@ -415,6 +417,7 @@ export default function SettingsPage({
                 themeMode={themeMode}
                 onChangeThemeMode={onChangeThemeMode}
                 wallpaperPreferences={wallpaperPreferences}
+                wallpaperPreferencesReady={wallpaperPreferencesReady}
                 onChangeWallpaperPreference={onChangeWallpaperPreference}
                 onSaveWallpaperImage={onSaveWallpaperImage}
                 onResetWallpaper={onResetWallpaper}

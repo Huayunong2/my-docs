@@ -6,6 +6,7 @@ import {
   useEffect,
   useMemo,
   useState,
+  useRef,
   type CSSProperties,
 } from "react";
 import { MotionConfig } from "framer-motion";
@@ -108,6 +109,7 @@ export interface AppShellContextValue {
   accentTheme: string;
   onChangeAccentTheme: (theme: string) => void;
   wallpaperPreferences: WallpaperPreferences;
+  wallpaperPreferencesReady: boolean;
   onChangeWallpaperPreference: (
     module: WallpaperModule,
     preference: WallpaperPreference,
@@ -152,11 +154,14 @@ export function AppShell() {
   const [wallpaperPreferences, setWallpaperPreferences] = useState<WallpaperPreferences>(
     () => defaultWallpaperPreferences(),
   );
+  const [wallpaperPreferencesReady, setWallpaperPreferencesReady] = useState(false);
+  const [wallpaperAssetsRevision, setWallpaperAssetsRevision] = useState(0);
   const [loadedCustomWallpaper, setLoadedCustomWallpaper] = useState<{
     module: WallpaperModule;
     desktopUrl: string;
     mobileUrl: string;
   } | null>(null);
+  const wallpaperPreferenceLoadRevision = useRef(0);
 
   const dark = resolveDarkTheme(themeMode, systemDark);
 
@@ -164,10 +169,15 @@ export function AppShell() {
     let current = true;
     void loadWallpaperPreferences()
       .then((preferences) => {
-        if (current) setWallpaperPreferences(preferences);
+        if (current && wallpaperPreferenceLoadRevision.current === 0) {
+          setWallpaperPreferences(preferences);
+        }
       })
       .catch(() => {
         // Wallpaper storage is optional; keep the built-in defaults if it is unavailable.
+      })
+      .finally(() => {
+        if (current) setWallpaperPreferencesReady(true);
       });
     return () => {
       current = false;
@@ -221,6 +231,7 @@ export function AppShell() {
       const normalized = normalizeWallpaperPreference(module, preference);
       try {
         await saveWallpaperPreference(module, normalized);
+        wallpaperPreferenceLoadRevision.current += 1;
         setWallpaperPreferences((current) => ({ ...current, [module]: normalized }));
         return true;
       } catch {
@@ -237,6 +248,8 @@ export function AppShell() {
       });
       try {
         await persistWallpaperImage(module, target, file, preference);
+        wallpaperPreferenceLoadRevision.current += 1;
+        setWallpaperAssetsRevision((revision) => revision + 1);
         setWallpaperPreferences((current) => ({ ...current, [module]: preference }));
         return true;
       } catch {
@@ -248,6 +261,8 @@ export function AppShell() {
   const resetModuleWallpaper = useCallback(async (module: WallpaperModule) => {
     try {
       await resetWallpaperStorage(module);
+      wallpaperPreferenceLoadRevision.current += 1;
+      setWallpaperAssetsRevision((revision) => revision + 1);
       setWallpaperPreferences((current) => ({
         ...current,
         [module]: defaultWallpaperPreference(module),
@@ -474,7 +489,7 @@ export function AppShell() {
       current = false;
       objectUrls.forEach((url) => URL.revokeObjectURL(url));
     };
-  }, [wallpaperModule, wallpaperPreference.source]);
+  }, [wallpaperModule, wallpaperPreference.source, wallpaperAssetsRevision]);
 
   const activeWallpaper =
     wallpaperPreference.source === "anime-night"
@@ -518,6 +533,7 @@ export function AppShell() {
     accentTheme,
     onChangeAccentTheme: changeAccentTheme,
     wallpaperPreferences,
+    wallpaperPreferencesReady,
     onChangeWallpaperPreference: changeWallpaperPreference,
     onSaveWallpaperImage: saveWallpaperImage,
     onResetWallpaper: resetModuleWallpaper,
