@@ -1,7 +1,8 @@
 use crate::models::{
     AiConfig, AiRoutingConfig, AiTask, ArchiveMonth, Article, ArticleListResponse, ArticleSummary,
-    DailyReviewCount, DayExemption, KnowledgeCard, KnowledgeProject, KnowledgeSummary, Review,
-    ReviewCard, ReviewHistoryEntry, ReviewItem, ReviewSettings, ReviewStats, ReviewStatsResponse,
+    DailyReviewCount, DayExemption, KnowledgeCard, KnowledgeCardLabel, KnowledgeProject,
+    KnowledgeSummary, Review, ReviewCard, ReviewHistoryEntry, ReviewItem, ReviewSettings,
+    ReviewStats, ReviewStatsResponse, ReviewStatsSnapshot,
 };
 use chrono::{Duration, Local, NaiveDate};
 use rusqlite::types::{Type, Value as SqlValue};
@@ -11,7 +12,7 @@ use rusqlite::{
 };
 use serde::Deserialize;
 use serde_json::Value;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fmt;
 use std::path::{Path, PathBuf};
 use uuid::Uuid;
@@ -1564,6 +1565,68 @@ impl Database {
             transaction.commit()?;
         }
 
+        if current < 24 {
+            let transaction = self.conn.unchecked_transaction()?;
+            let has_knowledge_cards: bool = transaction.query_row(
+                "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='knowledge_cards')",
+                [],
+                |row| row.get(0),
+            )?;
+            if has_knowledge_cards {
+                transaction.execute_batch(
+                    "CREATE TABLE IF NOT EXISTS knowledge_card_relations (
+                    source_card_id TEXT NOT NULL REFERENCES knowledge_cards(id) ON DELETE CASCADE,
+                    target_card_id TEXT NOT NULL,
+                    ordinal        INTEGER NOT NULL,
+                    PRIMARY KEY (source_card_id, ordinal)
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_knowledge_card_relations_target
+                    ON knowledge_card_relations(target_card_id, source_card_id);
+
+                INSERT OR IGNORE INTO knowledge_card_relations
+                    (source_card_id, target_card_id, ordinal)
+                SELECT cards.id, links.value, CAST(links.key AS INTEGER)
+                FROM knowledge_cards AS cards,
+                     json_each(CASE
+                       WHEN json_valid(COALESCE(cards.related_ids, '[]'))
+                       THEN CASE WHEN json_type(COALESCE(cards.related_ids, '[]'))='array'
+                                 THEN cards.related_ids ELSE '[]' END
+                       ELSE '[]' END) AS links
+                WHERE links.type='text';
+
+                CREATE TRIGGER IF NOT EXISTS knowledge_card_relations_ai
+                AFTER INSERT ON knowledge_cards BEGIN
+                    INSERT OR REPLACE INTO knowledge_card_relations
+                        (source_card_id, target_card_id, ordinal)
+                    SELECT NEW.id, links.value, CAST(links.key AS INTEGER)
+                    FROM json_each(CASE
+                      WHEN json_valid(COALESCE(NEW.related_ids, '[]'))
+                      THEN CASE WHEN json_type(COALESCE(NEW.related_ids, '[]'))='array'
+                                THEN NEW.related_ids ELSE '[]' END
+                      ELSE '[]' END) AS links
+                    WHERE links.type='text';
+                END;
+
+                CREATE TRIGGER IF NOT EXISTS knowledge_card_relations_au
+                AFTER UPDATE OF related_ids ON knowledge_cards BEGIN
+                    DELETE FROM knowledge_card_relations WHERE source_card_id=OLD.id;
+                    INSERT OR REPLACE INTO knowledge_card_relations
+                        (source_card_id, target_card_id, ordinal)
+                    SELECT NEW.id, links.value, CAST(links.key AS INTEGER)
+                    FROM json_each(CASE
+                      WHEN json_valid(COALESCE(NEW.related_ids, '[]'))
+                      THEN CASE WHEN json_type(COALESCE(NEW.related_ids, '[]'))='array'
+                                THEN NEW.related_ids ELSE '[]' END
+                      ELSE '[]' END) AS links
+                    WHERE links.type='text';
+                END;",
+                )?;
+            }
+            transaction.execute("INSERT INTO schema_version (version) VALUES (24)", [])?;
+            transaction.commit()?;
+        }
+
         Ok(())
     }
 }
@@ -1846,12 +1909,28 @@ impl ArticlePersistence<'_> {
     }
 
     pub(crate) fn by_ids(&mut self, ids: &[String]) -> Result<Vec<Article>> {
-        let mut articles = Vec::with_capacity(ids.len());
-        for id in ids {
-            if let Some(article) = self.find_by_id(id)? {
-                articles.push(article);
-            }
+        if ids.is_empty() {
+            return Ok(Vec::new());
         }
+        let ids_json = serde_json::to_string(ids)
+            .map_err(|error| rusqlite::Error::ToSqlConversionFailure(Box::new(error)))?;
+        let mut articles = {
+            let mut statement = self.conn.prepare(
+                "WITH requested AS (
+                    SELECT CAST(key AS INTEGER) AS ordinal, value AS id FROM json_each(?1)
+                 )
+                 SELECT a.id, a.date, a.title, a.content, a.mood, a.tags, a.word_count,
+                        a.created_at, a.updated_at
+                 FROM requested
+                 INNER JOIN articles AS a ON a.id=requested.id AND a.deleted_at=''
+                 ORDER BY requested.ordinal",
+            )?;
+            let rows = statement
+                .query_map(params![ids_json], row_to_article)?
+                .collect::<Result<Vec<_>>>()?;
+            rows
+        };
+        resolve_article_spaces_many(self.conn, &mut articles)?;
         Ok(articles)
     }
 
@@ -2671,6 +2750,46 @@ impl KnowledgePersistence<'_> {
         Ok(cards)
     }
 
+    pub(crate) fn labels(&mut self, ids: Option<&[String]>) -> Result<Vec<KnowledgeCardLabel>> {
+        let Some(ids) = ids else {
+            let mut statement = self.conn.prepare(
+                "SELECT id, title FROM knowledge_cards WHERE deleted_at=''
+                 ORDER BY updated_at DESC, created_at DESC",
+            )?;
+            return statement
+                .query_map([], |row| {
+                    Ok(KnowledgeCardLabel {
+                        id: row.get(0)?,
+                        title: row.get(1)?,
+                    })
+                })?
+                .collect();
+        };
+        if ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let ids_json = serde_json::to_string(ids)
+            .map_err(|error| rusqlite::Error::ToSqlConversionFailure(Box::new(error)))?;
+        let mut statement = self.conn.prepare(
+            "WITH requested AS (
+                SELECT CAST(key AS INTEGER) AS ordinal, value AS id FROM json_each(?1)
+             )
+             SELECT cards.id, cards.title FROM requested
+             INNER JOIN knowledge_cards AS cards ON cards.id=requested.id
+               AND cards.deleted_at=''
+             ORDER BY requested.ordinal",
+        )?;
+        let rows = statement
+            .query_map(params![ids_json], |row| {
+                Ok(KnowledgeCardLabel {
+                    id: row.get(0)?,
+                    title: row.get(1)?,
+                })
+            })?
+            .collect();
+        rows
+    }
+
     pub(crate) fn find(&mut self, id: &str) -> Result<Option<KnowledgeCard>> {
         let mut card = self
             .conn
@@ -3367,47 +3486,68 @@ impl KnowledgePersistence<'_> {
     /// 把单向存储的关联展开为双向视图：A 的关联 = A 声明的边 ∪ 声明指向 A 的边。
     /// 这样 A 关联 B 后，B 的详情/复习页也会显示 A，无需写端回写。
     fn resolve_related_ids(&self, cards: &mut [KnowledgeCard]) -> Result<()> {
-        let active_ids: BTreeSet<String> = {
-            let mut statement = self
-                .conn
-                .prepare("SELECT id FROM knowledge_cards WHERE deleted_at=''")?;
-            let ids = statement
-                .query_map([], |row| row.get::<_, String>(0))?
-                .collect::<Result<BTreeSet<_>>>()?;
-            ids
-        };
-        let mut reverse: BTreeMap<String, Vec<String>> = BTreeMap::new();
-        {
-            let mut statement = self
-                .conn
-                .prepare("SELECT id, related_ids FROM knowledge_cards WHERE deleted_at=''")?;
-            let rows = statement
-                .query_map([], |row| {
-                    Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
-                })?
-                .collect::<Result<Vec<_>>>()?;
-            for (id, raw) in rows {
-                for related in parse_json_vec(&raw)? {
-                    reverse.entry(related).or_default().push(id.clone());
+        // 400 keeps this compatible with SQLite builds using the historical 999 bind limit.
+        for batch in cards.chunks_mut(400) {
+            let ids: Vec<String> = batch.iter().map(|card| card.id.clone()).collect();
+            let placeholders = vec!["?"; ids.len()].join(",");
+            let values: Vec<SqlValue> = ids.iter().cloned().map(SqlValue::Text).collect();
+
+            let declared_targets: BTreeSet<String> = batch
+                .iter()
+                .flat_map(|card| card.declared_related_ids.iter().cloned())
+                .collect();
+            let declared_targets: Vec<String> = declared_targets.into_iter().collect();
+            let mut active_targets = HashSet::new();
+            for targets in declared_targets.chunks(400) {
+                let target_values: Vec<SqlValue> =
+                    targets.iter().cloned().map(SqlValue::Text).collect();
+                let target_placeholders = vec!["?"; targets.len()].join(",");
+                let mut statement = self.conn.prepare(&format!(
+                    "SELECT id FROM knowledge_cards
+                     WHERE deleted_at='' AND id IN ({target_placeholders})"
+                ))?;
+                for row in statement.query_map(params_from_iter(target_values.iter()), |row| {
+                    row.get::<_, String>(0)
+                })? {
+                    active_targets.insert(row?);
                 }
             }
-        }
-        for card in cards.iter_mut() {
-            // 已删除卡片的关系仍保留在存储中，恢复后可以自动回来；普通视图不展示指向回收站的悬空边。
-            let mut ids = card
-                .related_ids
-                .iter()
-                .filter(|id| active_ids.contains(*id))
-                .cloned()
-                .collect::<Vec<_>>();
-            if let Some(incoming) = reverse.get(&card.id) {
-                for other in incoming {
-                    if other != &card.id && !ids.contains(other) {
-                        ids.push(other.clone());
+
+            let mut reverse: HashMap<String, Vec<String>> =
+                ids.iter().map(|id| (id.clone(), Vec::new())).collect();
+            let mut incoming = self.conn.prepare(&format!(
+                "SELECT r.target_card_id, r.source_card_id
+                 FROM knowledge_card_relations AS r
+                 INNER JOIN knowledge_cards AS source ON source.id=r.source_card_id
+                   AND source.deleted_at=''
+                 WHERE r.target_card_id IN ({placeholders})
+                 ORDER BY source.rowid, r.ordinal"
+            ))?;
+            for row in incoming.query_map(params_from_iter(values.iter()), |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })? {
+                let (target, source) = row?;
+                if let Some(related) = reverse.get_mut(&target) {
+                    related.push(source);
+                }
+            }
+
+            for card in batch {
+                let mut related = card
+                    .declared_related_ids
+                    .iter()
+                    .filter(|id| active_targets.contains(*id))
+                    .cloned()
+                    .collect::<Vec<_>>();
+                if let Some(incoming) = reverse.get(&card.id) {
+                    for source in incoming {
+                        if source != &card.id && !related.contains(source) {
+                            related.push(source.clone());
+                        }
                     }
                 }
+                card.related_ids = related;
             }
-            card.related_ids = ids;
         }
         Ok(())
     }
@@ -3619,57 +3759,77 @@ impl KnowledgePersistence<'_> {
         self.review_card_from_item(item)
     }
 
-    pub(crate) fn review_stats(&mut self, today: &str) -> Result<ReviewStatsResponse> {
+    fn review_counts_between(&self, from: &str, to: &str) -> Result<BTreeMap<String, i64>> {
+        let mut statement = self.conn.prepare(
+            "SELECT review_log.reviewed_at, COUNT(*) FROM review_log
+             INNER JOIN knowledge_cards ON knowledge_cards.id=review_log.card_id
+               AND knowledge_cards.deleted_at=''
+             WHERE review_log.reviewed_at >= ?1 AND review_log.reviewed_at <= ?2
+             GROUP BY review_log.reviewed_at",
+        )?;
+        let rows = statement
+            .query_map(params![from, to], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+            })?
+            .collect();
+        rows
+    }
+
+    fn review_stats_with_heatmap(
+        &mut self,
+        today: &str,
+        days: i64,
+    ) -> Result<(ReviewStatsResponse, Vec<DailyReviewCount>)> {
         let today_date = NaiveDate::parse_from_str(today, "%Y-%m-%d")
             .unwrap_or_else(|_| NaiveDate::from_ymd_opt(1970, 1, 1).expect("epoch date"));
-        let reviewed_dates: Vec<String> = {
+        let reviewed_dates: HashSet<String> = {
             let mut statement = self.conn.prepare(
                 "SELECT DISTINCT review_log.reviewed_at FROM review_log
-                     INNER JOIN knowledge_cards ON knowledge_cards.id=review_log.card_id
-                       AND knowledge_cards.deleted_at=''
-                     ORDER BY review_log.reviewed_at DESC",
+                 INNER JOIN knowledge_cards ON knowledge_cards.id=review_log.card_id
+                   AND knowledge_cards.deleted_at=''
+                 ORDER BY review_log.reviewed_at DESC",
             )?;
             let rows = statement
                 .query_map([], |row| row.get::<_, String>(0))?
-                .collect::<Result<Vec<_>>>()?;
+                .collect::<Result<HashSet<_>>>()?;
             rows
         };
         let mut streak_days = 0i64;
         let mut cursor = today_date;
-        if !reviewed_dates.iter().any(|date| date == today) {
+        if !reviewed_dates.contains(today) {
             cursor -= Duration::days(1);
         }
-        while reviewed_dates
-            .iter()
-            .any(|date| date == &cursor.format("%Y-%m-%d").to_string())
-        {
+        loop {
+            let key = cursor.format("%Y-%m-%d").to_string();
+            if !reviewed_dates.contains(&key) {
+                break;
+            }
             streak_days += 1;
             cursor -= Duration::days(1);
         }
 
-        let start_date = today_date - Duration::days(29);
-        let start_key = start_date.format("%Y-%m-%d").to_string();
-        let mut counts: BTreeMap<String, i64> = {
-            let mut statement = self.conn.prepare(
-                "SELECT review_log.reviewed_at, COUNT(*) FROM review_log
-                 INNER JOIN knowledge_cards ON knowledge_cards.id=review_log.card_id
-                   AND knowledge_cards.deleted_at=''
-                 WHERE review_log.reviewed_at >= ?1 GROUP BY review_log.reviewed_at",
-            )?;
-            let rows = statement
-                .query_map(params![start_key], |row| {
-                    Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
-                })?
-                .collect::<Result<BTreeMap<_, _>>>()?;
-            rows
-        };
+        let daily_start = today_date - Duration::days(29);
+        let heatmap_start = today_date - Duration::days(days - 1);
+        let counts_start = daily_start.min(heatmap_start);
+        let counts =
+            self.review_counts_between(&counts_start.format("%Y-%m-%d").to_string(), today)?;
         let mut daily = Vec::with_capacity(30);
-        let mut cursor = start_date;
+        let mut cursor = daily_start;
         while cursor <= today_date {
             let key = cursor.format("%Y-%m-%d").to_string();
             daily.push(DailyReviewCount {
-                date: key.clone(),
-                count: counts.remove(&key).unwrap_or(0),
+                count: counts.get(&key).copied().unwrap_or(0),
+                date: key,
+            });
+            cursor += Duration::days(1);
+        }
+        let mut heatmap = Vec::with_capacity(days as usize);
+        let mut cursor = heatmap_start;
+        while cursor <= today_date {
+            let key = cursor.format("%Y-%m-%d").to_string();
+            heatmap.push(DailyReviewCount {
+                count: counts.get(&key).copied().unwrap_or(0),
+                date: key,
             });
             cursor += Duration::days(1);
         }
@@ -3699,8 +3859,6 @@ impl KnowledgePersistence<'_> {
             |row| row.get(0),
         )?;
         let (due_only, total_confirmed) = self.due_and_confirmed(today)?;
-
-        // 今天可学新卡：新卡队列受每日配额（上限 - 今日已学）控制
         let new_queue: i64 = self.conn.query_row(
             "SELECT COUNT(*) FROM review_items AS ri
              INNER JOIN knowledge_cards AS c ON c.id=ri.knowledge_card_id
@@ -3712,34 +3870,65 @@ impl KnowledgePersistence<'_> {
         let new_cards = new_queue.min(self.remaining_new_quota(today)?);
         let due = due_only + new_cards;
 
-        // 未来 7 天到期预览
-        let mut upcoming = Vec::with_capacity(7);
-        for offset in 1..=7 {
-            let date = today_date + Duration::days(offset);
-            let key = date.format("%Y-%m-%d").to_string();
-            let count: i64 = self.conn.query_row(
-                "SELECT COUNT(*) FROM review_items AS ri
-                 INNER JOIN knowledge_cards AS c ON c.id=ri.knowledge_card_id
-                 WHERE ri.status='active' AND c.deleted_at='' AND c.status='confirmed'
-                   AND ri.next_review_at=?1",
-                params![&key],
-                |row| row.get(0),
-            )?;
-            upcoming.push(DailyReviewCount { date: key, count });
-        }
+        let upcoming_start = (today_date + Duration::days(1))
+            .format("%Y-%m-%d")
+            .to_string();
+        let upcoming_end = (today_date + Duration::days(7))
+            .format("%Y-%m-%d")
+            .to_string();
+        let mut statement = self.conn.prepare(
+            "SELECT ri.next_review_at, COUNT(*) FROM review_items AS ri
+             INNER JOIN knowledge_cards AS c ON c.id=ri.knowledge_card_id
+             WHERE ri.status='active' AND c.deleted_at='' AND c.status='confirmed'
+               AND ri.next_review_at >= ?1 AND ri.next_review_at <= ?2
+             GROUP BY ri.next_review_at",
+        )?;
+        let upcoming_counts: BTreeMap<String, i64> = statement
+            .query_map(params![upcoming_start, upcoming_end], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+            })?
+            .collect::<Result<_>>()?;
+        let upcoming = (1..=7)
+            .map(|offset| {
+                let date = (today_date + Duration::days(offset))
+                    .format("%Y-%m-%d")
+                    .to_string();
+                DailyReviewCount {
+                    count: upcoming_counts.get(&date).copied().unwrap_or(0),
+                    date,
+                }
+            })
+            .collect();
 
-        Ok(ReviewStatsResponse {
-            total_reviews,
-            streak_days,
-            reviewed_today,
-            due,
-            total_confirmed,
-            learning,
-            mature,
-            new_cards,
-            upcoming,
-            daily,
-        })
+        Ok((
+            ReviewStatsResponse {
+                total_reviews,
+                streak_days,
+                reviewed_today,
+                due,
+                total_confirmed,
+                learning,
+                mature,
+                new_cards,
+                upcoming,
+                daily,
+            },
+            heatmap,
+        ))
+    }
+
+    pub(crate) fn review_stats(&mut self, today: &str) -> Result<ReviewStatsResponse> {
+        self.review_stats_with_heatmap(today, 30)
+            .map(|(stats, _)| stats)
+    }
+
+    pub(crate) fn review_stats_snapshot(
+        &mut self,
+        today: &str,
+        days: i64,
+    ) -> Result<ReviewStatsSnapshot> {
+        let (stats, heatmap) = self.review_stats_with_heatmap(today, days.clamp(7, 730))?;
+        Ok(ReviewStatsSnapshot { stats, heatmap })
     }
 
     /// 单张复习题的复习历史（间隔曲线数据源）。传入旧知识条目 ID 也保持兼容。
@@ -3784,29 +3973,15 @@ impl KnowledgePersistence<'_> {
         let today_date = NaiveDate::parse_from_str(today, "%Y-%m-%d")
             .unwrap_or_else(|_| NaiveDate::from_ymd_opt(1970, 1, 1).expect("epoch date"));
         let start_date = today_date - Duration::days(days - 1);
-        let start_key = start_date.format("%Y-%m-%d").to_string();
-        let mut counts: BTreeMap<String, i64> = {
-            let mut statement = self.conn.prepare(
-                "SELECT review_log.reviewed_at, COUNT(*) FROM review_log
-                 INNER JOIN knowledge_cards ON knowledge_cards.id=review_log.card_id
-                   AND knowledge_cards.deleted_at=''
-                 WHERE review_log.reviewed_at >= ?1 GROUP BY review_log.reviewed_at",
-            )?;
-            let rows = statement
-                .query_map(params![start_key], |row| {
-                    Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
-                })?
-                .collect::<Result<BTreeMap<_, _>>>()?;
-            rows
-        };
+        let counts =
+            self.review_counts_between(&start_date.format("%Y-%m-%d").to_string(), today)?;
         let mut result = Vec::with_capacity(days as usize);
         let mut cursor = start_date;
-        let end = today_date;
-        while cursor <= end {
+        while cursor <= today_date {
             let key = cursor.format("%Y-%m-%d").to_string();
             result.push(DailyReviewCount {
-                date: key.clone(),
-                count: counts.remove(&key).unwrap_or(0),
+                count: counts.get(&key).copied().unwrap_or(0),
+                date: key,
             });
             cursor += Duration::days(1);
         }
@@ -4195,6 +4370,45 @@ fn sync_article_space_links(
              VALUES (?1, ?2)",
             params![article_id, space_id],
         )?;
+    }
+    Ok(())
+}
+
+fn resolve_article_spaces_many(conn: &Connection, articles: &mut [Article]) -> Result<()> {
+    if articles.is_empty() {
+        return Ok(());
+    }
+    let ids: Vec<String> = articles
+        .iter()
+        .map(|article| article.id.clone())
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect();
+    let ids_json = serde_json::to_string(&ids)
+        .map_err(|error| rusqlite::Error::ToSqlConversionFailure(Box::new(error)))?;
+    let mut positions = HashMap::<String, Vec<usize>>::new();
+    for (index, article) in articles.iter().enumerate() {
+        positions.entry(article.id.clone()).or_default().push(index);
+    }
+    let mut statement = conn.prepare(
+        "WITH requested AS (
+            SELECT DISTINCT value AS id FROM json_each(?1)
+         )
+         SELECT aps.article_id, p.name
+         FROM requested
+         INNER JOIN article_spaces AS aps ON aps.article_id=requested.id
+         INNER JOIN knowledge_projects AS p ON p.id=aps.space_id
+         ORDER BY aps.article_id, p.name COLLATE NOCASE ASC",
+    )?;
+    for row in statement.query_map(params![ids_json], |row| {
+        Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+    })? {
+        let (id, name) = row?;
+        if let Some(indices) = positions.get(&id) {
+            for index in indices {
+                articles[*index].spaces.push(name.clone());
+            }
+        }
     }
     Ok(())
 }
@@ -4748,7 +4962,7 @@ mod migration_tests {
                 row.get(0)
             })
             .unwrap();
-        assert_eq!(version, 23);
+        assert_eq!(version, 24);
     }
 
     #[test]
@@ -4808,6 +5022,84 @@ mod migration_tests {
             )
             .expect("count delete columns");
         assert_eq!(deleted_column_count, 1);
+    }
+
+    #[test]
+    fn v23_related_ids_gain_ordered_index_and_write_triggers() {
+        let conn = Connection::open_in_memory().expect("in-memory connection");
+        conn.execute_batch(
+            r#"CREATE TABLE schema_version (version INTEGER NOT NULL);
+             INSERT INTO schema_version (version) VALUES (23);
+             CREATE TABLE knowledge_cards (
+                 id TEXT PRIMARY KEY,
+                 related_ids TEXT NOT NULL DEFAULT '[]',
+                 deleted_at TEXT NOT NULL DEFAULT ''
+             );
+             INSERT INTO knowledge_cards (id, related_ids, deleted_at) VALUES
+               ('source', '["target-b","missing","target-a"]', ''),
+               ('trash-source', '["target-a"]', 'deleted');"#,
+        )
+        .expect("create v23 relationship data");
+
+        let db = Database { conn };
+        db.initialize().expect("migrate v23 relation index");
+
+        let migrated: Vec<(String, String, i64)> = db
+            .conn
+            .prepare(
+                "SELECT source_card_id, target_card_id, ordinal
+                 FROM knowledge_card_relations ORDER BY source_card_id, ordinal",
+            )
+            .expect("prepare migrated relations")
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))
+            .expect("query migrated relations")
+            .collect::<Result<_>>()
+            .expect("collect migrated relations");
+        assert_eq!(
+            migrated,
+            vec![
+                ("source".into(), "target-b".into(), 0),
+                ("source".into(), "missing".into(), 1),
+                ("source".into(), "target-a".into(), 2),
+                ("trash-source".into(), "target-a".into(), 0),
+            ]
+        );
+
+        db.conn
+            .execute(
+                r#"INSERT INTO knowledge_cards (id, related_ids)
+                   VALUES ('new-source', '["first","second"]')"#,
+                [],
+            )
+            .expect("insert synchronizes relation index");
+        db.conn
+            .execute(
+                r#"UPDATE knowledge_cards SET related_ids='["second"]'
+                   WHERE id='new-source'"#,
+                [],
+            )
+            .expect("update synchronizes relation index");
+        let updated: Vec<(String, i64)> = db
+            .conn
+            .prepare(
+                "SELECT target_card_id, ordinal FROM knowledge_card_relations
+                 WHERE source_card_id='new-source' ORDER BY ordinal",
+            )
+            .expect("prepare updated relations")
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+            .expect("query updated relations")
+            .collect::<Result<_>>()
+            .expect("collect updated relations");
+        assert_eq!(updated, vec![("second".into(), 0)]);
+
+        db.initialize().expect("migration is idempotent");
+        let version: i64 = db
+            .conn
+            .query_row("SELECT MAX(version) FROM schema_version", [], |row| {
+                row.get(0)
+            })
+            .expect("read schema version");
+        assert_eq!(version, 24);
     }
 
     fn v3_knowledge_cards_table() -> &'static str {
@@ -4974,7 +5266,7 @@ mod migration_tests {
                 row.get(0)
             })
             .expect("read schema version");
-        assert_eq!(version, 23);
+        assert_eq!(version, 24);
 
         // 已迁移的库再次 initialize 必须幂等，不报重复列错误
         db.initialize().expect("re-initialize is idempotent");
@@ -5008,7 +5300,7 @@ mod migration_tests {
                 row.get(0)
             })
             .expect("read schema version");
-        assert_eq!(version, 23);
+        assert_eq!(version, 24);
 
         let settings = db.review_settings().expect("default review settings");
         assert_eq!(settings.new_cards_per_day, 20);
@@ -5181,6 +5473,158 @@ mod migration_tests {
             "fast"
         );
     }
+
+    fn legacy_resolve_related_ids(conn: &Connection, cards: &mut [KnowledgeCard]) -> Result<()> {
+        let active_ids: BTreeSet<String> = {
+            let mut statement =
+                conn.prepare("SELECT id FROM knowledge_cards WHERE deleted_at=''")?;
+            let ids = statement
+                .query_map([], |row| row.get::<_, String>(0))?
+                .collect::<Result<BTreeSet<_>>>()?;
+            ids
+        };
+        let mut reverse: BTreeMap<String, Vec<String>> = BTreeMap::new();
+        {
+            let mut statement =
+                conn.prepare("SELECT id, related_ids FROM knowledge_cards WHERE deleted_at=''")?;
+            for row in statement.query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })? {
+                let (id, raw) = row?;
+                for related in parse_json_vec(&raw)? {
+                    reverse.entry(related).or_default().push(id.clone());
+                }
+            }
+        }
+        for card in cards {
+            let mut ids = card
+                .related_ids
+                .iter()
+                .filter(|id| active_ids.contains(*id))
+                .cloned()
+                .collect::<Vec<_>>();
+            if let Some(incoming) = reverse.get(&card.id) {
+                for other in incoming {
+                    if other != &card.id && !ids.contains(other) {
+                        ids.push(other.clone());
+                    }
+                }
+            }
+            card.related_ids = ids;
+        }
+        Ok(())
+    }
+
+    fn legacy_knowledge_page(conn: &Connection) -> Result<Vec<KnowledgeCard>> {
+        let _: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM knowledge_cards WHERE deleted_at=''",
+            [],
+            |row| row.get(0),
+        )?;
+        let mut statement = conn.prepare(&format!(
+            "SELECT {} FROM knowledge_cards AS c WHERE c.deleted_at=''
+             ORDER BY c.updated_at DESC, c.created_at DESC LIMIT 24 OFFSET 0",
+            KnowledgePersistence::SELECT_COLUMNS_WITH_ALIAS
+        ))?;
+        let mut cards = statement
+            .query_map([], row_to_knowledge_card)?
+            .collect::<Result<Vec<_>>>()?;
+        legacy_resolve_related_ids(conn, &mut cards)?;
+        Ok(cards)
+    }
+
+    #[test]
+    #[ignore = "manual synthetic scaling comparison; does not use user data"]
+    fn relationship_page_lookup_scaling_comparison() {
+        use std::time::Instant;
+
+        for size in [100usize, 1_000, 10_000] {
+            let mut db = Database::new_in_memory().expect("in-memory database");
+            {
+                let transaction = db.conn.transaction().expect("begin seed transaction");
+                let mut insert = transaction
+                    .prepare_cached(
+                        "INSERT INTO knowledge_cards
+                         (id, card_type, status, title, content, tags, related_ids, created_at, updated_at)
+                         VALUES (?1, 'fact', 'confirmed', ?2, 'synthetic', '[]', ?3,
+                                 '2026-01-01', '2026-01-01')",
+                    )
+                    .expect("prepare synthetic card insert");
+                for index in 0..size {
+                    let id = format!("card-{index}");
+                    let related = if index > 0 && index % 10 == 0 {
+                        format!("[\"card-{}\"]", index - 1)
+                    } else {
+                        "[]".into()
+                    };
+                    insert
+                        .execute(params![id, format!("卡片 {index}"), related])
+                        .expect("insert synthetic card");
+                }
+                drop(insert);
+                transaction.commit().expect("commit synthetic cards");
+            }
+
+            let request = || KnowledgePageQuery {
+                query: "",
+                card_type: None,
+                status: None,
+                usage: None,
+                tag: None,
+                project: None,
+                quality: None,
+                sort: "updated",
+                page: 1,
+                page_size: 24,
+            };
+            let optimized = db
+                .knowledge()
+                .query_page(request())
+                .expect("optimized knowledge page")
+                .0;
+            let reference = legacy_knowledge_page(&db.conn).expect("legacy knowledge page");
+            assert_eq!(
+                optimized
+                    .iter()
+                    .map(|card| (&card.id, &card.related_ids))
+                    .collect::<Vec<_>>(),
+                reference
+                    .iter()
+                    .map(|card| (&card.id, &card.related_ids))
+                    .collect::<Vec<_>>()
+            );
+
+            let start = Instant::now();
+            for _ in 0..5 {
+                db.knowledge()
+                    .query_page(request())
+                    .expect("repeat optimized page");
+            }
+            let optimized_time = start.elapsed();
+            let start = Instant::now();
+            for _ in 0..5 {
+                legacy_knowledge_page(&db.conn).expect("repeat legacy page");
+            }
+            let legacy_time = start.elapsed();
+
+            let mut plan = db
+                .conn
+                .prepare(
+                    "EXPLAIN QUERY PLAN SELECT source_card_id FROM knowledge_card_relations
+                     WHERE target_card_id=?1",
+                )
+                .expect("prepare relation query plan");
+            let details = plan
+                .query_map(params!["card-0"], |row| row.get::<_, String>(3))
+                .expect("read relation query plan")
+                .collect::<Result<Vec<_>>>()
+                .expect("collect relation query plan");
+            assert!(details
+                .iter()
+                .any(|detail| { detail.contains("idx_knowledge_card_relations_target") }));
+            eprintln!("cards={size}: optimized(5)={optimized_time:?}, legacy(5)={legacy_time:?}");
+        }
+    }
 }
 
 #[cfg(test)]
@@ -5281,7 +5725,7 @@ mod migration_v5_tests {
                 row.get(0)
             })
             .expect("read schema version");
-        assert_eq!(version, 23);
+        assert_eq!(version, 24);
         db.initialize()
             .expect("re-initialize after v5 is idempotent");
     }

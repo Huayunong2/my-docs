@@ -98,7 +98,6 @@ export default function ReviewPage({
   const { confirm, dialog } = useConfirmDialog();
   const questionRef = useRef<HTMLDivElement>(null);
   const [cards, setCards] = useState<ReviewCard[]>([]);
-  const [allCards, setAllCards] = useState<KnowledgeCard[]>([]);
   const [stats, setStats] = useState<api.DueReviewStats | null>(null);
   const [reviewStats, setReviewStats] =
     useState<api.ReviewStatsResponse | null>(null);
@@ -108,6 +107,8 @@ export default function ReviewPage({
   const [grading, setGrading] = useState(false);
   const [error, setError] = useState("");
   const [editing, setEditing] = useState<KnowledgeCard | null>(null);
+  const [editLabelIndex, setEditLabelIndex] = useState<api.KnowledgeCardLabel[] | null>(null);
+  const [editorLoading, setEditorLoading] = useState(false);
   const [editTitle, setEditTitle] = useState("");
   const [editContent, setEditContent] = useState("");
   const [editTagsText, setEditTagsText] = useState("");
@@ -119,21 +120,22 @@ export default function ReviewPage({
   const loadToken = useRef(0);
   const editingTriggerRef = useRef<HTMLButtonElement | null>(null);
   const queryClient = useQueryClient();
+  const editorLoadToken = useRef(0);
   const load = useCallback(async () => {
     const token = ++loadToken.current;
     setLoading(true);
     setError("");
     try {
-      const [res, statsRes, all] = await Promise.all([
+      const [res, statsRes] = await Promise.all([
         api.getDueReviewCards(),
         api.getReviewStats().catch(() => null),
-        api.listKnowledgeCards().catch(() => []),
       ]);
       if (token !== loadToken.current) return;
+      editorLoadToken.current += 1;
+      setEditorLoading(false);
       setCards(res.cards);
       setStats(res.stats);
       setReviewStats(statsRes);
-      setAllCards(all);
       setIndex(0);
       setRevealed(false);
       setBatchComplete(false);
@@ -150,6 +152,15 @@ export default function ReviewPage({
   }, [load]);
 
   const current = cards[index] || null;
+  const currentCardIdRef = useRef<string | null>(null);
+  currentCardIdRef.current = current?.knowledge_card_id || null;
+  const currentRelatedIds = current?.related_ids || [];
+  const relatedLabelsQuery = useQuery({
+    queryKey: api.knowledgeQueryKeys.labels(currentRelatedIds),
+    queryFn: ({ signal }) => api.getKnowledgeCardLabels(currentRelatedIds, { signal }),
+    enabled: Boolean(current && revealed && currentRelatedIds.length),
+    staleTime: 5 * 60_000,
+  });
 
   const gradePreviewQuery = useQuery({
     queryKey: api.reviewQueryKeys.preview(current?.id || ""),
@@ -179,6 +190,8 @@ export default function ReviewPage({
       )
         return;
       gradeLock.current = true;
+      editorLoadToken.current += 1;
+      setEditorLoading(false);
       setGrading(true);
       setError("");
       try {
@@ -312,41 +325,48 @@ export default function ReviewPage({
     if (date) onEditDate(date);
   };
 
-  const relatedCards = useMemo(
-    () =>
-      (current?.related_ids || [])
-        .map((id) => allCards.find((card) => card.id === id))
-        .filter((card): card is KnowledgeCard => !!card),
-    [allCards, current],
-  );
+  const relatedCards = relatedLabelsQuery.data || [];
 
   const openEdit = (event?: React.MouseEvent<HTMLButtonElement>) => {
-    if (!current) return;
+    if (!current || editorLoading) return;
     if (event) editingTriggerRef.current = event.currentTarget;
-    const loadCard = async () => {
-      try {
-        const card =
-          allCards.find((item) => item.id === current.knowledge_card_id) ||
-          (await api.getKnowledgeCard(current.knowledge_card_id));
+    const cardId = current.knowledge_card_id;
+    const requestId = ++editorLoadToken.current;
+    setEditorLoading(true);
+    void Promise.all([
+      api.getKnowledgeCard(cardId),
+      api.getKnowledgeCardLabels(),
+    ])
+      .then(([card, labels]) => {
+        if (
+          requestId !== editorLoadToken.current ||
+          currentCardIdRef.current !== cardId
+        ) return;
+        setEditLabelIndex(labels);
         setEditing(card);
         setEditTitle(card.title);
         setEditContent(card.content);
         setEditTagsText(card.tags.join(", "));
         setEditRelatedText(
-          (
-            (card.declared_related_ids?.length
-              ? card.declared_related_ids
-              : card.related_ids) || []
-          )
-            .map((id) => allCards.find((item) => item.id === id)?.title || "")
+          ((card.declared_related_ids?.length
+            ? card.declared_related_ids
+            : card.related_ids) || [])
+            .map((id) => labels.find((item) => item.id === id)?.title || "")
             .filter(Boolean)
             .join(", "),
         );
-      } catch (e) {
-        setError(api.getErrorMessage(e));
-      }
-    };
-    void loadCard();
+      })
+      .catch((error) => {
+        if (
+          requestId === editorLoadToken.current &&
+          currentCardIdRef.current === cardId
+        ) {
+          toast.error(`无法加载知识条目编辑信息：${api.getErrorMessage(error)}。请重试。`);
+        }
+      })
+      .finally(() => {
+        if (requestId === editorLoadToken.current) setEditorLoading(false);
+      });
   };
 
   const resolveRelatedIds = (text: string): string[] => {
@@ -356,7 +376,7 @@ export default function ReviewPage({
       .filter(Boolean);
     const ids: string[] = [];
     for (const title of titles) {
-      const matched = allCards.find(
+      const matched = editLabelIndex?.find(
         (card) => card.id !== editing?.id && card.title === title,
       );
       if (matched && !ids.includes(matched.id)) ids.push(matched.id);
@@ -369,7 +389,7 @@ export default function ReviewPage({
     setSavingEdit(true);
     setError("");
     try {
-      const saved = await api.updateKnowledgeCard(editing.id, {
+      await api.updateKnowledgeCard(editing.id, {
         title: editTitle.trim(),
         content: editContent.trim(),
         tags: editTagsText
@@ -378,10 +398,8 @@ export default function ReviewPage({
           .filter(Boolean),
         related_ids: resolveRelatedIds(editRelatedText),
       });
-      setAllCards((prev) =>
-        prev.map((card) => (card.id === saved.id ? saved : card)),
-      );
       setEditing(null);
+      setEditLabelIndex(null);
       // 编辑知识正文可能让当前复习题变为 stale；重新取队列，避免继续操作已失效的投影。
       await load();
       toast.success("卡片已更新");
@@ -411,7 +429,7 @@ export default function ReviewPage({
             ? editing.declared_related_ids
             : editing.related_ids) || []
         )
-          .map((id) => allCards.find((card) => card.id === id)?.title || "")
+          .map((id) => editLabelIndex?.find((card) => card.id === id)?.title || "")
           .filter(Boolean)
           .join(", ");
     if (changed) {
@@ -428,6 +446,7 @@ export default function ReviewPage({
       }
     }
     setEditing(null);
+    setEditLabelIndex(null);
   };
 
   return (
@@ -613,10 +632,17 @@ export default function ReviewPage({
                           type="button"
                           className="ui-button-ghost"
                           onClick={openEdit}
+                          disabled={editorLoading}
                         >
                           <PencilLine size={14} />
-                          编辑知识条目
+                          {editorLoading ? "读取中…" : "编辑知识条目"}
                         </button>
+                        {relatedLabelsQuery.isError && (
+                          <InlineError
+                            message={`关联知识暂时无法加载：${api.getErrorMessage(relatedLabelsQuery.error)}`}
+                            onRetry={() => void relatedLabelsQuery.refetch()}
+                          />
+                        )}
                         {relatedCards.map((related) => (
                           <button
                             key={related.id}
@@ -844,7 +870,7 @@ export default function ReviewPage({
                     type="button"
                     onClick={() => void saveEdit()}
                     disabled={
-                      savingEdit || !editTitle.trim() || !editContent.trim()
+                      savingEdit || !editLabelIndex || !editTitle.trim() || !editContent.trim()
                     }
                     className="ui-button-primary"
                   >

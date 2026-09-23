@@ -1,5 +1,5 @@
 use crate::db::Database;
-use crate::helpers::{article_to_markdown, exports_dir, sanitize_filename};
+use crate::helpers::{article_to_markdown, exports_dir, run_blocking, sanitize_filename};
 use crate::models::{Article, ExportPayload};
 use axum::extract::State;
 use axum::http::{header, HeaderMap, HeaderValue, StatusCode};
@@ -19,21 +19,26 @@ pub(crate) async fn export_markdown(
     Json(payload): Json<ExportPayload>,
 ) -> Result<Json<String>, HttpError> {
     validate_export_ids(&payload.ids)?;
-    let articles = load_articles(&db, &payload.ids)?;
-    let directory = exports_dir();
-    fs::create_dir_all(&directory).map_err(internal_error)?;
-    let mut saved = Vec::new();
-    for article in articles {
-        let filename = format!(
-            "{}-{}.md",
-            article.date,
-            sanitize_filename(&article.title, "untitled", 40)
-        );
-        let path = directory.join(filename);
-        fs::write(&path, article_to_markdown(&article)).map_err(internal_error)?;
-        saved.push(path.to_string_lossy().to_string());
-    }
-    Ok(Json(saved.join("\n")))
+    let ids = payload.ids;
+    let paths = run_blocking(move || {
+        let articles = load_articles(&db, &ids)?;
+        let directory = exports_dir();
+        fs::create_dir_all(&directory).map_err(internal_error)?;
+        let mut saved = Vec::new();
+        for article in articles {
+            let filename = format!(
+                "{}-{}.md",
+                article.date,
+                sanitize_filename(&article.title, "untitled", 40)
+            );
+            let path = directory.join(filename);
+            fs::write(&path, article_to_markdown(&article)).map_err(internal_error)?;
+            saved.push(path.to_string_lossy().to_string());
+        }
+        Ok(saved.join("\n"))
+    })
+    .await?;
+    Ok(Json(paths))
 }
 
 pub(crate) async fn export_json(
@@ -41,16 +46,21 @@ pub(crate) async fn export_json(
     Json(payload): Json<ExportPayload>,
 ) -> Result<Json<String>, HttpError> {
     validate_export_ids(&payload.ids)?;
-    let articles = load_articles(&db, &payload.ids)?;
-    let directory = exports_dir();
-    fs::create_dir_all(&directory).map_err(internal_error)?;
-    let json = serde_json::to_string_pretty(&articles).map_err(internal_error)?;
-    let path = directory.join(format!(
-        "export-{}.json",
-        Local::now().format("%Y%m%d-%H%M%S")
-    ));
-    fs::write(&path, json).map_err(internal_error)?;
-    Ok(Json(path.to_string_lossy().to_string()))
+    let ids = payload.ids;
+    let path = run_blocking(move || {
+        let articles = load_articles(&db, &ids)?;
+        let directory = exports_dir();
+        fs::create_dir_all(&directory).map_err(internal_error)?;
+        let json = serde_json::to_string_pretty(&articles).map_err(internal_error)?;
+        let path = directory.join(format!(
+            "export-{}.json",
+            Local::now().format("%Y%m%d-%H%M%S")
+        ));
+        fs::write(&path, json).map_err(internal_error)?;
+        Ok(path.to_string_lossy().to_string())
+    })
+    .await?;
+    Ok(Json(path))
 }
 
 pub(crate) async fn export_json_download(
@@ -58,12 +68,17 @@ pub(crate) async fn export_json_download(
     Json(payload): Json<ExportPayload>,
 ) -> Result<Response, HttpError> {
     validate_export_ids(&payload.ids)?;
-    let articles = load_articles(&db, &payload.ids)?;
-    let json = serde_json::to_vec_pretty(&articles).map_err(internal_error)?;
-    let filename = format!(
-        "daily-summary-{}.json",
-        Local::now().format("%Y%m%d-%H%M%S")
-    );
+    let ids = payload.ids;
+    let (filename, json) = run_blocking(move || {
+        let articles = load_articles(&db, &ids)?;
+        let json = serde_json::to_vec_pretty(&articles).map_err(internal_error)?;
+        let filename = format!(
+            "daily-summary-{}.json",
+            Local::now().format("%Y%m%d-%H%M%S")
+        );
+        Ok((filename, json))
+    })
+    .await?;
     let mut headers = HeaderMap::new();
     headers.insert(
         header::CONTENT_TYPE,
@@ -82,23 +97,28 @@ pub(crate) async fn export_zip(
     Json(payload): Json<ExportPayload>,
 ) -> Result<Response, HttpError> {
     validate_export_ids(&payload.ids)?;
-    let articles = load_articles(&db, &payload.ids)?;
-    let mut buffer = Cursor::new(Vec::new());
-    let mut zip = zip::ZipWriter::new(&mut buffer);
-    let options = zip::write::SimpleFileOptions::default()
-        .compression_method(zip::CompressionMethod::Deflated);
-    for article in articles {
-        let filename = format!(
-            "{}-{}.md",
-            article.date,
-            sanitize_filename(&article.title, "untitled", 40)
-        );
-        zip.start_file(filename, options).map_err(internal_error)?;
-        zip.write_all(article_to_markdown(&article).as_bytes())
-            .map_err(internal_error)?;
-    }
-    zip.finish().map_err(internal_error)?;
-    let filename = format!("daily-summary-{}.zip", Local::now().format("%Y%m%d-%H%M%S"));
+    let ids = payload.ids;
+    let (filename, bytes) = run_blocking(move || {
+        let articles = load_articles(&db, &ids)?;
+        let mut buffer = Cursor::new(Vec::new());
+        let mut zip = zip::ZipWriter::new(&mut buffer);
+        let options = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Deflated);
+        for article in articles {
+            let filename = format!(
+                "{}-{}.md",
+                article.date,
+                sanitize_filename(&article.title, "untitled", 40)
+            );
+            zip.start_file(filename, options).map_err(internal_error)?;
+            zip.write_all(article_to_markdown(&article).as_bytes())
+                .map_err(internal_error)?;
+        }
+        zip.finish().map_err(internal_error)?;
+        let filename = format!("daily-summary-{}.zip", Local::now().format("%Y%m%d-%H%M%S"));
+        Ok((filename, buffer.into_inner()))
+    })
+    .await?;
     let mut headers = HeaderMap::new();
     headers.insert(
         header::CONTENT_TYPE,
@@ -109,7 +129,7 @@ pub(crate) async fn export_zip(
         HeaderValue::from_str(&format!("attachment; filename=\"{filename}\""))
             .map_err(internal_error)?,
     );
-    Ok((headers, buffer.into_inner()).into_response())
+    Ok((headers, bytes).into_response())
 }
 
 pub(crate) async fn export_pdf() -> Result<Json<String>, HttpError> {

@@ -303,6 +303,11 @@ export function searchArticles(query: string, options?: ReadRequestOptions) {
 export type KnowledgeCardType = "fact" | "method" | "concept" | "decision" | "case" | "quote" | "principle" | "snippet";
 export type KnowledgeCardStatus = "draft" | "confirmed" | "outdated";
 
+export interface KnowledgeCardLabel {
+  id: string;
+  title: string;
+}
+
 export interface KnowledgeCard {
   id: string;
   card_type: KnowledgeCardType;
@@ -502,6 +507,7 @@ export const knowledgeQueryKeys = {
   allCards: ["knowledgeCards", "all"] as const,
   cardsRoot: ["knowledgeCards"] as const,
   card: (id: string) => ["knowledgeCards", "card", id] as const,
+  labels: (ids: string[] | "all") => ["knowledgeCardLabels", ids] as const,
   summaryRoot: ["knowledgeCards", "summary"] as const,
   summary: (project = "") => ["knowledgeCards", "summary", project || "all"] as const,
   tags: ["knowledgeTags"] as const,
@@ -611,6 +617,17 @@ export function queryKnowledgeCards(filters: {
     ...result,
     cards: result.cards.map(mapKnowledgeCard),
   }));
+}
+
+export function getKnowledgeCardLabels(
+  ids?: string[],
+  options?: ReadRequestOptions,
+) {
+  if (ids?.length === 0) return Promise.resolve([] as KnowledgeCardLabel[]);
+  const params = new URLSearchParams();
+  if (ids) ids.forEach((id) => params.append("id", id));
+  else params.set("all", "true");
+  return httpRequest<KnowledgeCardLabel[]>(`/knowledge-cards/labels?${params}`, options);
 }
 
 export function listKnowledgeTags(options?: ReadRequestOptions) {
@@ -880,6 +897,15 @@ export interface ReviewHistoryEntry {
 
 export function getReviewStats() {
   return httpRequest<ReviewStatsResponse>("/review/stats");
+}
+
+export interface ReviewStatsSnapshot {
+  stats: ReviewStatsResponse;
+  heatmap: DailyReviewCount[];
+}
+
+export function getReviewStatsSnapshot(days = 365) {
+  return httpRequest<ReviewStatsSnapshot>(`/review/stats/snapshot?days=${days}`);
 }
 
 export function getReviewSettings() {

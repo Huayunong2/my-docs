@@ -1549,6 +1549,52 @@
   background: transparent;
   scrollbar-gutter: stable;
 }
+.app-content[data-wallpaper-active="true"] {
+  background-color: var(--ui-canvas);
+  background-image:
+    linear-gradient(
+      rgba(255, 255, 255, var(--module-wallpaper-overlay)),
+      rgba(255, 255, 255, var(--module-wallpaper-overlay))
+    ),
+    var(--module-wallpaper-desktop);
+  background-position: center, center;
+  background-size: 100% 100%, cover;
+  background-repeat: no-repeat;
+}
+.dark .app-content[data-wallpaper-active="true"] {
+  background-image:
+    linear-gradient(
+      rgba(12, 16, 24, var(--module-wallpaper-overlay)),
+      rgba(12, 16, 24, var(--module-wallpaper-overlay))
+    ),
+    var(--module-wallpaper-desktop);
+}
+.app-content[data-wallpaper-active="true"] > :is(
+  .wb-page,
+  .ft-page,
+  .knowledge-hub,
+  .page-surface-today
+) {
+  background: transparent;
+}
+@media (max-width: 767px) {
+  .app-content[data-wallpaper-active="true"] {
+    background-image:
+      linear-gradient(
+        rgba(255, 255, 255, var(--module-wallpaper-overlay)),
+        rgba(255, 255, 255, var(--module-wallpaper-overlay))
+      ),
+      var(--module-wallpaper-mobile);
+  }
+  .dark .app-content[data-wallpaper-active="true"] {
+    background-image:
+      linear-gradient(
+        rgba(12, 16, 24, var(--module-wallpaper-overlay)),
+        rgba(12, 16, 24, var(--module-wallpaper-overlay))
+      ),
+      var(--module-wallpaper-mobile);
+  }
+}
 
 /* Page headers adapt to their own available width. This matters when a page
  * is shown beside a detail panel or a collapsible sidebar: viewport breakpoints

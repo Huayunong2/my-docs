@@ -2,6 +2,7 @@ use crate::backup_policy;
 use crate::db::Database;
 use crate::helpers::*;
 use crate::models::*;
+use axum::body::Body;
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::response::Json;
@@ -13,6 +14,7 @@ use axum::response::{IntoResponse, Response};
 use chrono::{DateTime, Local};
 use std::fs;
 use std::path::PathBuf;
+use tokio_util::io::ReaderStream;
 use uuid::Uuid;
 
 // ── Helpers ─────────────────────────────────────────
@@ -62,6 +64,10 @@ pub(crate) async fn list_backups() -> Result<Json<Vec<BackupMeta>>, (StatusCode,
 pub(crate) async fn create_backup(
     State(db): State<AppState>,
 ) -> Result<Json<BackupMeta>, (StatusCode, String)> {
+    run_blocking(move || create_backup_sync(db)).await.map(Json)
+}
+
+fn create_backup_sync(db: AppState) -> Result<BackupMeta, (StatusCode, String)> {
     let dir = backups_dir();
     fs::create_dir_all(&dir).map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     backup_policy::maintain_backups(&app_data_dir())
@@ -117,7 +123,7 @@ pub(crate) async fn create_backup(
     backup_policy::maintain_backups(&app_data_dir())
         .map_err(|error| (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()))?;
 
-    backup_meta(path).map(Json)
+    backup_meta(path)
 }
 pub(crate) async fn download_backup(
     Path(name): Path<String>,
@@ -125,15 +131,22 @@ pub(crate) async fn download_backup(
     if !valid_backup_name(&name) {
         return Err((StatusCode::BAD_REQUEST, "Invalid backup name".into()));
     }
-    let path = backups_dir().join(&name);
-    let bytes = fs::read(&path).map_err(|e| {
-        if e.kind() == std::io::ErrorKind::NotFound {
+    stream_backup(backups_dir().join(&name), name).await
+}
+
+async fn stream_backup(path: PathBuf, name: String) -> Result<Response, (StatusCode, String)> {
+    let file = tokio::fs::File::open(&path).await.map_err(|error| {
+        if error.kind() == std::io::ErrorKind::NotFound {
             (StatusCode::NOT_FOUND, "Backup not found".into())
         } else {
-            (StatusCode::INTERNAL_SERVER_ERROR, e.to_string())
+            (StatusCode::INTERNAL_SERVER_ERROR, error.to_string())
         }
     })?;
-
+    let size = file
+        .metadata()
+        .await
+        .map_err(|error| (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()))?
+        .len();
     let mut headers = HeaderMap::new();
     headers.insert(
         header::CONTENT_TYPE,
@@ -142,14 +155,30 @@ pub(crate) async fn download_backup(
     headers.insert(
         header::CONTENT_DISPOSITION,
         HeaderValue::from_str(&format!("attachment; filename=\"{}\"", name))
-            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?,
+            .map_err(|error| (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()))?,
     );
-    Ok((headers, bytes).into_response())
+    headers.insert(
+        header::CONTENT_LENGTH,
+        HeaderValue::from_str(&size.to_string())
+            .map_err(|error| (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()))?,
+    );
+    let stream = ReaderStream::with_capacity(file, 64 * 1024);
+    Ok((headers, Body::from_stream(stream)).into_response())
 }
+
 pub(crate) async fn restore_backup(
     State(db): State<AppState>,
     Path(name): Path<String>,
 ) -> Result<Json<RestoreBackupResult>, (StatusCode, String)> {
+    run_blocking(move || restore_backup_sync(db, name))
+        .await
+        .map(Json)
+}
+
+fn restore_backup_sync(
+    db: AppState,
+    name: String,
+) -> Result<RestoreBackupResult, (StatusCode, String)> {
     if !valid_backup_name(&name) || name == "daily-summary-latest.db" {
         return Err((
             StatusCode::BAD_REQUEST,
@@ -244,10 +273,10 @@ pub(crate) async fn restore_backup(
     })?;
 
     let pre_restore_backup = backup_meta(pre_restore_path)?;
-    Ok(Json(RestoreBackupResult {
+    Ok(RestoreBackupResult {
         restored_from: name,
         pre_restore_backup,
-    }))
+    })
 }
 
 pub(crate) async fn delete_backup(
@@ -271,4 +300,36 @@ pub(crate) async fn delete_backup(
         }
     })?;
     Ok(StatusCode::NO_CONTENT)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::body::to_bytes;
+
+    #[tokio::test]
+    async fn backup_stream_returns_original_bytes_and_length() {
+        let name = format!("daily-summary-stream-{}.db", Uuid::new_v4());
+        let path = std::env::temp_dir().join(&name);
+        let bytes: Vec<u8> = (0..200_000).map(|index| (index % 251) as u8).collect();
+        fs::write(&path, &bytes).expect("write temporary backup");
+
+        let response = stream_backup(path.clone(), name.clone())
+            .await
+            .expect("stream backup");
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response.headers()[header::CONTENT_LENGTH].to_str().unwrap(),
+            bytes.len().to_string()
+        );
+        assert_eq!(
+            response.headers()[header::CONTENT_DISPOSITION],
+            format!("attachment; filename=\"{name}\"")
+        );
+        let body = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("read streamed body");
+        assert_eq!(body.as_ref(), bytes.as_slice());
+        fs::remove_file(path).expect("remove temporary backup");
+    }
 }

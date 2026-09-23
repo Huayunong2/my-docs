@@ -524,32 +524,45 @@ export default function StatsPage({
     };
   }, []);
 
-  // 复习统计 + 热力图（可降级提示，不影响页面主体）
+  // 统计快照一次读取统计和热力图；旧服务端或请求失败时保留原有独立降级路径。
   useEffect(() => {
     setReviewStatsError("");
     setHeatmapError("");
+    const loadLegacy = () => {
+      api
+        .getReviewStats()
+        .then((stats) => {
+          if (mountedRef.current) setReviewStats(stats);
+        })
+        .catch((e) => {
+          if (!mountedRef.current) return;
+          setReviewStats(null);
+          setReviewStatsError(api.getErrorMessage(e) || "复习统计暂时不可用");
+        });
+      api
+        .getReviewHeatmap(365)
+        .then((data) => {
+          if (!mountedRef.current) return;
+          setHeatmap(data);
+          setHeatmapLoaded(true);
+        })
+        .catch((e) => {
+          if (!mountedRef.current) return;
+          setHeatmap([]);
+          setHeatmapLoaded(true);
+          setHeatmapError(api.getErrorMessage(e) || "复习热力图暂时不可用");
+        });
+    };
     api
-      .getReviewStats()
-      .then((stats) => {
-        if (mountedRef.current) setReviewStats(stats);
-      })
-      .catch((e) => {
+      .getReviewStatsSnapshot(365)
+      .then(({ stats, heatmap: data }) => {
         if (!mountedRef.current) return;
-        setReviewStats(null);
-        setReviewStatsError(api.getErrorMessage(e) || "复习统计暂时不可用");
-      });
-    api
-      .getReviewHeatmap(365)
-      .then((data) => {
-        if (!mountedRef.current) return;
+        setReviewStats(stats);
         setHeatmap(data);
         setHeatmapLoaded(true);
       })
-      .catch((e) => {
-        if (!mountedRef.current) return;
-        setHeatmap([]);
-        setHeatmapLoaded(true);
-        setHeatmapError(api.getErrorMessage(e) || "复习热力图暂时不可用");
+      .catch(() => {
+        if (mountedRef.current) loadLegacy();
       });
   }, []);
 

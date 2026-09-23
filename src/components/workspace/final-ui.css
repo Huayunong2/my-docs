@@ -1679,6 +1679,34 @@
     linear-gradient(118deg, color-mix(in srgb, var(--ui-surface-raised) 88%, var(--ui-accent-solid)), var(--ui-surface));
   box-shadow: var(--ui-shadow-panel);
 }
+.app-content[data-wallpaper-module="stats"][data-wallpaper-active="true"] .ft-monthly-story {
+  background:
+    radial-gradient(circle at 100% 0%, color-mix(in srgb, var(--ui-accent-solid) 14%, transparent), transparent 38%),
+    linear-gradient(
+      90deg,
+      rgba(21, 18, 37, var(--module-wallpaper-overlay)) 0%,
+      rgba(24, 19, 43, var(--module-wallpaper-overlay)) 100%
+    ),
+    var(--module-wallpaper-desktop) center 30% / cover no-repeat;
+}
+.app-content[data-wallpaper-module="stats"][data-wallpaper-active="true"] .ft-monthly-story-copy h2 {
+  color: #f8f7ff;
+}
+.app-content[data-wallpaper-module="stats"][data-wallpaper-active="true"] .ft-monthly-story .ui-button-ghost {
+  color: rgba(248, 247, 255, 0.88);
+}
+.app-content[data-wallpaper-module="stats"][data-wallpaper-active="true"] .ft-monthly-ring > div {
+  background: rgba(24, 22, 38, 0.94);
+}
+.app-content[data-wallpaper-module="stats"][data-wallpaper-active="true"] .ft-monthly-ring strong {
+  color: #f8f7ff;
+}
+.app-content[data-wallpaper-module="stats"][data-wallpaper-active="true"] .ft-monthly-ring span {
+  color: rgba(248, 247, 255, 0.68);
+}
+.app-content[data-wallpaper-module="stats"][data-wallpaper-active="true"] .ft-monthly-legend span {
+  color: rgba(248, 247, 255, 0.78);
+}
 .ft-monthly-story-copy, .ft-monthly-story-progress { min-width: 0; }
 .ft-monthly-story-copy h2 {
   max-width: 660px;
@@ -1926,6 +1954,11 @@
   .ft-stats .ft-stats-toolbar [role="tablist"] { grid-template-columns: repeat(2, minmax(0, 1fr)); width: 100%; gap: 5px; }
   .ft-stats .ft-stats-toolbar [role="tab"] { min-height: 44px; padding-inline: 6px; font-size: 11px; }
   .ft-monthly-story { grid-template-columns: minmax(0, 1fr); gap: 21px; padding: 22px 20px; border-radius: 18px; }
+  .app-content[data-wallpaper-module="stats"][data-wallpaper-active="true"] .ft-monthly-story {
+    background:
+      linear-gradient(180deg, rgba(23, 20, 40, var(--module-wallpaper-overlay)), rgba(23, 20, 40, var(--module-wallpaper-overlay))),
+      var(--module-wallpaper-mobile) center 36% / cover no-repeat;
+  }
   .ft-monthly-story-copy h2 { font-size: clamp(22px, 6vw, 27px); }
     .ft-monthly-story-actions { gap: 8px; margin-top: 15px; }
   .ft-monthly-story-actions button { min-height: 44px; }

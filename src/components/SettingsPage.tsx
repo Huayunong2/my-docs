@@ -33,6 +33,12 @@ import {
   writeLocalStorage,
 } from "../lib/storage";
 import { type ThemeMode } from "../lib/theme";
+import {
+  type WallpaperImageTarget,
+  type WallpaperModule,
+  type WallpaperPreference,
+  type WallpaperPreferences,
+} from "../lib/wallpapers";
 
 type Tab = "connect" | "review" | "ai" | "data" | "appearance";
 
@@ -67,6 +73,17 @@ interface SettingsPageProps {
   onChangeAccentTheme: (theme: string) => void;
   themeMode: ThemeMode;
   onChangeThemeMode: (mode: ThemeMode) => void;
+  wallpaperPreferences: WallpaperPreferences;
+  onChangeWallpaperPreference: (
+    module: WallpaperModule,
+    preference: WallpaperPreference,
+  ) => Promise<boolean>;
+  onSaveWallpaperImage: (
+    module: WallpaperModule,
+    target: WallpaperImageTarget,
+    file: File,
+  ) => Promise<boolean>;
+  onResetWallpaper: (module: WallpaperModule) => Promise<boolean>;
   onConnectionSaved?: (message?: string) => void;
 }
 
@@ -75,6 +92,10 @@ export default function SettingsPage({
   onChangeAccentTheme,
   themeMode,
   onChangeThemeMode,
+  wallpaperPreferences,
+  onChangeWallpaperPreference,
+  onSaveWallpaperImage,
+  onResetWallpaper,
   onConnectionSaved,
 }: SettingsPageProps) {
   const [search, setSearch] = useState("");
@@ -393,6 +414,10 @@ export default function SettingsPage({
                 onChangeAccentTheme={onChangeAccentTheme}
                 themeMode={themeMode}
                 onChangeThemeMode={onChangeThemeMode}
+                wallpaperPreferences={wallpaperPreferences}
+                onChangeWallpaperPreference={onChangeWallpaperPreference}
+                onSaveWallpaperImage={onSaveWallpaperImage}
+                onResetWallpaper={onResetWallpaper}
               />,
             )}
           </div>

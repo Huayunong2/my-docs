@@ -391,6 +391,10 @@ function SettingsRoute() {
       onChangeAccentTheme={shell.onChangeAccentTheme}
       themeMode={shell.themeMode}
       onChangeThemeMode={shell.onChangeThemeMode}
+      wallpaperPreferences={shell.wallpaperPreferences}
+      onChangeWallpaperPreference={shell.onChangeWallpaperPreference}
+      onSaveWallpaperImage={shell.onSaveWallpaperImage}
+      onResetWallpaper={shell.onResetWallpaper}
       onConnectionSaved={shell.returnFromConnectionSettings}
     />
   );

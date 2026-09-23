@@ -112,8 +112,8 @@
   #main-content :is(.ft-result-meta, .ft-result-tags) { gap: 8px; font-size: 12px; line-height: 1.6; }
 
   /* Knowledge: keep the detail page quiet and give the card body the width. */
-  #main-content .knowledge-hub { padding: 18px 16px calc(var(--ui-mobile-nav-total-height) + 24px); }
-  #main-content .kl-reading { max-width: 40em; padding: 24px 4px 40px; }
+  #main-content .knowledge-hub { height: auto; min-height: 100%; padding: 18px 0 24px; }
+  #main-content .kl-reading { max-width: 40em; padding: 24px 16px 40px; }
   #main-content .kl-reading > h2 { font-size: 28px; line-height: 1.4; }
   #main-content :is(.kl-reading-byline, .kl-reading-taxonomy span) { font-size: 12px; line-height: 1.6; }
   #main-content .kl-reading-content { margin-top: 24px; padding-top: 22px; font-size: 16px; line-height: 1.85; }
@@ -121,8 +121,10 @@
   #main-content .kl-reading-actions { gap: 8px; margin-top: 24px; }
   #main-content .kl-reading-actions button,
   #main-content .kl-reader-source summary { min-height: 44px; font-size: 13px; }
-  #main-content .kl-card-preview { min-height: 0; -webkit-line-clamp: 3; font-size: 13px; line-height: 1.7; }
-  #main-content .kl-card-link h3 { font-size: 15px; line-height: 1.5; }
+  #main-content .kl-card-preview { min-height: 0; -webkit-line-clamp: 4; font-size: 14px; line-height: 1.75; }
+  #main-content .kl-card-link h3 { min-height: 0; font-size: 17px; line-height: 1.45; }
+  #main-content .kl-collection[data-layout="compact"] .kl-card-preview { margin-top: 6px; -webkit-line-clamp: 2; font-size: 13px; line-height: 1.65; }
+  #main-content .kl-collection[data-layout="compact"] .kl-card-link h3 { font-size: 15px; line-height: 1.45; -webkit-line-clamp: 2; }
   #main-content .kl-card-meta { font-size: 11px; line-height: 1.6; }
 
   /* Review: one reading flow, then answer and reachable grading. */
