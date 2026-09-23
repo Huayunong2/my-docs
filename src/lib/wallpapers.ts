@@ -92,7 +92,7 @@ function openDatabase(): Promise<IDBDatabase> {
   }
   if (databasePromise) return databasePromise;
 
-  databasePromise = new Promise((resolve, reject) => {
+  const opening = new Promise<IDBDatabase>((resolve, reject) => {
     const request = globalThis.indexedDB.open(databaseName, databaseVersion);
     let blocked = false;
     request.onupgradeneeded = () => {
@@ -121,8 +121,8 @@ function openDatabase(): Promise<IDBDatabase> {
     databasePromise = null;
     throw error;
   });
-
-  return databasePromise;
+  databasePromise = opening;
+  return opening;
 }
 
 function transactionCompletion(transaction: IDBTransaction): Promise<void> {
@@ -146,12 +146,12 @@ export async function loadWallpaperPreferences(): Promise<WallpaperPreferences> 
   const request = transaction
     .objectStore(preferenceStoreName)
     .getAll() as IDBRequest<Array<{ module: unknown; source?: unknown; overlay?: unknown }>>;
-  const records = await new Promise<typeof request.result>((resolve, reject) => {
+  const recordsPromise = new Promise<typeof request.result>((resolve, reject) => {
     request.onsuccess = () => resolve(request.result);
     request.onerror = () =>
       reject(request.error ?? new Error("无法读取壁纸设置"));
   });
-  await completed;
+  const [records] = await Promise.all([recordsPromise, completed]);
 
   const preferences = defaultWallpaperPreferences();
   for (const record of records) {
@@ -193,25 +193,29 @@ export async function saveWallpaperImage(
   const imageStore = transaction.objectStore(imageStoreName);
   const request = imageStore.get(module) as IDBRequest<WallpaperImageRecord | undefined>;
   request.onsuccess = () => {
-    const previous = request.result ?? { module };
-    const next: WallpaperImageRecord =
-      target === "desktop"
-        ? {
-            ...previous,
-            module,
-            desktopBlob: file,
-            desktopName: file.name,
-          }
-        : {
-            ...previous,
-            module,
-            mobileBlob: file,
-            mobileName: file.name,
-          };
-    imageStore.put(next);
-    transaction
-      .objectStore(preferenceStoreName)
-      .put({ module, ...normalizeWallpaperPreference(module, { ...preference, source: "custom" }) });
+    try {
+      const previous = request.result ?? { module };
+      const next: WallpaperImageRecord =
+        target === "desktop"
+          ? {
+              ...previous,
+              module,
+              desktopBlob: file,
+              desktopName: file.name,
+            }
+          : {
+              ...previous,
+              module,
+              mobileBlob: file,
+              mobileName: file.name,
+            };
+      imageStore.put(next);
+      transaction
+        .objectStore(preferenceStoreName)
+        .put({ module, ...normalizeWallpaperPreference(module, { ...preference, source: "custom" }) });
+    } catch {
+      transaction.abort();
+    }
   };
   await completed;
 }
@@ -225,12 +229,12 @@ export async function loadWallpaperImage(
   const request = transaction
     .objectStore(imageStoreName)
     .get(module) as IDBRequest<WallpaperImageRecord | undefined>;
-  const record = await new Promise<WallpaperImageRecord | null>((resolve, reject) => {
+  const recordPromise = new Promise<WallpaperImageRecord | null>((resolve, reject) => {
     request.onsuccess = () => resolve(request.result ?? null);
     request.onerror = () =>
       reject(request.error ?? new Error("无法读取自定义壁纸"));
   });
-  await completed;
+  const [record] = await Promise.all([recordPromise, completed]);
   return record;
 }
 

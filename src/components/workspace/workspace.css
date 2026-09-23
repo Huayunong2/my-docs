@@ -830,6 +830,247 @@
   flex: 0 0 auto;
   box-shadow: inset 0 0 0 1px color-mix(in srgb, #000 12%, transparent);
 }
+.st-content .st-wallpaper-section {
+  gap: 18px;
+}
+.st-content .st-wallpaper-module-label {
+  margin-bottom: -8px;
+  color: var(--ui-text-subtle);
+  font-size: 12px;
+}
+.st-content .st-wallpaper-module-select {
+  width: min(100%, 420px);
+  min-height: 44px;
+  padding: 0 12px;
+  border: 1px solid var(--ui-border);
+  border-radius: 10px;
+  background: var(--ui-surface);
+  color: var(--ui-text);
+  font: inherit;
+}
+.st-content .st-wallpaper-choices {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+.st-content .st-wallpaper-choice {
+  display: grid;
+  grid-template-rows: auto auto 1fr;
+  gap: 7px;
+  min-width: 0;
+  min-height: 124px;
+  padding: 11px;
+  border: 1px solid var(--ui-border);
+  border-radius: 13px;
+  background: var(--ui-surface-subtle);
+  color: var(--ui-text);
+  text-align: left;
+  transition: border-color 150ms ease, background-color 150ms ease, box-shadow 150ms ease;
+}
+.st-content .st-wallpaper-choice:hover:not(:disabled) {
+  border-color: var(--ui-border-strong);
+  background: var(--ui-surface-hover);
+}
+.st-content .st-wallpaper-choice[aria-pressed="true"] {
+  border-color: var(--ui-selected-border);
+  background: var(--ui-surface-selected);
+  box-shadow: 0 0 0 2px var(--ui-surface-selected), var(--ui-shadow-panel);
+}
+.st-content .st-wallpaper-choice:disabled {
+  cursor: not-allowed;
+  opacity: 0.56;
+}
+.st-content .st-wallpaper-choice-mark {
+  display: grid;
+  place-items: center;
+  width: 100%;
+  height: 54px;
+  border-radius: 9px;
+  background: var(--ui-surface-inset);
+  color: var(--ui-accent-text);
+}
+.st-content .st-wallpaper-choice-art {
+  background:
+    linear-gradient(rgba(20, 17, 36, 0.22), rgba(20, 17, 36, 0.22)),
+    url("/backgrounds/stats-overview-desktop.png") center 30% / cover no-repeat;
+}
+.st-content .st-wallpaper-choice-custom {
+  border: 1px dashed var(--ui-border-strong);
+}
+.st-content .st-wallpaper-choice strong {
+  min-width: 0;
+  font-size: 12px;
+  line-height: 1.4;
+}
+.st-content .st-wallpaper-choice small {
+  min-width: 0;
+  color: var(--ui-text-subtle);
+  font-size: 10px;
+  line-height: 1.5;
+}
+.st-content .st-wallpaper-preview {
+  display: flex;
+  min-height: 136px;
+  align-items: stretch;
+  justify-content: space-between;
+  gap: 20px;
+  padding: 18px;
+  overflow: hidden;
+  border: 1px solid var(--ui-border);
+  border-radius: 14px;
+  background-color: var(--ui-surface-subtle);
+  background-image:
+    linear-gradient(
+      rgba(255, 255, 255, var(--wallpaper-preview-overlay)),
+      rgba(255, 255, 255, var(--wallpaper-preview-overlay))
+    ),
+    var(--wallpaper-preview-desktop, none);
+  background-position: center, center;
+  background-size: 100% 100%, cover;
+  background-repeat: no-repeat;
+  color: var(--ui-text);
+}
+.dark .st-content .st-wallpaper-preview {
+  background-image:
+    linear-gradient(
+      rgba(12, 16, 24, var(--wallpaper-preview-overlay)),
+      rgba(12, 16, 24, var(--wallpaper-preview-overlay))
+    ),
+    var(--wallpaper-preview-desktop, none);
+}
+.st-wallpaper-preview-heading {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 8px;
+  min-width: 0;
+}
+.st-wallpaper-preview-heading span {
+  color: var(--ui-text-subtle);
+  font-size: 10px;
+}
+.st-wallpaper-preview-heading strong {
+  font-size: 18px;
+  line-height: 1.4;
+}
+.st-wallpaper-preview-card {
+  display: flex;
+  width: min(38%, 180px);
+  min-width: 100px;
+  flex-direction: column;
+  justify-content: center;
+  gap: 8px;
+  padding: 13px;
+  border: 1px solid color-mix(in srgb, var(--ui-border) 80%, transparent);
+  border-radius: 11px;
+  background: color-mix(in srgb, var(--ui-surface) 84%, transparent);
+  box-shadow: var(--ui-shadow-panel);
+}
+.st-wallpaper-preview-card i,
+.st-wallpaper-preview-card span {
+  display: block;
+  height: 6px;
+  border-radius: 999px;
+  background: var(--ui-text-subtle);
+  opacity: 0.5;
+}
+.st-wallpaper-preview-card i { width: 52%; height: 9px; background: var(--ui-accent-solid); opacity: 0.9; }
+.st-wallpaper-preview-card span:last-child { width: 72%; }
+.st-content .st-wallpaper-upload-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+.st-content .st-wallpaper-upload {
+  display: flex;
+  min-width: 0;
+  min-height: 46px;
+  align-items: center;
+  gap: 9px;
+  padding: 10px 12px;
+  border: 1px solid var(--ui-border);
+  border-radius: 11px;
+  background: var(--ui-surface);
+  color: var(--ui-text);
+  font-size: 12px;
+  cursor: pointer;
+}
+.st-content .st-wallpaper-upload:hover {
+  border-color: var(--ui-border-strong);
+  background: var(--ui-surface-hover);
+}
+.st-content .st-wallpaper-upload:focus-within {
+  outline: 2px solid var(--ui-focus);
+  outline-offset: 3px;
+}
+.st-content .st-wallpaper-upload input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+.st-wallpaper-file-info {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  color: var(--ui-text-subtle);
+  font-size: 10px;
+  overflow-wrap: anywhere;
+}
+.st-wallpaper-overlay-label {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-top: 3px;
+  color: var(--ui-text);
+  font-size: 12px;
+}
+.st-wallpaper-overlay-label span {
+  display: grid;
+  gap: 3px;
+}
+.st-wallpaper-overlay-label small {
+  color: var(--ui-text-subtle);
+  font-size: 10px;
+}
+.st-wallpaper-overlay-label strong {
+  color: var(--ui-accent-text);
+  font-variant-numeric: tabular-nums;
+}
+.st-content .st-wallpaper-overlay {
+  width: 100%;
+  accent-color: var(--ui-accent-solid);
+}
+.st-wallpaper-status,
+.st-wallpaper-error {
+  margin: 0;
+  font-size: 11px;
+  line-height: 1.5;
+}
+.st-wallpaper-status { color: var(--ui-success-text); }
+.st-wallpaper-error { color: var(--ui-danger-text); }
+.st-wallpaper-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+}
+.st-wallpaper-footer p {
+  max-width: 620px;
+  margin: 0;
+  font-size: 10px;
+  line-height: 1.7;
+}
+.st-content .st-wallpaper-reset {
+  flex: 0 0 auto;
+  min-height: 42px;
+  gap: 7px;
+  padding-inline: 12px;
+  font-size: 11px;
+}
 .st-content .st-appearance-note {
   gap: 8px;
   padding: 2px 3px;
@@ -864,7 +1105,17 @@
   height: 6px;
   box-shadow: none;
 }
-.st-page :is(.st-nav-item, .st-search, .st-mode, .st-color-grid button, .st-data-workspace [role="tab"]):focus-visible {
+.st-page :is(
+  .st-nav-item,
+  .st-search,
+  .st-mode,
+  .st-color-grid button,
+  .st-data-workspace [role="tab"],
+  .st-wallpaper-module-select,
+  .st-wallpaper-choice,
+  .st-wallpaper-overlay,
+  .st-wallpaper-reset
+):focus-visible {
   outline: 2px solid var(--ui-focus);
   outline-offset: 3px;
 }
@@ -888,6 +1139,37 @@
   }
 }
 @media (max-width: 767px) {
+  .st-content .st-wallpaper-preview {
+    background-image:
+      linear-gradient(
+        rgba(255, 255, 255, var(--wallpaper-preview-overlay)),
+        rgba(255, 255, 255, var(--wallpaper-preview-overlay))
+      ),
+      var(--wallpaper-preview-mobile, none);
+  }
+  .dark .st-content .st-wallpaper-preview {
+    background-image:
+      linear-gradient(
+        rgba(12, 16, 24, var(--wallpaper-preview-overlay)),
+        rgba(12, 16, 24, var(--wallpaper-preview-overlay))
+      ),
+      var(--wallpaper-preview-mobile, none);
+  }
+  .st-content .st-wallpaper-choice-art {
+    background-image:
+      linear-gradient(rgba(20, 17, 36, 0.22), rgba(20, 17, 36, 0.22)),
+      url("/backgrounds/stats-overview-mobile.png") center 36% / cover no-repeat;
+  }
+  .st-wallpaper-choices { gap: 6px; }
+  .st-content .st-wallpaper-choice { min-height: 112px; padding: 8px; }
+  .st-content .st-wallpaper-choice strong { font-size: 10px; }
+  .st-content .st-wallpaper-choice small { font-size: 9px; }
+  .st-content .st-wallpaper-choice-mark { height: 46px; }
+  .st-wallpaper-preview { min-height: 112px; gap: 12px; padding: 14px; }
+  .st-wallpaper-preview-heading strong { font-size: 15px; }
+  .st-wallpaper-file-info { gap: 6px; font-size: 9px; }
+  .st-wallpaper-footer { align-items: stretch; flex-direction: column; gap: 12px; }
+  .st-content .st-wallpaper-reset { width: 100%; justify-content: center; }
   .st-page > .wb-header {
     align-items: center;
   }
