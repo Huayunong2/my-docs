@@ -7,6 +7,7 @@ import {
   type MouseEvent,
 } from "react";
 import WorkspaceHeader from "./workspace/WorkspaceHeader";
+import { WallpaperSurface } from "./workspace/WallpaperSurface";
 import { Link } from "@tanstack/react-router";
 import {
   DropdownMenu,
@@ -584,7 +585,9 @@ export default function HistoryPage({
       </div>
 
       <div className="history-body flex min-h-0 flex-1 flex-col xl:flex-row">
-        <section
+        <WallpaperSurface
+          as="section"
+          target="records.timeline"
           className="history-list-pane flex min-h-0 min-w-0 flex-1 flex-col"
           aria-label="每日记录列表"
         >
@@ -690,10 +693,12 @@ export default function HistoryPage({
               </button>
             )}
           </div>
-        </section>
+        </WallpaperSurface>
 
         {selectedId && (
-          <section
+          <WallpaperSurface
+            as="section"
+            target="records.detail"
             className="history-detail-pane hidden min-h-0 min-w-0 flex-1 xl:flex"
             aria-label="记录详情"
           >
@@ -727,7 +732,7 @@ export default function HistoryPage({
                 </motion.div>
               )}
             </AnimatePresence>
-          </section>
+          </WallpaperSurface>
         )}
       </div>
 
@@ -765,7 +770,9 @@ export default function HistoryPage({
                   <Dialog.Description className="sr-only">
                     查看、编辑或将这条每日记录移入回收站。
                   </Dialog.Description>
-                  <motion.div
+                  <WallpaperSurface
+                    as={motion.div}
+                    target="records.detail"
                     className="history-detail-dialog-surface ui-modal-surface absolute overflow-y-auto"
                     initial={{ opacity: 0, y: 18 }}
                     animate={{ opacity: 1, y: 0 }}
@@ -789,7 +796,7 @@ export default function HistoryPage({
                         onDelete={(article) => void handleDelete(article)}
                       />
                     )}
-                  </motion.div>
+                  </WallpaperSurface>
                 </motion.div>
               </Dialog.Content>
             </Dialog.Portal>

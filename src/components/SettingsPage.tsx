@@ -8,7 +8,6 @@ import {
 import { useBlocker } from "@tanstack/react-router";
 import {
   Bot,
-  CheckCircle2,
   DatabaseBackup,
   Palette,
   Plug,
@@ -16,7 +15,6 @@ import {
   SlidersHorizontal,
   Search,
   X,
-  ShieldCheck,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import AIPanel from "./settings/AIPanel";
@@ -34,10 +32,13 @@ import {
 } from "../lib/storage";
 import { type ThemeMode } from "../lib/theme";
 import {
-  type WallpaperImageTarget,
-  type WallpaperModule,
-  type WallpaperPreference,
+  type WallpaperApplyMode,
+  type WallpaperAssetDraft,
+  type WallpaperAssetMetadata,
+  type WallpaperAssignmentTargetId,
+  type WallpaperPreferenceValue,
   type WallpaperPreferences,
+  type WallpaperPreset,
 } from "../lib/wallpapers";
 
 type Tab = "connect" | "review" | "ai" | "data" | "appearance";
@@ -75,16 +76,25 @@ interface SettingsPageProps {
   onChangeThemeMode: (mode: ThemeMode) => void;
   wallpaperPreferences: WallpaperPreferences;
   wallpaperPreferencesReady: boolean;
+  wallpaperStorageError: string | null;
+  wallpaperAssets: WallpaperAssetMetadata[];
+  wallpaperPresets: WallpaperPreset[];
   onChangeWallpaperPreference: (
-    module: WallpaperModule,
-    preference: WallpaperPreference,
+    target: WallpaperAssignmentTargetId,
+    preference: WallpaperPreferenceValue,
   ) => Promise<boolean>;
-  onSaveWallpaperImage: (
-    module: WallpaperModule,
-    target: WallpaperImageTarget,
-    file: File,
+  onApplyWallpaperAssets: (
+    targets: WallpaperAssignmentTargetId[],
+    wallpaperIds: string[],
+    mode: WallpaperApplyMode,
   ) => Promise<boolean>;
-  onResetWallpaper: (module: WallpaperModule) => Promise<boolean>;
+  onAddWallpaperAsset: (asset: WallpaperAssetDraft) => Promise<boolean>;
+  onDeleteWallpaperAssets: (wallpaperIds: string[]) => Promise<boolean>;
+  onSaveWallpaperPreset: (name: string, presetId?: string) => Promise<boolean>;
+  onRenameWallpaperPreset: (presetId: string, name: string) => Promise<boolean>;
+  onDeleteWallpaperPreset: (presetId: string) => Promise<boolean>;
+  onApplyWallpaperPreset: (presetId: string | null) => Promise<boolean>;
+  onResetWallpaper: (target: WallpaperAssignmentTargetId) => Promise<boolean>;
   onConnectionSaved?: (message?: string) => void;
 }
 
@@ -95,8 +105,17 @@ export default function SettingsPage({
   onChangeThemeMode,
   wallpaperPreferences,
   wallpaperPreferencesReady,
+  wallpaperStorageError,
+  wallpaperAssets,
+  wallpaperPresets,
   onChangeWallpaperPreference,
-  onSaveWallpaperImage,
+  onApplyWallpaperAssets,
+  onAddWallpaperAsset,
+  onDeleteWallpaperAssets,
+  onSaveWallpaperPreset,
+  onRenameWallpaperPreset,
+  onDeleteWallpaperPreset,
+  onApplyWallpaperPreset,
   onResetWallpaper,
   onConnectionSaved,
 }: SettingsPageProps) {
@@ -138,21 +157,21 @@ export default function SettingsPage({
     review: "设置每天的复习节奏，不改变已经记录的复习历史。",
     ai: "连接你的模型服务，按需要为不同任务配置模型。",
     data: "创建保护点、恢复数据或迁移内容，危险操作仍需确认。",
-    appearance: "调整明暗模式与强调色，让阅读和操作更舒适。",
+    appearance: "管理显示模式、强调色与各组件的壁纸。",
   };
   const tabSummaries: Record<Tab, string> = {
     connect: "地址、令牌与连接诊断",
     review: "每日上限与队列预览",
     ai: "模型服务与任务路由",
     data: "快照保护与内容迁移",
-    appearance: "明暗模式与强调色",
+    appearance: "主题、壁纸与组件背景",
   };
   const keywords: Record<Tab, string> = {
     connect: "服务器 地址 令牌 token 网络 诊断",
     review: "FSRS 新题 队列 每天 上限 记忆",
     ai: "模型 API Key 路由 提示词",
     data: "导入 导出 恢复 备份 迁移 数据库",
-    appearance: "主题 颜色 深色 浅色 系统",
+    appearance: "主题 颜色 深色 浅色 系统 壁纸 背景 图片",
   };
   const matchedTabs = settingsTabs.filter((id) =>
     `${labels[id]} ${descriptions[id]} ${keywords[id]}`
@@ -250,32 +269,10 @@ export default function SettingsPage({
 
   return (
     <div className="wb-page st-page">
-      <WorkspaceHeader
-        icon={Settings}
-        title="设置"
-        actions={
-          <span className="st-save-summary" role="status" aria-live="polite">
-            {dirtyTabs.size ? (
-              <>
-                <i aria-hidden="true" />
-                {`${dirtyTabs.size} 个分类有未保存更改`}
-              </>
-            ) : (
-              <>
-                <CheckCircle2 size={15} aria-hidden="true" />
-                所有更改均已保存
-              </>
-            )}
-          </span>
-        }
-      />
+      <WorkspaceHeader icon={Settings} title="设置" />
       <div className="st-layout">
         <header className="st-overview">
           <div className="st-overview-tools">
-            <span className="st-storage-note">
-              <ShieldCheck size={15} aria-hidden="true" />
-              记录保存在服务端 · 本机偏好保存在此设备
-            </span>
             <label className="wb-search st-search">
               <Search size={15} aria-hidden="true" />
               <input
@@ -418,8 +415,17 @@ export default function SettingsPage({
                 onChangeThemeMode={onChangeThemeMode}
                 wallpaperPreferences={wallpaperPreferences}
                 wallpaperPreferencesReady={wallpaperPreferencesReady}
+                wallpaperStorageError={wallpaperStorageError}
+                wallpaperAssets={wallpaperAssets}
+                wallpaperPresets={wallpaperPresets}
                 onChangeWallpaperPreference={onChangeWallpaperPreference}
-                onSaveWallpaperImage={onSaveWallpaperImage}
+                onApplyWallpaperAssets={onApplyWallpaperAssets}
+                onAddWallpaperAsset={onAddWallpaperAsset}
+                onDeleteWallpaperAssets={onDeleteWallpaperAssets}
+                onSaveWallpaperPreset={onSaveWallpaperPreset}
+                onRenameWallpaperPreset={onRenameWallpaperPreset}
+                onDeleteWallpaperPreset={onDeleteWallpaperPreset}
+                onApplyWallpaperPreset={onApplyWallpaperPreset}
                 onResetWallpaper={onResetWallpaper}
               />,
             )}

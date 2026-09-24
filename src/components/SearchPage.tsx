@@ -1,6 +1,7 @@
 import { useEffect, useState, useCallback, useRef } from "react";
 import { Link } from "@tanstack/react-router";
 import WorkspaceHeader from "./workspace/WorkspaceHeader";
+import { WallpaperSurface } from "./workspace/WallpaperSurface";
 import { ReviewViewerModal } from "./reviews/ReviewShared";
 import { knowledgeExcerpt } from "../lib/knowledgePresentation";
 import {
@@ -465,6 +466,7 @@ export default function SearchPage({
           </div>
         )}
         <div ref={resultRef} className="ft-search-results" aria-busy={loading}>
+          <WallpaperSurface target="search.results" className="ft-search-target">
           {!searched ? null : error ? (
             <div className="ft-search-empty" role="alert">
               <AlertTriangle size={30} />
@@ -625,6 +627,7 @@ export default function SearchPage({
                 ))}
             </div>
           )}
+          </WallpaperSurface>
         </div>
         {searched && tab !== "articles" && (cardPage > 1 || pageHasMore) && (
           <footer className="ft-search-pagination">
