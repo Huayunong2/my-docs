@@ -13,6 +13,7 @@ import { knowledgeDate } from "../../lib/knowledgePresentation";
 import { copyText } from "../../lib/clipboard";
 import { toast } from "sonner";
 import MarkdownContent from "../MarkdownContent";
+import { WallpaperSurface } from "../workspace/WallpaperSurface";
 
 interface Props {
   card: KnowledgeCard;
@@ -37,7 +38,7 @@ export default function KnowledgeReader(p: Props) {
     }
   };
   return (
-    <article className="kl-reading" aria-labelledby="knowledge-reading-title">
+    <WallpaperSurface as="article" target="knowledge.reader" className="kl-reading" aria-labelledby="knowledge-reading-title">
       <div className="kl-reader-meta">
         <span className="kl-type">
           <FileText size={15} />
@@ -124,6 +125,6 @@ export default function KnowledgeReader(p: Props) {
           ))}
         </section>
       )}
-    </article>
+    </WallpaperSurface>
   );
 }

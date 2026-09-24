@@ -26,6 +26,7 @@ import type { Page } from "../App";
 import MarkdownContent from "./MarkdownContent";
 import { InlineError, LoadingState, useConfirmDialog } from "./ui/Feedback";
 import WorkspaceHeader from "./workspace/WorkspaceHeader";
+import { WallpaperSurface } from "./workspace/WallpaperSurface";
 import { isKnowledgeShortcut } from "../lib/knowledgePresentation";
 import { writeSessionStorage } from "../lib/storage";
 import { toast } from "sonner";
@@ -485,7 +486,7 @@ export default function ReviewPage({
         </div>
       )}
       <div className="rs-layout" data-studying={sessionStarted && !!current}>
-        <section className="rs-main">
+        <WallpaperSurface as="section" target="review.session" className="rs-main">
           {loading ? (
             <LoadingState label="读取今日复习队列…" rows={3} />
           ) : batchComplete ? (
@@ -723,7 +724,7 @@ export default function ReviewPage({
               </button>
             </div>
           ) : null}
-        </section>
+        </WallpaperSurface>
         <aside className="rs-sidebar">
           <section className="wb-panel rs-today">
             <h3>今天的积累</h3>
@@ -733,7 +734,7 @@ export default function ReviewPage({
             </div>
             <p>知识条目 {stats?.total_confirmed ?? "—"} 个已沉淀</p>
           </section>
-          <section className="wb-panel rs-schedule">
+          <WallpaperSurface as="section" target="review.schedule" className="wb-panel rs-schedule">
             <div className="rs-aside-title">
               <h3>接下来 7 天</h3>
               <CalendarClock size={15} />
@@ -765,7 +766,7 @@ export default function ReviewPage({
             ) : (
               <p className="wb-muted">暂无未来复习安排。</p>
             )}
-          </section>
+          </WallpaperSurface>
           <section className="rs-guide">
             <h3>复习题不等于知识正文</h3>
             <p>

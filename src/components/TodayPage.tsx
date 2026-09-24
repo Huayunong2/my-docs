@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import TodayAIPanel from "./TodayAIPanel";
+import { WallpaperSurface } from "./workspace/WallpaperSurface";
 import {
   AlertTriangle,
   BookMarked,
@@ -1290,7 +1291,7 @@ export default function TodayPage({
               {wordCount} 字
             </span>
           </div>
-          <div className="today-writing-surface ui-editor-surface ui-code-editor h-[56dvh] min-h-0 w-full overflow-hidden md:h-auto md:flex-1">
+          <WallpaperSurface target="today.editor" className="today-writing-surface ui-editor-surface ui-code-editor h-[56dvh] min-h-0 w-full overflow-hidden md:h-auto md:flex-1">
             <CodeMirror
               value={content}
               onChange={handleContentChange}
@@ -1306,7 +1307,7 @@ export default function TodayPage({
                 highlightActiveLine: false,
               }}
             />
-          </div>
+          </WallpaperSurface>
         </div>
 
         <div
@@ -1321,7 +1322,7 @@ export default function TodayPage({
               {charCount} 字符
             </span>
           </div>
-          <div className="today-preview-surface ui-editor-surface h-[56dvh] min-h-0 overflow-y-auto p-4 md:h-auto md:flex-1 md:p-5">
+          <WallpaperSurface target="today.preview" className="today-preview-surface ui-editor-surface h-[56dvh] min-h-0 overflow-y-auto p-4 md:h-auto md:flex-1 md:p-5">
             <div className="mx-auto max-w-[760px]">
               <MarkdownPreview
                 content={content}
@@ -1329,7 +1330,7 @@ export default function TodayPage({
                 onRepairContent={handleContentChange}
               />
             </div>
-          </div>
+          </WallpaperSurface>
         </div>
       </div>
       {dialog}

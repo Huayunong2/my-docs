@@ -37,6 +37,7 @@ import {
   useConfirmDialog,
 } from "./ui/Feedback";
 import WorkspaceHeader from "./workspace/WorkspaceHeader";
+import { WallpaperSurface } from "./workspace/WallpaperSurface";
 import { Tabs, TabsList, TabsTrigger } from "./ui/tabs";
 import {
   readSessionStorage,
@@ -758,7 +759,7 @@ export default function ReviewsPage({
             新草稿不会覆盖已确认内容。
           </p>
         </aside>
-        <section className="rp-main">
+        <WallpaperSurface as="section" target="reviews.archive" className="rp-main">
           <div className="rp-library-heading">
             <div>
               <span className="wb-eyebrow">复盘档案</span>
@@ -992,7 +993,7 @@ export default function ReviewsPage({
               </>
             )}
           </div>
-        </section>
+        </WallpaperSurface>
       </div>
       {editingReview && (
         <ReviewViewerModal

@@ -393,8 +393,17 @@ function SettingsRoute() {
       onChangeThemeMode={shell.onChangeThemeMode}
       wallpaperPreferences={shell.wallpaperPreferences}
       wallpaperPreferencesReady={shell.wallpaperPreferencesReady}
+      wallpaperStorageError={shell.wallpaperStorageError}
+      wallpaperAssets={shell.wallpaperAssets}
+      wallpaperPresets={shell.wallpaperPresets}
       onChangeWallpaperPreference={shell.onChangeWallpaperPreference}
-      onSaveWallpaperImage={shell.onSaveWallpaperImage}
+      onApplyWallpaperAssets={shell.onApplyWallpaperAssets}
+      onAddWallpaperAsset={shell.onAddWallpaperAsset}
+      onDeleteWallpaperAssets={shell.onDeleteWallpaperAssets}
+      onSaveWallpaperPreset={shell.onSaveWallpaperPreset}
+      onRenameWallpaperPreset={shell.onRenameWallpaperPreset}
+      onDeleteWallpaperPreset={shell.onDeleteWallpaperPreset}
+      onApplyWallpaperPreset={shell.onApplyWallpaperPreset}
       onResetWallpaper={shell.onResetWallpaper}
       onConnectionSaved={shell.returnFromConnectionSettings}
     />

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Bar, BarChart, ResponsiveContainer, Tooltip, XAxis } from "recharts";
 import type { MouseEvent } from "react";
 import MonthPicker from "./workspace/MonthPicker";
+import { WallpaperSurface } from "./workspace/WallpaperSurface";
 import WorkspaceHeader from "./workspace/WorkspaceHeader";
 import { Tabs, TabsList, TabsTrigger } from "./ui/tabs";
 import * as Dialog from "@radix-ui/react-dialog";
@@ -668,7 +669,7 @@ export default function StatsPage({
           )}
           {statsTab === "records" && (
             <section className="ft-stats-view ft-stats-records">
-              <div className="ft-monthly-story">
+              <WallpaperSurface target="stats.monthlyOverview" className="ft-monthly-story">
                 <div className="ft-monthly-story-copy">
                   <h2>本月概览</h2>
                   <div className="ft-monthly-story-actions">
@@ -716,8 +717,8 @@ export default function StatsPage({
                     </span>
                   </div>
                 </div>
-              </div>
-              <div className="ft-metrics">
+              </WallpaperSurface>
+              <WallpaperSurface target="stats.metrics" className="ft-metrics">
                 <Metric
                   label="记录天数"
                   icon={CalendarRange}
@@ -750,9 +751,9 @@ export default function StatsPage({
                   unit="天"
                   note="不计为记录，也不会打断连续覆盖"
                 />
-              </div>
+              </WallpaperSurface>
               <div className="ft-stats-overview">
-                <section className="ft-panel ft-calendar">
+                <WallpaperSurface as="section" target="stats.calendar" className="ft-panel ft-calendar">
                   <header className="ft-panel-heading">
                     <h2>记录月历</h2>
                     <span className="ft-caption">日期编辑 · 盾牌设状态</span>
@@ -801,9 +802,9 @@ export default function StatsPage({
                       未记录
                     </span>
                   </footer>
-                </section>
+                </WallpaperSurface>
                 <div className="ft-stats-aside">
-                  <section className="ft-panel">
+                  <WallpaperSurface as="section" target="stats.dailyWords" className="ft-panel ft-daily-words">
                     <header className="ft-panel-heading">
                       <h2>每日字数</h2>
                       <span className="ft-caption">
@@ -852,8 +853,8 @@ export default function StatsPage({
                         <small>字</small>
                       </strong>
                     </div>
-                  </section>
-                  <section className="ft-panel ft-quick-review">
+                  </WallpaperSurface>
+                  <WallpaperSurface as="section" target="stats.quickReview" className="ft-panel ft-quick-review">
                     <h2>周期复盘</h2>
                     <div>
                       <button
@@ -870,9 +871,9 @@ export default function StatsPage({
                         查看复盘库
                       </button>
                     </div>
-                  </section>
+                  </WallpaperSurface>
                   {moodEntries.length > 0 && (
-                    <section className="ft-panel">
+                    <WallpaperSurface as="section" target="stats.moods" className="ft-panel ft-mood-records">
                       <header className="ft-panel-heading">
                         <h2>心情记录</h2>
                         <span className="ft-caption">本月标记</span>
@@ -885,7 +886,7 @@ export default function StatsPage({
                           </span>
                         ))}
                       </div>
-                    </section>
+                    </WallpaperSurface>
                   )}
                 </div>
               </div>
@@ -944,7 +945,7 @@ export default function StatsPage({
                   </div>
                   {hasMemoryReviewData ? (
                     <div className="ft-memory-panels">
-                      <section className="ft-panel">
+                      <WallpaperSurface as="section" target="stats.reviewTrends" className="ft-panel ft-review-trends">
                         <header className="ft-panel-heading">
                           <h2>近 30 天复习</h2>
                         </header>
@@ -974,8 +975,8 @@ export default function StatsPage({
                           <span>{reviewStats.daily[0]?.date}</span>
                           <span>{reviewStats.daily.at(-1)?.date}</span>
                         </div>
-                      </section>
-                      <section className="ft-panel ft-upcoming">
+                      </WallpaperSurface>
+                      <WallpaperSurface as="section" target="stats.upcoming" className="ft-panel ft-upcoming">
                         <header className="ft-panel-heading">
                           <h2>接下来 7 天</h2>
                         </header>
@@ -995,7 +996,7 @@ export default function StatsPage({
                             <strong>未来 7 天暂无待复习题</strong>
                           </div>
                         )}
-                      </section>
+                      </WallpaperSurface>
                     </div>
                   ) : (
                     <section className="ft-panel ft-memory-empty-state">
@@ -1008,7 +1009,7 @@ export default function StatsPage({
                       <span className="ft-memory-empty-badge">尚无复习记录</span>
                     </section>
                   )}
-                  <details className="ft-panel ft-heatmap">
+                  <WallpaperSurface as="details" target="stats.heatmap" className="ft-panel ft-heatmap">
                     <summary>
                       一年复习热力图
                       <ChevronRight size={15} />
@@ -1043,13 +1044,13 @@ export default function StatsPage({
                         </div>
                       </div>
                     )}
-                  </details>
+                  </WallpaperSurface>
                 </>
               )}
             </div>
           )}
           {statsTab === "knowledge" && (
-            <div className="ft-stats-view ft-stats-section ft-stats-knowledge">
+            <WallpaperSurface target="stats.knowledge" className="ft-stats-view ft-stats-section ft-stats-knowledge">
               <div className="ft-section-lead">
                 <div className="ft-section-copy">
                   <h2>知识整理</h2>
@@ -1108,10 +1109,10 @@ export default function StatsPage({
                   </section>
                 </>
               )}
-            </div>
+            </WallpaperSurface>
           )}
           {statsTab === "generate" && (
-            <div className="ft-stats-view ft-stats-section ft-stats-generate">
+            <WallpaperSurface target="stats.generate" className="ft-stats-view ft-stats-section ft-stats-generate">
               <div className="ft-section-lead">
                 <div className="ft-section-copy">
                   <h2>生成周期复盘</h2>
@@ -1227,7 +1228,7 @@ export default function StatsPage({
                   )}
                 </div>
               )}
-            </div>
+            </WallpaperSurface>
           )}
         </>
       )}

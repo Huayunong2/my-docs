@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Link } from "@tanstack/react-router";
+import { WallpaperSurface } from "../workspace/WallpaperSurface";
 import {
   ArrowUpRight,
   BookOpen,
@@ -293,7 +294,7 @@ export default function KnowledgeLibrary(p: Props) {
           <p>移除的条目仍可恢复</p>
         </div>
       </aside>
-      <section className="kl-library" aria-label="知识浏览">
+      <WallpaperSurface as="section" target="knowledge.library" className="kl-library" aria-label="知识浏览">
         <div className="kl-library-top">
           <div className="kl-collection-heading">
             <div>
@@ -673,7 +674,7 @@ export default function KnowledgeLibrary(p: Props) {
             </button>
           </div>
         </footer>
-      </section>
+      </WallpaperSurface>
       {p.detailVisible && p.detail}
     </div>
   );
