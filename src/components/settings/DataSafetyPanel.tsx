@@ -6,8 +6,10 @@ import { Tabs, TabsList, TabsTrigger } from "../ui/tabs";
 
 export default function DataSafetyPanel({
   onDirtyChange,
+  onWallpaperImported,
 }: {
   onDirtyChange?: (dirty: boolean) => void;
+  onWallpaperImported?: () => Promise<boolean>;
 }) {
   const [backupRefreshToken, setBackupRefreshToken] = useState(0);
   const [view, setView] = useState(() =>
@@ -38,6 +40,7 @@ export default function DataSafetyPanel({
             setBackupRefreshToken((current) => current + 1)
           }
           onDirtyChange={onDirtyChange}
+          onWallpaperImported={onWallpaperImported}
         />
       </div>
     </div>

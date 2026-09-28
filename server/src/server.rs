@@ -7,7 +7,7 @@ use crate::backups;
 use crate::day_exemptions;
 use crate::db::{ArchiveImportError, ArticleDraft, Database};
 use crate::exports;
-use crate::helpers::{app_data_dir, backups_dir, run_blocking};
+use crate::helpers::{app_data_dir, backups_dir, exports_dir, run_blocking};
 use crate::knowledge;
 use crate::middleware::{
     add_security_headers, configured_cors, require_api_token, validate_security_configuration,
@@ -16,15 +16,20 @@ use crate::middleware::{
 use crate::models::*;
 use crate::review;
 use crate::stats;
+use crate::wallpapers;
 
 use axum::{
+    body::Body,
     extract::{DefaultBodyLimit, State},
-    http::{header, HeaderMap, HeaderValue, StatusCode},
+    http::{header, HeaderMap, HeaderValue, StatusCode, Uri},
     middleware,
     response::{IntoResponse, Json, Response},
     Router,
 };
+use futures_util::StreamExt;
 use std::sync::{Arc, Mutex};
+use tokio::io::AsyncWriteExt;
+use tokio_util::io::ReaderStream;
 use tower_http::services::{ServeDir, ServeFile};
 
 type AppState = Arc<Mutex<Database>>;
@@ -153,6 +158,170 @@ async fn export_full(State(db): State<AppState>) -> Result<Response, (StatusCode
         HeaderValue::from_static("application/json"),
     );
     Ok((headers, body).into_response())
+}
+
+async fn export_full_package(State(db): State<AppState>) -> Result<Response, (StatusCode, String)> {
+    let path = run_blocking(move || {
+        let mut db = db
+            .lock()
+            .map_err(|error| (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()))?;
+        let path = exports_dir().join(format!("daily-summary-full-{}.zip", uuid::Uuid::new_v4()));
+        if let Err(error) = crate::wallpaper_package::write_package(&mut db, &path) {
+            let _ = std::fs::remove_file(&path);
+            return Err((StatusCode::INTERNAL_SERVER_ERROR, error));
+        }
+        Ok(path)
+    })
+    .await?;
+    let file = match tokio::fs::File::open(&path).await {
+        Ok(file) => file,
+        Err(error) => {
+            let _ = tokio::fs::remove_file(&path).await;
+            return Err((StatusCode::INTERNAL_SERVER_ERROR, error.to_string()));
+        }
+    };
+    let length = file
+        .metadata()
+        .await
+        .map_err(|error| (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()))?
+        .len();
+    if tokio::fs::remove_file(&path).await.is_err() {
+        let cleanup_path = path.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_secs(10 * 60)).await;
+            let _ = tokio::fs::remove_file(cleanup_path).await;
+        });
+    }
+    let mut response = Body::from_stream(ReaderStream::new(file)).into_response();
+    response.headers_mut().insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_static("application/zip"),
+    );
+    response.headers_mut().insert(
+        header::CONTENT_LENGTH,
+        HeaderValue::from_str(&length.to_string())
+            .map_err(|error| (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()))?,
+    );
+    response.headers_mut().insert(
+        header::CONTENT_DISPOSITION,
+        HeaderValue::from_static(r#"attachment; filename="daily-summary-full-package.zip""#),
+    );
+    Ok(response)
+}
+
+async fn import_full_package(
+    State(db): State<AppState>,
+    uri: Uri,
+    headers: HeaderMap,
+    body: Body,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    const MAX_PACKAGE_BYTES: u64 = 512 * 1024 * 1024;
+    let content_type = headers
+        .get(header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or_default();
+    if !content_type.starts_with("application/zip")
+        && !content_type.starts_with("application/octet-stream")
+    {
+        return Err((
+            StatusCode::UNSUPPORTED_MEDIA_TYPE,
+            "迁移包需要使用 ZIP 文件格式。".into(),
+        ));
+    }
+    let expected_revision = uri
+        .query()
+        .and_then(|query| {
+            query
+                .split('&')
+                .find_map(|pair| pair.strip_prefix("revision="))
+        })
+        .and_then(|value| value.parse::<i64>().ok())
+        .ok_or_else(|| {
+            (
+                StatusCode::BAD_REQUEST,
+                "缺少当前壁纸版本。请刷新后重新导入。".into(),
+            )
+        })?;
+    if headers
+        .get(header::CONTENT_LENGTH)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.parse::<u64>().ok())
+        .is_some_and(|length| length > MAX_PACKAGE_BYTES)
+    {
+        return Err((StatusCode::PAYLOAD_TOO_LARGE, "迁移包超过 512 MiB。".into()));
+    }
+    let path = std::env::temp_dir().join(format!(
+        "daily-summary-package-{}.zip",
+        uuid::Uuid::new_v4()
+    ));
+    let mut file = tokio::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&path)
+        .await
+        .map_err(|error| (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()))?;
+    let mut stream = body.into_data_stream();
+    let mut received = 0u64;
+    while let Some(chunk) = stream.next().await {
+        let chunk = match chunk {
+            Ok(chunk) => chunk,
+            Err(error) => {
+                drop(file);
+                let _ = tokio::fs::remove_file(&path).await;
+                return Err((StatusCode::BAD_REQUEST, format!("迁移包上传失败：{error}")));
+            }
+        };
+        received = received.saturating_add(chunk.len() as u64);
+        if received > MAX_PACKAGE_BYTES {
+            drop(file);
+            let _ = tokio::fs::remove_file(&path).await;
+            return Err((StatusCode::PAYLOAD_TOO_LARGE, "迁移包超过 512 MiB。".into()));
+        }
+        if let Err(error) = file.write_all(&chunk).await {
+            drop(file);
+            let _ = tokio::fs::remove_file(&path).await;
+            return Err((StatusCode::INTERNAL_SERVER_ERROR, error.to_string()));
+        }
+    }
+    if let Err(error) = file.flush().await {
+        drop(file);
+        let _ = tokio::fs::remove_file(&path).await;
+        return Err((StatusCode::INTERNAL_SERVER_ERROR, error.to_string()));
+    }
+    drop(file);
+    let operation = run_blocking(move || {
+        let result = (|| {
+            let mut db = db
+                .lock()
+                .map_err(|error| (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()))?;
+            crate::wallpaper_package::import_package(
+                &mut db,
+                &path,
+                expected_revision,
+                &backups_dir(),
+            )
+            .map_err(|error| match error {
+                crate::wallpaper_package::PackageImportError::Invalid(message) => {
+                    (StatusCode::BAD_REQUEST, message)
+                }
+                crate::wallpaper_package::PackageImportError::Conflict => (
+                    StatusCode::CONFLICT,
+                    "壁纸已在其他设备更新，请刷新后重新确认导入。".into(),
+                ),
+                crate::wallpaper_package::PackageImportError::QuotaExceeded => (
+                    StatusCode::INSUFFICIENT_STORAGE,
+                    "迁移包中的图片超过服务器 256 MiB 壁纸容量上限。".into(),
+                ),
+                crate::wallpaper_package::PackageImportError::Storage(message) => {
+                    (StatusCode::INTERNAL_SERVER_ERROR, message)
+                }
+            })
+        })();
+        let _ = std::fs::remove_file(&path);
+        result
+    })
+    .await?;
+    Ok(Json(operation))
 }
 
 async fn import_full(
@@ -433,10 +602,65 @@ fn build_router(db: Database) -> Router {
             "/ai/routing",
             axum::routing::get(ai::get_ai_routing).put(ai::update_ai_routing),
         )
+        .route("/wallpapers", axum::routing::get(wallpapers::snapshot))
+        .route(
+            "/wallpapers/preferences/:target",
+            axum::routing::put(wallpapers::update_target),
+        )
+        .route(
+            "/wallpapers/preferences",
+            axum::routing::put(wallpapers::replace_preferences),
+        )
+        .route(
+            "/wallpapers/assets",
+            axum::routing::post(wallpapers::upload_asset)
+                .delete(wallpapers::delete_assets)
+                .layer(DefaultBodyLimit::max(45 * 1024 * 1024)),
+        )
+        .route(
+            "/wallpapers/migrate-local",
+            axum::routing::post(wallpapers::migrate_local)
+                .layer(DefaultBodyLimit::max(257 * 1024 * 1024)),
+        )
+        .route(
+            "/wallpapers/assets/apply",
+            axum::routing::post(wallpapers::apply_targets),
+        )
+        .route(
+            "/wallpapers/assets/:id/:variant",
+            axum::routing::get(wallpapers::asset_variant),
+        )
+        .route(
+            "/wallpapers/default/restore",
+            axum::routing::post(wallpapers::restore_default),
+        )
+        .route(
+            "/wallpapers/presets",
+            axum::routing::post(wallpapers::save_preset),
+        )
+        .route(
+            "/wallpapers/presets/:id/apply",
+            axum::routing::post(wallpapers::apply_preset),
+        )
+        .route(
+            "/wallpapers/presets/:id",
+            axum::routing::put(wallpapers::update_preset)
+                .patch(wallpapers::rename_preset)
+                .delete(wallpapers::delete_preset),
+        )
         .route("/health", axum::routing::get(detailed_health_check))
         .route("/articles/import", axum::routing::post(import_articles))
         .route("/articles/import-full", axum::routing::post(import_full))
         .route("/export/full", axum::routing::post(export_full))
+        .route(
+            "/export/full-package",
+            axum::routing::get(export_full_package),
+        )
+        .route(
+            "/import/full-package",
+            axum::routing::post(import_full_package)
+                .layer(DefaultBodyLimit::max(512 * 1024 * 1024)),
+        )
         .fallback(|| async { StatusCode::NOT_FOUND })
         .route_layer(middleware::from_fn(require_api_token))
         // AI 文档导入按 UTF-8 字节传输，1,000,000 个中文字符可能超过 axum

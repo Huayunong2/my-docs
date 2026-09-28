@@ -1,4 +1,13 @@
 import { paginateLegacyReviews } from "./reviewCompatibility";
+import type {
+  WallpaperApplyMode,
+  WallpaperAssetDraft,
+  WallpaperAssignmentTargetId,
+  WallpaperPreferenceValue,
+  WallpaperPreferences,
+  WallpaperSnapshot,
+  LocalWallpaperMigrationSource,
+} from "./wallpapers";
 // API layer — 桌面端和浏览器统一走服务器 HTTP，同源部署默认使用 /api。
 import { normalizeTags, parseTags } from "./tags";
 import { isLocalHttpLocation, isLoopbackHostname, isLoopbackHttpUrl, LOCAL_AI_ACCESS_QUERY_PARAM, LOCAL_AI_TEST_TOKEN, LOCAL_AI_TOKEN_SESSION_KEY } from "./localAiAccess";
@@ -87,6 +96,49 @@ export function getErrorMessage(error: unknown): string {
   if (error instanceof ApiError) return error.userMessage;
   if (error instanceof Error) return error.message;
   return String(error || "未知错误");
+}
+
+function httpRequestForm<T>(path: string, body: FormData): Promise<T> {
+  const baseUrl = getBaseUrl();
+  if (!baseUrl) {
+    throw new ApiError(
+      0,
+      "Desktop client server URL is not configured",
+      "桌面端尚未配置服务器地址，请到「设置 -> 连接」填写 http://服务器IP:8080/api 并保存。",
+    );
+  }
+  return fetch(`${baseUrl}${path}`, {
+    method: "POST",
+    headers: authHeaders(undefined, false, baseUrl),
+    body,
+  }).then(async (res) => {
+    if (!res.ok) throw await parseErrorResponse(res);
+    return res.json() as Promise<T>;
+  }).catch((error) => {
+    if (error instanceof TypeError) throw new ApiError(0, error.message);
+    throw error;
+  });
+}
+
+async function httpRequestBlob(path: string): Promise<Blob> {
+  const baseUrl = getBaseUrl();
+  if (!baseUrl) {
+    throw new ApiError(
+      0,
+      "Desktop client server URL is not configured",
+      "桌面端尚未配置服务器地址，请到「设置 -> 连接」填写 http://服务器IP:8080/api 并保存。",
+    );
+  }
+  try {
+    const response = await fetch(`${baseUrl}${path}`, {
+      headers: authHeaders(undefined, false, baseUrl),
+    });
+    if (!response.ok) throw await parseErrorResponse(response);
+    return await response.blob();
+  } catch (error) {
+    if (error instanceof TypeError) throw new ApiError(0, error.message);
+    throw error;
+  }
 }
 
 function httpRequest<T>(path: string, options?: RequestInit): Promise<T> {
@@ -1238,6 +1290,184 @@ export function setDayExemption(date: string, payload: { reason: string; note?: 
 
 export function deleteDayExemption(date: string) {
   return httpRequest<void>(`/day-exemptions/${encodeURIComponent(date)}`, { method: "DELETE" });
+}
+
+// ── Shared wallpaper library ─────────────────────────
+
+export function downloadFullPackage() {
+  return httpRequestBlob("/export/full-package");
+}
+
+export async function importFullPackage(file: File, expectedWallpaperRevision: number) {
+  const baseUrl = getBaseUrl();
+  if (!baseUrl) {
+    throw new ApiError(0, "Desktop client server URL is not configured", "桌面端尚未配置服务器地址，请到「设置 -> 连接」填写服务器地址并保存。");
+  }
+  try {
+    const response = await fetch(`${baseUrl}/import/full-package?revision=${expectedWallpaperRevision}`, {
+      method: "POST",
+      headers: new Headers({
+        ...Object.fromEntries(authHeaders(undefined, false, baseUrl).entries()),
+        "Content-Type": "application/zip",
+      }),
+      body: file,
+    });
+    if (!response.ok) throw await parseErrorResponse(response);
+    return await response.json() as {
+      importedArticles: number;
+      importedReviews: number;
+      importedKnowledgeCards: number;
+      wallpaperAssets: number;
+      wallpaperPresets: number;
+      snapshotName: string;
+    };
+  } catch (error) {
+    if (error instanceof TypeError) throw new ApiError(0, error.message);
+    throw error;
+  }
+}
+
+export function getWallpaperSnapshot() {
+  return httpRequest<WallpaperSnapshot>("/wallpapers");
+}
+
+export function updateWallpaperTarget(
+  target: WallpaperAssignmentTargetId,
+  preference: WallpaperPreferenceValue,
+  expectedRevision: number,
+) {
+  return httpRequest<WallpaperSnapshot>(`/wallpapers/preferences/${encodeURIComponent(target)}`, {
+    method: "PUT",
+    body: JSON.stringify({ expectedRevision, preference }),
+  });
+}
+
+export function replaceWallpaperPreferences(
+  preferences: WallpaperPreferences,
+  expectedRevision: number,
+) {
+  return httpRequest<WallpaperSnapshot>("/wallpapers/preferences", {
+    method: "PUT",
+    body: JSON.stringify({ expectedRevision, preferences }),
+  });
+}
+
+export function applyWallpapersToTargets(
+  targets: WallpaperAssignmentTargetId[],
+  wallpaperIds: string[],
+  mode: WallpaperApplyMode,
+  expectedRevision: number,
+) {
+  return httpRequest<WallpaperSnapshot>("/wallpapers/assets/apply", {
+    method: "POST",
+    body: JSON.stringify({ expectedRevision, targets, wallpaperIds, mode }),
+  });
+}
+
+export function uploadWallpaperAsset(asset: WallpaperAssetDraft, expectedRevision: number) {
+  const form = new FormData();
+  form.append("metadata", JSON.stringify({
+    expectedRevision,
+    ...asset.metadata,
+  }));
+  form.append("desktop", asset.files.desktopBlob, asset.metadata.desktopName ?? "desktop.webp");
+  if (asset.files.mobileBlob) {
+    form.append("mobile", asset.files.mobileBlob, asset.metadata.mobileName ?? "mobile.webp");
+  }
+  form.append(
+    "desktopThumbnail",
+    asset.thumbnails.desktopThumbnailBlob,
+    "desktop-thumbnail.webp",
+  );
+  if (asset.thumbnails.mobileThumbnailBlob) {
+    form.append("mobileThumbnail", asset.thumbnails.mobileThumbnailBlob, "mobile-thumbnail.webp");
+  }
+  return httpRequestForm<WallpaperSnapshot>("/wallpapers/assets", form);
+}
+
+export function migrateLocalWallpaperState(
+  source: LocalWallpaperMigrationSource,
+  expectedRevision: number,
+) {
+  const form = new FormData();
+  const assets = source.assets.map((asset, index) => {
+    const prefix = "asset-" + index;
+    form.append(prefix + "-desktop", asset.files.desktopBlob, asset.metadata.desktopName ?? "desktop.webp");
+    if (asset.files.mobileBlob) form.append(prefix + "-mobile", asset.files.mobileBlob, asset.metadata.mobileName ?? "mobile.webp");
+    form.append(prefix + "-desktop-thumbnail", asset.thumbnails.desktopThumbnailBlob, "desktop-thumbnail.webp");
+    if (asset.thumbnails.mobileThumbnailBlob) form.append(prefix + "-mobile-thumbnail", asset.thumbnails.mobileThumbnailBlob, "mobile-thumbnail.webp");
+    return {
+      metadata: asset.metadata,
+      desktopField: prefix + "-desktop",
+      mobileField: asset.files.mobileBlob ? prefix + "-mobile" : null,
+      desktopThumbnailField: prefix + "-desktop-thumbnail",
+      mobileThumbnailField: asset.thumbnails.mobileThumbnailBlob ? prefix + "-mobile-thumbnail" : null,
+    };
+  });
+  form.append("manifest", JSON.stringify({
+    migrationId: source.migrationId,
+    expectedRevision,
+    preferences: source.preferences,
+    presets: source.presets,
+    assets,
+  }));
+  return httpRequestForm<WallpaperSnapshot>("/wallpapers/migrate-local", form);
+}
+
+export function getWallpaperAssetFile(
+  id: string,
+  variant: "desktop" | "mobile" | "desktop-thumbnail" | "mobile-thumbnail",
+) {
+  return httpRequestBlob(`/wallpapers/assets/${encodeURIComponent(id)}/${variant}`);
+}
+
+export function deleteWallpaperAssets(ids: string[], expectedRevision: number) {
+  return httpRequest<WallpaperSnapshot>("/wallpapers/assets", {
+    method: "DELETE",
+    body: JSON.stringify({ expectedRevision, ids }),
+  });
+}
+
+export function saveWallpaperPreset(name: string, expectedRevision: number) {
+  return httpRequest<WallpaperSnapshot>("/wallpapers/presets", {
+    method: "POST",
+    body: JSON.stringify({ name, expectedRevision }),
+  });
+}
+
+export function updateWallpaperPreset(id: string, name: string, expectedRevision: number) {
+  return httpRequest<WallpaperSnapshot>(`/wallpapers/presets/${encodeURIComponent(id)}`, {
+    method: "PUT",
+    body: JSON.stringify({ name, expectedRevision }),
+  });
+}
+
+export function renameWallpaperPreset(id: string, name: string, expectedRevision: number) {
+  return httpRequest<WallpaperSnapshot>(`/wallpapers/presets/${encodeURIComponent(id)}`, {
+    method: "PATCH",
+    body: JSON.stringify({ name, expectedRevision }),
+  });
+}
+
+export function deleteWallpaperPreset(id: string, expectedRevision: number) {
+  return httpRequest<WallpaperSnapshot>(`/wallpapers/presets/${encodeURIComponent(id)}`, {
+    method: "DELETE",
+    body: JSON.stringify({ expectedRevision }),
+  });
+}
+
+export function applyWallpaperPreset(id: string, expectedRevision: number) {
+  return httpRequest<WallpaperSnapshot>(`/wallpapers/presets/${encodeURIComponent(id)}/apply`, {
+    method: "POST",
+    body: JSON.stringify({ expectedRevision }),
+  });
+}
+
+export function restoreWallpaperDefaults(expectedRevision: number) {
+  return httpRequest<WallpaperSnapshot>("/wallpapers/default/restore", {
+    method: "POST",
+    body: JSON.stringify({ expectedRevision }),
+  });
 }
 
 // ── Export ──────────────────────────────────────────

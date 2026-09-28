@@ -14,6 +14,8 @@ pub(crate) mod models;
 mod review;
 mod server;
 mod stats;
+mod wallpaper_package;
+mod wallpapers;
 
 use std::path::PathBuf;
 

@@ -19,26 +19,19 @@ import { pageShortcuts, isInteractionBlocked } from "./lib/navigationInteraction
 import Sidebar from "./components/Sidebar";
 import CommandPalette from "./components/CommandPalette";
 import * as api from "./lib/api";
+import { wallpaperConnectionMessage } from "./lib/wallpaperSyncStatus";
 import { connectionReturnStorageKey, readLocalStorage, readSessionStorage, removeSessionStorage, writeLocalStorage } from "./lib/storage";
 import { colorSchemeForMode, nextExplicitThemeMode, resolveDarkTheme, themeColorForMode, type ThemeMode } from "./lib/theme";
 import {
-  applyWallpaperAssetsToTargets as persistApplyWallpaperAssetsToTargets,
-  builtInWallpapers,
   defaultWallpaperPreferences,
-  deleteWallpaperAssets as persistDeleteWallpaperAssets,
-  deleteWallpaperPreset as persistDeleteWallpaperPreset,
-  applyWallpaperPreset as persistApplyWallpaperPreset,
+  defaultWallpaperPreference,
+  defaultWallpaperSurfacePreference,
+  findWallpaperPreset,
   loadWallpaperAssetFiles,
-  loadWallpaperAssets,
-  loadWallpaperPreferences,
-  loadWallpaperPresets,
-  renameWallpaperPreset as persistRenameWallpaperPreset,
-  resetWallpaper as resetWallpaperStorage,
-  saveWallpaperAsset,
-  saveWallpaperPreset as persistSaveWallpaperPreset,
-  saveWallpaperTargetPreference,
+  loadLocalWallpaperMigrationSource,
   wallpaperIdForDate,
   wallpaperModuleForPage,
+  wallpaperModules,
   type WallpaperApplyMode,
   type WallpaperAssignmentTargetId,
   type WallpaperAssetDraft,
@@ -46,7 +39,54 @@ import {
   type WallpaperPreferenceValue,
   type WallpaperPreferences,
   type WallpaperPreset,
+  type WallpaperSnapshot,
+  type LocalWallpaperMigrationSource,
 } from "./lib/wallpapers";
+
+function wallpaperSnapshotCacheKey(): string {
+  return "daily-summary-wallpaper-snapshot-v1:" + encodeURIComponent(api.getServerUrl());
+}
+
+function readCachedWallpaperSnapshot(): WallpaperSnapshot | null {
+  try {
+    const raw = readLocalStorage(wallpaperSnapshotCacheKey());
+    if (!raw) return null;
+    const value = JSON.parse(raw) as Partial<WallpaperSnapshot>;
+    if (
+      typeof value.revision !== "number" ||
+      !value.preferences ||
+      !Array.isArray(value.assets) ||
+      !Array.isArray(value.presets)
+    ) return null;
+    return { ...value, hasUserData: value.hasUserData === true } as WallpaperSnapshot;
+  } catch {
+    return null;
+  }
+}
+
+function migrationCompleteKey(): string {
+  return "daily-summary-wallpaper-migrated:" + encodeURIComponent(api.getServerUrl());
+}
+
+function localWallpaperScanKey(): string {
+  return "daily-summary-wallpaper-local-scan:" + encodeURIComponent(api.getServerUrl());
+}
+
+function serverHasUserWallpaperData(snapshot: WallpaperSnapshot): boolean {
+  return snapshot.hasUserData;
+}
+
+function emptyWallpaperSnapshot(): WallpaperSnapshot {
+  return {
+    revision: 0,
+    hasUserData: false,
+    storageUsedBytes: 0,
+    storageQuotaBytes: 256 * 1024 * 1024,
+    preferences: defaultWallpaperPreferences(),
+    assets: [],
+    presets: [],
+  };
+}
 
 export type Page = "today" | "history" | "archive" | "search" | "stats" | "reviews" | "review" | "knowledge" | "settings";
 export type { ThemeMode } from "./lib/theme";
@@ -123,6 +163,13 @@ export interface AppShellContextValue {
   wallpaperPreferences: WallpaperPreferences;
   wallpaperPreferencesReady: boolean;
   wallpaperStorageError: string | null;
+  wallpaperReadOnly: boolean;
+  wallpaperRevision: number;
+  wallpaperStorageUsedBytes: number;
+  wallpaperStorageQuotaBytes: number;
+  localWallpaperMigration: { source: LocalWallpaperMigrationSource; serverHasUserData: boolean } | null;
+  onMigrateLocalWallpaper: () => Promise<boolean>;
+  onRefreshWallpaperSnapshot: () => Promise<boolean>;
   wallpaperAssets: WallpaperAssetMetadata[];
   wallpaperPresets: WallpaperPreset[];
   onChangeWallpaperPreference: (
@@ -172,64 +219,111 @@ export function AppShell() {
     if (typeof window !== "undefined") return readLocalStorage("accentTheme") || "";
     return "";
   });
-  const [wallpaperPreferences, setWallpaperPreferences] = useState<WallpaperPreferences>(
-    () => defaultWallpaperPreferences(),
+  const [wallpaperSnapshot, setWallpaperSnapshot] = useState<WallpaperSnapshot>(
+    () => readCachedWallpaperSnapshot() ?? emptyWallpaperSnapshot(),
   );
   const [wallpaperStorageError, setWallpaperStorageError] = useState<string | null>(null);
-  const [wallpaperAssets, setWallpaperAssets] = useState<WallpaperAssetMetadata[]>([]);
-  const [wallpaperPresets, setWallpaperPresets] = useState<WallpaperPreset[]>([]);
+  const [wallpaperReadOnly, setWallpaperReadOnly] = useState(false);
   const [wallpaperPreferencesReady, setWallpaperPreferencesReady] = useState(false);
   const [wallpaperAssetsRevision, setWallpaperAssetsRevision] = useState(0);
+  const [localWallpaperMigrationSource, setLocalWallpaperMigrationSource] = useState<LocalWallpaperMigrationSource | null>(null);
   const [wallpaperDate, setWallpaperDate] = useState(() => new Date());
   const [loadedWallpaperAsset, setLoadedWallpaperAsset] = useState<{
     assetId: string;
     desktopUrl: string;
     mobileUrl: string;
   } | null>(null);
-  const wallpaperPreferenceLoadRevision = useRef(0);
-
+  const wallpaperRevisionRef = useRef(wallpaperSnapshot.revision);
+  const snapshotRequestRef = useRef(0);
+  const localMigrationScanRef = useRef(false);
+  const assetSignatureRef = useRef(JSON.stringify(wallpaperSnapshot.assets));
   const dark = resolveDarkTheme(themeMode, systemDark);
+  const wallpaperPreferences = wallpaperSnapshot.preferences;
+  const wallpaperAssets = wallpaperSnapshot.assets;
+  const wallpaperPresets = wallpaperSnapshot.presets;
+
+  const applyWallpaperSnapshot = useCallback((next: WallpaperSnapshot) => {
+    const nextAssetSignature = JSON.stringify(next.assets);
+    if (assetSignatureRef.current !== nextAssetSignature) {
+      assetSignatureRef.current = nextAssetSignature;
+      setWallpaperAssetsRevision((revision) => revision + 1);
+    }
+    setWallpaperSnapshot(next);
+    wallpaperRevisionRef.current = next.revision;
+    writeLocalStorage(wallpaperSnapshotCacheKey(), JSON.stringify(next));
+    setWallpaperReadOnly(false);
+    setWallpaperStorageError(null);
+    setWallpaperPreferencesReady(true);
+  }, []);
+
+  const refreshWallpaperSnapshot = useCallback(async () => {
+    const requestId = ++snapshotRequestRef.current;
+    try {
+      const next = await api.getWallpaperSnapshot();
+      if (requestId !== snapshotRequestRef.current) return false;
+      applyWallpaperSnapshot(next);
+      return true;
+    } catch (error) {
+      if (requestId !== snapshotRequestRef.current) return false;
+      const cached = readCachedWallpaperSnapshot();
+      if (cached) applyWallpaperSnapshot(cached);
+      setWallpaperReadOnly(true);
+      setWallpaperPreferencesReady(true);
+      setWallpaperStorageError(
+        wallpaperConnectionMessage(error instanceof api.ApiError ? error.status : 0, !!cached),
+      );
+      return false;
+    }
+  }, [applyWallpaperSnapshot]);
 
   useEffect(() => {
-    let current = true;
-    void Promise.allSettled([
-      loadWallpaperPreferences(),
-      loadWallpaperAssets(),
-      loadWallpaperPresets(),
-    ])
-      .then(([preferencesResult, assetsResult, presetsResult]) => {
-        if (!current) return;
-        const failures: string[] = [];
-        if (preferencesResult.status === "fulfilled") {
-          if (wallpaperPreferenceLoadRevision.current === 0) {
-            setWallpaperPreferences(preferencesResult.value);
-          }
-        } else {
-          failures.push("页面分配");
+    void refreshWallpaperSnapshot();
+    const refreshWhenAvailable = () => {
+      if (document.visibilityState === "visible") void refreshWallpaperSnapshot();
+    };
+    window.addEventListener("focus", refreshWhenAvailable);
+    document.addEventListener("visibilitychange", refreshWhenAvailable);
+    return () => {
+      snapshotRequestRef.current += 1;
+      window.removeEventListener("focus", refreshWhenAvailable);
+      document.removeEventListener("visibilitychange", refreshWhenAvailable);
+    };
+  }, [refreshWallpaperSnapshot]);
+
+  useEffect(() => {
+    if (!wallpaperPreferencesReady || wallpaperReadOnly || localMigrationScanRef.current) return;
+    const localMigrationId = readLocalStorage("daily-summary-wallpaper-migration-id");
+    const completedForServer = readLocalStorage(migrationCompleteKey());
+    const localScan = localWallpaperScanKey();
+    const localScanStatus = readLocalStorage(localScan);
+    if (
+      (localMigrationId && completedForServer === localMigrationId) ||
+      localScanStatus === "empty" ||
+      localScanStatus === "complete"
+    ) {
+      localMigrationScanRef.current = true;
+      return;
+    }
+    localMigrationScanRef.current = true;
+    let active = true;
+    void loadLocalWallpaperMigrationSource()
+      .then((source) => {
+        if (!active) return;
+        if (!source) {
+          writeLocalStorage(localScan, "empty");
+          return;
         }
-        if (assetsResult.status === "fulfilled") {
-          setWallpaperAssets(assetsResult.value);
-        } else {
-          failures.push("图片库");
-        }
-        if (presetsResult.status === "fulfilled") {
-          setWallpaperPresets(presetsResult.value);
-        } else {
-          failures.push("壁纸方案");
-        }
-        setWallpaperStorageError(
-          failures.length > 0
-            ? "壁纸数据未能完整读取（" + failures.join("、") + "）。为避免覆盖现有数据，管理操作已暂停；请刷新后重试。"
-            : null,
-        );
+        if (completedForServer === source.migrationId) return;
+        setLocalWallpaperMigrationSource(source);
       })
-      .finally(() => {
-        if (current) setWallpaperPreferencesReady(true);
+      .catch((error) => {
+        if (active) toast.error("无法读取此设备保存的旧壁纸；数据仍留在本机：" + api.getErrorMessage(error));
       });
     return () => {
-      current = false;
+      active = false;
+      localMigrationScanRef.current = false;
     };
-  }, []);
+  }, [wallpaperPreferencesReady, wallpaperReadOnly]);
 
   // 侧栏「今日到期」角标：useQuery 缓存 + 每分钟自动刷新；失败时静默隐藏。
   const { data: dueCount } = useQuery({
@@ -273,118 +367,111 @@ export function AppShell() {
     setAccentTheme(theme);
     if (typeof window !== "undefined") writeLocalStorage("accentTheme", theme);
   }, []);
-  const changeWallpaperPreference = useCallback(
-    async (target: WallpaperAssignmentTargetId, preference: WallpaperPreferenceValue) => {
-      try {
-        const preferences = await saveWallpaperTargetPreference(target, preference);
-        wallpaperPreferenceLoadRevision.current += 1;
-        setWallpaperPreferences(preferences);
-        return true;
-      } catch {
-        return false;
+  const runWallpaperMutation = useCallback(async (
+    mutate: (revision: number) => Promise<WallpaperSnapshot>,
+  ) => {
+    if (wallpaperReadOnly) return false;
+    try {
+      const next = await mutate(wallpaperRevisionRef.current);
+      snapshotRequestRef.current += 1;
+      applyWallpaperSnapshot(next);
+      return true;
+    } catch (error) {
+      if (error instanceof api.ApiError && error.status === 409) {
+        await refreshWallpaperSnapshot();
+        toast.warning("壁纸已在其他设备更新，已载入最新状态；请检查后重新操作。");
+      } else if (error instanceof api.ApiError && error.status === 0) {
+        setWallpaperReadOnly(true);
+        setWallpaperStorageError("服务器暂时无法连接。当前配置已切换为只读缓存；恢复连接后可以继续编辑。");
+        toast.error(error.userMessage);
+      } else {
+        toast.error(api.getErrorMessage(error));
       }
-    },
-    [],
+      return false;
+    }
+  }, [applyWallpaperSnapshot, refreshWallpaperSnapshot, wallpaperReadOnly]);
+
+  const changeWallpaperPreference = useCallback(
+    (target: WallpaperAssignmentTargetId, preference: WallpaperPreferenceValue) =>
+      runWallpaperMutation((revision) => api.updateWallpaperTarget(target, preference, revision)),
+    [runWallpaperMutation],
   );
   const applyWallpaperAssetsToTargets = useCallback(
-    async (
-      targets: WallpaperAssignmentTargetId[],
-      wallpaperIds: string[],
-      mode: WallpaperApplyMode,
-    ) => {
-      try {
-        const preferences = await persistApplyWallpaperAssetsToTargets(targets, wallpaperIds, mode);
-        wallpaperPreferenceLoadRevision.current += 1;
-        setWallpaperPreferences(preferences);
-        return true;
-      } catch {
-        return false;
-      }
-    },
-    [],
+    (targets: WallpaperAssignmentTargetId[], wallpaperIds: string[], mode: WallpaperApplyMode) =>
+      runWallpaperMutation((revision) => api.applyWallpapersToTargets(targets, wallpaperIds, mode, revision)),
+    [runWallpaperMutation],
   );
-  const addWallpaperAsset = useCallback(async (asset: WallpaperAssetDraft) => {
-    try {
-      await saveWallpaperAsset(asset.metadata, asset.files, asset.thumbnails);
-      setWallpaperAssets((current) => [
-        asset.metadata,
-        ...current.filter((item) => item.id !== asset.metadata.id),
-      ]);
-      setWallpaperAssetsRevision((revision) => revision + 1);
-      return true;
-    } catch {
-      return false;
-    }
-  }, []);
-  const deleteWallpaperAssetsFromLibrary = useCallback(async (wallpaperIds: string[]) => {
-    try {
-      const { preferences, presets } = await persistDeleteWallpaperAssets(wallpaperIds);
-      wallpaperPreferenceLoadRevision.current += 1;
-      setWallpaperPreferences(preferences);
-      setWallpaperPresets(presets);
-      setWallpaperAssets((current) =>
-        current.filter((asset) => !wallpaperIds.includes(asset.id)),
-      );
-      setWallpaperAssetsRevision((revision) => revision + 1);
-      return true;
-    } catch {
-      return false;
-    }
-  }, []);
-  const saveWallpaperPreset = useCallback(async (name: string, presetId?: string) => {
-    try {
-      const preset = await persistSaveWallpaperPreset(name, presetId);
-      setWallpaperPresets((current) =>
-        [preset, ...current.filter((item) => item.id !== preset.id)]
-          .sort((left, right) => right.updatedAt - left.updatedAt),
-      );
-      return true;
-    } catch {
-      return false;
-    }
-  }, []);
-  const renameWallpaperPresetInLibrary = useCallback(async (presetId: string, name: string) => {
-    try {
-      const preset = await persistRenameWallpaperPreset(presetId, name);
-      setWallpaperPresets((current) =>
-        [preset, ...current.filter((item) => item.id !== preset.id)]
-          .sort((left, right) => right.updatedAt - left.updatedAt),
-      );
-      return true;
-    } catch {
-      return false;
-    }
-  }, []);
-  const deleteWallpaperPresetFromLibrary = useCallback(async (presetId: string) => {
-    try {
-      await persistDeleteWallpaperPreset(presetId);
-      setWallpaperPresets((current) => current.filter((item) => item.id !== presetId));
-      return true;
-    } catch {
-      return false;
-    }
-  }, []);
-  const applyWallpaperPresetToLibrary = useCallback(async (presetId: string | null) => {
-    try {
-      const preferences = await persistApplyWallpaperPreset(presetId);
-      wallpaperPreferenceLoadRevision.current += 1;
-      setWallpaperPreferences(preferences);
-      return true;
-    } catch {
-      return false;
-    }
-  }, []);
+  const addWallpaperAsset = useCallback(
+    (asset: WallpaperAssetDraft) => runWallpaperMutation((revision) => api.uploadWallpaperAsset(asset, revision)),
+    [runWallpaperMutation],
+  );
+  const deleteWallpaperAssetsFromLibrary = useCallback(
+    (wallpaperIds: string[]) => runWallpaperMutation((revision) => api.deleteWallpaperAssets(wallpaperIds, revision)),
+    [runWallpaperMutation],
+  );
+  const saveWallpaperPreset = useCallback(
+    (name: string, presetId?: string) => runWallpaperMutation((revision) =>
+      presetId
+        ? api.updateWallpaperPreset(presetId, name, revision)
+        : api.saveWallpaperPreset(name, revision),
+    ),
+    [runWallpaperMutation],
+  );
+  const renameWallpaperPresetInLibrary = useCallback(
+    (presetId: string, name: string) => runWallpaperMutation((revision) => api.renameWallpaperPreset(presetId, name, revision)),
+    [runWallpaperMutation],
+  );
+  const deleteWallpaperPresetFromLibrary = useCallback(
+    (presetId: string) => runWallpaperMutation((revision) => api.deleteWallpaperPreset(presetId, revision)),
+    [runWallpaperMutation],
+  );
+  const applyWallpaperPresetToLibrary = useCallback(
+    (presetId: string | null) => runWallpaperMutation((revision) => {
+      if (!presetId) return api.restoreWallpaperDefaults(revision);
+      const preset = findWallpaperPreset(presetId, wallpaperPresets);
+      if (!preset) throw new Error("找不到此壁纸方案，请刷新后重试。");
+      if (preset.source === "built-in") {
+        return api.replaceWallpaperPreferences(preset.preferences, revision);
+      }
+      return api.applyWallpaperPreset(presetId, revision);
+    }),
+    [runWallpaperMutation, wallpaperPresets],
+  );
+  const resetWallpaperTarget = useCallback(
+    (target: WallpaperAssignmentTargetId) => runWallpaperMutation((revision) => {
+      const isModule = wallpaperModules.some((module) => module.id === target);
+      const fallback = isModule
+        ? defaultWallpaperPreference(target as (typeof wallpaperModules)[number]["id"])
+        : defaultWallpaperSurfacePreference();
+      return api.updateWallpaperTarget(target, fallback, revision);
+    }),
+    [runWallpaperMutation],
+  );
 
-  const resetWallpaperTarget = useCallback(async (target: WallpaperAssignmentTargetId) => {
+  const migrateLocalWallpaper = useCallback(async () => {
+    const source = localWallpaperMigrationSource;
+    if (!source || wallpaperReadOnly) return false;
     try {
-      const preferences = await resetWallpaperStorage(target);
-      wallpaperPreferenceLoadRevision.current += 1;
-      setWallpaperPreferences(preferences);
+      const next = await api.migrateLocalWallpaperState(source, wallpaperRevisionRef.current);
+      snapshotRequestRef.current += 1;
+      applyWallpaperSnapshot(next);
+      writeLocalStorage(migrationCompleteKey(), source.migrationId);
+      writeLocalStorage(localWallpaperScanKey(), "complete");
+      setLocalWallpaperMigrationSource(null);
       return true;
-    } catch {
+    } catch (error) {
+      if (error instanceof api.ApiError && error.status === 409) {
+        await refreshWallpaperSnapshot();
+        toast.warning("服务器壁纸已在其他设备更新；本机数据仍保留，请确认后重试迁移。");
+      } else if (error instanceof api.ApiError && error.status === 0) {
+        setWallpaperReadOnly(true);
+        setWallpaperStorageError("服务器暂时无法连接。本机壁纸数据仍保留，连接恢复后可以重试迁移。");
+      } else {
+        toast.error(api.getErrorMessage(error));
+      }
       return false;
     }
-  }, []);
+  }, [applyWallpaperSnapshot, localWallpaperMigrationSource, refreshWallpaperSnapshot, wallpaperReadOnly]);
 
   const go = useCallback((to: string, search: Record<string, unknown> = {}, params?: Record<string, string>) => {
     void routerNavigate({
@@ -536,6 +623,16 @@ export function AppShell() {
 
   const returnFromConnectionSettings = useCallback((message?: string) => {
     if (message) toast.success(message);
+    setWallpaperSnapshot(emptyWallpaperSnapshot());
+    wallpaperRevisionRef.current = 0;
+    assetSignatureRef.current = JSON.stringify([]);
+    setWallpaperAssetsRevision((revision) => revision + 1);
+    setWallpaperReadOnly(false);
+    setWallpaperStorageError(null);
+    setWallpaperPreferencesReady(false);
+    setLocalWallpaperMigrationSource(null);
+    localMigrationScanRef.current = false;
+    void refreshWallpaperSnapshot();
     const target = readSessionStorage(connectionReturnStorageKey);
     removeSessionStorage(connectionReturnStorageKey);
     if (!target || !target.startsWith("/")) {
@@ -557,7 +654,7 @@ export function AppShell() {
     } catch {
       go("/knowledge");
     }
-  }, [go, routerNavigate]);
+  }, [go, refreshWallpaperSnapshot, routerNavigate]);
 
   const currentPage = useMemo(() => pageFromPath(location.pathname), [location.pathname]);
   const wallpaperModule = wallpaperModuleForPage(currentPage);
@@ -565,9 +662,6 @@ export function AppShell() {
   const selectedWallpaperId = wallpaperIdForDate(
     wallpaperPreference,
     wallpaperDate,
-  );
-  const builtInWallpaper = builtInWallpapers.find(
-    (asset) => asset.id === selectedWallpaperId,
   );
 
   useEffect(() => {
@@ -589,31 +683,32 @@ export function AppShell() {
     const objectUrls = new Set<string>();
     setLoadedWallpaperAsset(null);
 
-    if (!selectedWallpaperId || builtInWallpaper) {
-      return () => {
-        current = false;
-      };
+    if (!selectedWallpaperId) {
+      return () => { current = false; };
     }
 
-    void loadWallpaperAssetFiles(selectedWallpaperId)
-      .then((files) => {
-        if (!current || !files) return;
-        const desktopBlob = files.desktopBlob ?? files.mobileBlob;
-        const mobileBlob = files.mobileBlob ?? files.desktopBlob;
-        if (!desktopBlob || !mobileBlob) return;
+    const getAsset = async (variant: "desktop" | "mobile") => {
+      try {
+        return await api.getWallpaperAssetFile(selectedWallpaperId, variant);
+      } catch {
+        const local = await loadWallpaperAssetFiles(selectedWallpaperId);
+        if (!local) throw new Error("wallpaper image unavailable");
+        return variant === "mobile"
+          ? local.mobileBlob ?? local.desktopBlob
+          : local.desktopBlob ?? local.mobileBlob;
+      }
+    };
+    void Promise.all([getAsset("desktop"), getAsset("mobile")])
+      .then(([desktopBlob, mobileBlob]) => {
+        if (!current) return;
         const makeUrl = (blob: Blob) => {
           const url = URL.createObjectURL(blob);
           objectUrls.add(url);
           return url;
         };
         const desktopUrl = makeUrl(desktopBlob);
-        const mobileUrl =
-          mobileBlob === desktopBlob ? desktopUrl : makeUrl(mobileBlob);
-        setLoadedWallpaperAsset({
-          assetId: selectedWallpaperId,
-          desktopUrl,
-          mobileUrl,
-        });
+        const mobileUrl = mobileBlob === desktopBlob ? desktopUrl : makeUrl(mobileBlob);
+        setLoadedWallpaperAsset({ assetId: selectedWallpaperId, desktopUrl, mobileUrl });
       })
       .catch(() => {
         if (current) setLoadedWallpaperAsset(null);
@@ -623,16 +718,11 @@ export function AppShell() {
       current = false;
       objectUrls.forEach((url) => URL.revokeObjectURL(url));
     };
-  }, [selectedWallpaperId, wallpaperAssetsRevision, builtInWallpaper]);
+  }, [selectedWallpaperId, wallpaperAssetsRevision]);
 
-  const activeWallpaper = builtInWallpaper
-    ? {
-        desktopUrl: builtInWallpaper.desktopUrl,
-        mobileUrl: builtInWallpaper.mobileUrl,
-      }
-    : loadedWallpaperAsset?.assetId === selectedWallpaperId
-      ? loadedWallpaperAsset
-      : null;
+  const activeWallpaper = loadedWallpaperAsset?.assetId === selectedWallpaperId
+    ? loadedWallpaperAsset
+    : null;
   const wallpaperStyle = activeWallpaper
     ? ({
         "--module-wallpaper-desktop": `url("${activeWallpaper.desktopUrl}")`,
@@ -667,8 +757,17 @@ export function AppShell() {
     wallpaperPreferences,
     wallpaperPreferencesReady,
     wallpaperStorageError,
+    wallpaperReadOnly,
+    wallpaperRevision: wallpaperSnapshot.revision,
+    wallpaperStorageUsedBytes: wallpaperSnapshot.storageUsedBytes,
+    wallpaperStorageQuotaBytes: wallpaperSnapshot.storageQuotaBytes,
+    localWallpaperMigration: localWallpaperMigrationSource
+      ? { source: localWallpaperMigrationSource, serverHasUserData: serverHasUserWallpaperData(wallpaperSnapshot) }
+      : null,
+    onMigrateLocalWallpaper: migrateLocalWallpaper,
     wallpaperAssets,
     wallpaperPresets,
+    onRefreshWallpaperSnapshot: refreshWallpaperSnapshot,
     onChangeWallpaperPreference: changeWallpaperPreference,
     onApplyWallpaperAssets: applyWallpaperAssetsToTargets,
     onAddWallpaperAsset: addWallpaperAsset,

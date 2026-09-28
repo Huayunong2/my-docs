@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type ChangeEvent } from "react";
 import { Download, FileArchive, FileJson, Upload } from "lucide-react";
 import * as api from "../../lib/api";
 import { normalizeTags, parseTags } from "../../lib/tags";
+import { readFullPackageManifest, validateFullPackageManifest } from "../../lib/fullPackage";
 import { useConfirmDialog } from "../ui/Feedback";
 import { Card, PrimaryBtn, SecondaryBtn, SectionTitle, StatusBox, type Tone } from "./shared";
 
@@ -14,7 +15,7 @@ type ArticleImport = {
 };
 
 type ImportPreview = {
-  kind: "full" | "articles";
+  kind: "full" | "articles" | "package";
   fileName: string;
   sizeBytes: number;
   version: string;
@@ -24,11 +25,15 @@ type ImportPreview = {
   dateRange: string;
   data: unknown;
   articles?: ArticleImport[];
+  packageFile?: File;
+  wallpaperAssetCount?: number;
+  wallpaperPresetCount?: number;
 };
 
 type MessageScope = "export" | "import";
 
 const MAX_IMPORT_FILE_BYTES = 10 * 1024 * 1024;
+const MAX_PACKAGE_FILE_BYTES = 512 * 1024 * 1024;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
@@ -121,9 +126,11 @@ function formatBytes(bytes: number) {
 export default function ExportPanel({
   onBackupCreated,
   onDirtyChange,
+  onWallpaperImported,
 }: {
-  onBackupCreated?: (backup: api.BackupMeta) => void;
+  onBackupCreated?: () => void;
   onDirtyChange?: (dirty: boolean) => void;
+  onWallpaperImported?: () => Promise<boolean>;
 }) {
   const [busy, setBusy] = useState<string | null>(null);
   const [msg, setMsg] = useState("");
@@ -169,18 +176,17 @@ export default function ExportPanel({
     if (busy) return;
     setMessageScope("export");
     setBusy("full");
-    setMsg("正在生成完整归档…");
+    setMsg("正在逐步打包完整数据与壁纸…");
     setTone("neutral");
     try {
-      const data = await api.exportFullBackup();
-      const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
+      const blob = await api.downloadFullPackage();
       const url = URL.createObjectURL(blob);
       const anchor = document.createElement("a");
       anchor.href = url;
-      anchor.download = `daily-summary-full-${new Date().toISOString().slice(0, 10)}.json`;
+      anchor.download = `daily-summary-full-${new Date().toISOString().slice(0, 10)}.zip`;
       anchor.click();
-      URL.revokeObjectURL(url);
-      setMsg(`完整归档已下载（${data.articles?.length || 0} 条记录、${data.reviews?.length || 0} 篇周期回顾、${data.knowledge_cards?.length || 0} 个知识条目）。`);
+      window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
+      setMsg("完整迁移包已开始下载，包含记录、复盘、知识数据、壁纸图片、分配和保存方案。");
       setTone("good");
     } catch (e) {
       setMsg(`导出失败：${api.getErrorMessage(e)}`);
@@ -198,10 +204,29 @@ export default function ExportPanel({
     setMsg("正在读取文件，尚未写入服务器…");
     setTone("neutral");
     try {
-      if (file.size > MAX_IMPORT_FILE_BYTES) throw new Error("文件超过 10 MB；请先拆分后分批导入，避免在确认后才因服务端请求限制失败。");
-      const data = JSON.parse(await file.text()) as unknown;
-      setPendingImport(buildImportPreview(data, file));
-      setMsg("文件已读取，请检查导入预览。");
+      if (file.name.toLowerCase().endsWith(".zip")) {
+        if (file.size > MAX_PACKAGE_FILE_BYTES) throw new Error("完整迁移包不能超过 512 MiB。");
+        const manifest = validateFullPackageManifest(await readFullPackageManifest(file));
+        setPendingImport({
+          kind: "package",
+          fileName: file.name,
+          sizeBytes: file.size,
+          version: "完整 ZIP v1",
+          articleCount: manifest.summary.articleCount,
+          reviewCount: manifest.summary.reviewCount,
+          knowledgeCount: manifest.summary.knowledgeCount,
+          dateRange: manifest.summary.dateRange,
+          data: null,
+          packageFile: file,
+          wallpaperAssetCount: manifest.assets.length,
+          wallpaperPresetCount: manifest.presets.length,
+        });
+      } else {
+        if (file.size > MAX_IMPORT_FILE_BYTES) throw new Error("JSON 文件超过 10 MB；请使用完整 ZIP 迁移包，或拆分后分批导入。");
+        const data = JSON.parse(await file.text()) as unknown;
+        setPendingImport(buildImportPreview(data, file));
+      }
+      setMsg("文件已读取，请检查导入预览。读取过程没有写入服务器。");
       setTone("neutral");
     } catch (e) {
       setPendingImport(null);
@@ -217,34 +242,49 @@ export default function ExportPanel({
     if (!pendingImport || busy) return;
     setMessageScope("import");
     const summary = `${pendingImport.articleCount} 条记录、${pendingImport.reviewCount} 篇周期回顾、${pendingImport.knowledgeCount} 个知识条目`;
+    const packageSummary = pendingImport.kind === "package"
+      ? `，以及 ${pendingImport.wallpaperAssetCount ?? 0} 张壁纸和 ${pendingImport.wallpaperPresetCount ?? 0} 组壁纸方案。完整迁移包会替换服务器壁纸图库、分配和方案；业务数据按现有导入规则处理。`
+      : "。";
     const ok = await confirm({
       title: "确认导入数据",
-      message: `将导入 ${summary}。
+      message: `将导入 ${summary}${packageSummary}
 
-导入前会先创建一个服务器快照作为恢复点；已有内容会按服务端导入规则合并或更新。继续？`,
+服务器会在任何数据写入前创建可恢复快照。继续？`,
       confirmText: "创建快照并导入",
       danger: true,
     });
     if (!ok) return;
 
     setBusy("import");
-    setMsg("正在创建导入前快照…");
+    setMsg(pendingImport.kind === "package" ? "正在上传并校验迁移包…" : "正在创建导入前快照…");
     setTone("neutral");
     try {
-      const snapshot = await api.createBackup();
-      onBackupCreated?.(snapshot);
-      setMsg(`已创建导入前快照：${snapshot.name}，正在导入…`);
-      if (pendingImport.kind === "full") {
-        const result = await api.importFullBackup(pendingImport.data);
-        setMsg(`导入完成：${result.imported_articles} 条记录、${result.imported_reviews} 篇周期回顾、${result.imported_knowledge_cards || 0} 个知识条目。导入前快照：${snapshot.name}`);
+      if (pendingImport.kind === "package") {
+        const currentWallpaperState = await api.getWallpaperSnapshot();
+        const result = await api.importFullPackage(
+          pendingImport.packageFile!,
+          currentWallpaperState.revision,
+        );
+        onBackupCreated?.();
+        await onWallpaperImported?.();
+        setMsg(`导入完成：${result.importedArticles} 条记录、${result.importedReviews} 篇周期回顾、${result.importedKnowledgeCards} 个知识条目、${result.wallpaperAssets} 张壁纸、${result.wallpaperPresets} 组方案。导入前快照：${result.snapshotName}`);
       } else {
-        const result = await api.importArticles(pendingImport.articles || []);
-        setMsg(`导入完成：${result.imported} 条记录，跳过 ${result.skipped} 条空记录。导入前快照：${snapshot.name}`);
+        const snapshot = await api.createBackup();
+        onBackupCreated?.();
+        setMsg(`已创建导入前快照：${snapshot.name}，正在导入…`);
+        if (pendingImport.kind === "full") {
+          const result = await api.importFullBackup(pendingImport.data);
+          setMsg(`导入完成：${result.imported_articles} 条记录、${result.imported_reviews} 篇周期回顾、${result.imported_knowledge_cards || 0} 个知识条目。导入前快照：${snapshot.name}`);
+        } else {
+          const result = await api.importArticles(pendingImport.articles || []);
+          setMsg(`导入完成：${result.imported} 条记录，跳过 ${result.skipped} 条空记录。导入前快照：${snapshot.name}`);
+        }
       }
       setPendingImport(null);
       setTone("good");
     } catch (e) {
-      setMsg(`导入失败：${api.getErrorMessage(e)}\n如已创建导入前快照，请从服务器快照中恢复。`);
+      if (pendingImport.kind === "package") onBackupCreated?.();
+      setMsg(`导入失败：${api.getErrorMessage(e)}\n完整 ZIP 导入若已通过服务端校验，导入前快照会保留在服务器快照列表中。`);
       setTone("bad");
     } finally {
       setBusy(null);
@@ -256,17 +296,17 @@ export default function ExportPanel({
   return (
     <div className="settings-panel-stack flex min-w-0 flex-col gap-5">
       <Card className="settings-export-card">
-        <SectionTitle desc="完整归档适合迁移或长期保存；Markdown 和 JSON 适合单独处理记录，不包含完整复习状态。">文件导出</SectionTitle>
+        <SectionTitle desc="完整 ZIP 迁移包包含业务数据与壁纸；Markdown 和 JSON 适合单独处理记录。">文件导出</SectionTitle>
         {messageScope === "export" && msg && <div className="mb-4"><StatusBox message={msg} tone={tone} /></div>}
         <div className="settings-export-list" role="list">
           <div className="settings-export-row settings-export-row-featured" role="listitem">
             <span className="settings-export-row-icon settings-export-row-icon-accent" aria-hidden="true"><FileArchive size={17} /></span>
             <div className="settings-export-row-copy min-w-0">
-              <p className="text-sm font-semibold text-[var(--ui-text)]">下载完整归档</p>
-              <p className="mt-1 text-xs leading-5 text-[var(--ui-text-muted)]">包含今日记录、周期回顾、知识条目及复习数据，适合迁移或长期保存。</p>
+              <p className="text-sm font-semibold text-[var(--ui-text)]">完整迁移包</p>
+              <p className="mt-1 text-xs leading-5 text-[var(--ui-text-muted)]">包含今日记录、周期回顾、知识条目、复习数据、壁纸图片、组件分配和保存方案。</p>
             </div>
             <PrimaryBtn onClick={() => void exportFull()} disabled={busy !== null} className="settings-action-button shrink-0">
-              <FileArchive size={15} /> {busy === "full" ? busyLabel : "下载完整归档"}
+              <FileArchive size={15} /> {busy === "full" ? busyLabel : "下载 ZIP"}
             </PrimaryBtn>
           </div>
           <div className="settings-export-row" role="listitem">
@@ -294,15 +334,15 @@ export default function ExportPanel({
 
       <Card className="settings-import-card">
         <div className="flex items-start justify-between gap-3">
-          <SectionTitle desc="选择文件后先查看摘要，确认后才会创建恢复点并写入；恢复已有快照请在“快照列表”中操作。">导入数据</SectionTitle>
+          <SectionTitle desc="JSON 与 ZIP 都会先展示摘要；确认后创建恢复点并导入。完整 ZIP 会同时迁移壁纸。">导入数据</SectionTitle>
           <span className="settings-risk-badge shrink-0">会写入服务器</span>
         </div>
         {messageScope === "import" && msg && <div className="mb-3"><StatusBox message={msg} tone={tone} /></div>}
-        <p className="text-sm leading-6 text-[var(--ui-text-muted)]">建议优先使用完整归档；单次 JSON 文件请控制在 10 MB 以内，大文件先拆分后分批导入。导入前会自动创建服务器快照，结果不符合预期时可以恢复该保护点。</p>
-        <input ref={fileRef} type="file" accept="application/json,.json" onChange={(event) => void handleImport(event)} className="hidden" />
+        <p className="text-sm leading-6 text-[var(--ui-text-muted)]">完整 ZIP 可包含壁纸与方案，最大 512 MiB；旧 JSON 归档继续支持，最大 10 MiB。确认导入后服务器会先创建可恢复快照。</p>
+        <input ref={fileRef} type="file" accept="application/zip,.zip,application/json,.json" onChange={(event) => void handleImport(event)} className="hidden" />
         <div className="settings-import-trigger mt-4 flex flex-col gap-2 sm:flex-row sm:items-center">
           <SecondaryBtn onClick={() => fileRef.current?.click()} disabled={busy !== null} className="settings-action-button shrink-0">
-            <Upload size={15} /> {busy === "read" ? "读取中…" : "选择归档或 JSON 文件"}
+            <Upload size={15} /> {busy === "read" ? "读取中…" : "选择 ZIP 迁移包或 JSON 文件"}
           </SecondaryBtn>
           <span className="text-xs text-[var(--ui-text-subtle)]">读取文件不会立即写入服务器</span>
         </div>
@@ -320,6 +360,7 @@ export default function ExportPanel({
               <PreviewItem label="今日记录" value={`${pendingImport.articleCount} 条`} />
               <PreviewItem label="周期回顾" value={`${pendingImport.reviewCount} 篇`} />
               <PreviewItem label="知识条目" value={`${pendingImport.knowledgeCount} 个`} />
+              {pendingImport.kind === "package" && <PreviewItem label="壁纸与方案" value={`${pendingImport.wallpaperAssetCount ?? 0} 张 · ${pendingImport.wallpaperPresetCount ?? 0} 组`} />}
             </dl>
             <div className="mt-5 flex flex-col gap-2 sm:flex-row sm:justify-end">
               <SecondaryBtn onClick={() => setPendingImport(null)} disabled={busy !== null}>取消导入</SecondaryBtn>

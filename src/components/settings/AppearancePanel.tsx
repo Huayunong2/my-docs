@@ -1,6 +1,7 @@
 import { Check, Monitor, Moon, Sun } from "lucide-react";
 import { themeModeLabels, themeModes, type ThemeMode } from "../../lib/theme";
 import {
+  type LocalWallpaperMigrationSource,
   type WallpaperApplyMode,
   type WallpaperAssetDraft,
   type WallpaperAssetMetadata,
@@ -29,6 +30,12 @@ export default function AppearancePanel({
   wallpaperPreferences,
   wallpaperPreferencesReady,
   wallpaperStorageError,
+  wallpaperReadOnly,
+  wallpaperStorageUsedBytes,
+  wallpaperStorageQuotaBytes,
+  localWallpaperMigration,
+  onMigrateLocalWallpaper,
+  onRefreshWallpaperSnapshot,
   wallpaperAssets,
   wallpaperPresets,
   onChangeWallpaperPreference,
@@ -48,6 +55,12 @@ export default function AppearancePanel({
   wallpaperPreferences: WallpaperPreferences;
   wallpaperPreferencesReady: boolean;
   wallpaperStorageError: string | null;
+  wallpaperReadOnly: boolean;
+  wallpaperStorageUsedBytes: number;
+  wallpaperStorageQuotaBytes: number;
+  localWallpaperMigration: { source: LocalWallpaperMigrationSource; serverHasUserData: boolean } | null;
+  onMigrateLocalWallpaper: () => Promise<boolean>;
+  onRefreshWallpaperSnapshot: () => Promise<boolean>;
   wallpaperAssets: WallpaperAssetMetadata[];
   wallpaperPresets: WallpaperPreset[];
   onChangeWallpaperPreference: (
@@ -129,6 +142,12 @@ export default function AppearancePanel({
         wallpaperPreferences={wallpaperPreferences}
         wallpaperPreferencesReady={wallpaperPreferencesReady}
         wallpaperStorageError={wallpaperStorageError}
+        wallpaperReadOnly={wallpaperReadOnly}
+        wallpaperStorageUsedBytes={wallpaperStorageUsedBytes}
+        wallpaperStorageQuotaBytes={wallpaperStorageQuotaBytes}
+        localWallpaperMigration={localWallpaperMigration}
+        onMigrateLocalWallpaper={onMigrateLocalWallpaper}
+        onRefreshWallpaperSnapshot={onRefreshWallpaperSnapshot}
         wallpaperAssets={wallpaperAssets}
         wallpaperPresets={wallpaperPresets}
         onChangeWallpaperPreference={onChangeWallpaperPreference}

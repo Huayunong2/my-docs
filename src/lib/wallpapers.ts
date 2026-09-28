@@ -56,6 +56,7 @@ export type WallpaperPreset = {
   createdAt: number;
   updatedAt: number;
   preferences: WallpaperPreferences;
+  source?: "built-in";
 };
 
 export function wallpaperSurfacesForModule(module: WallpaperModule) {
@@ -81,13 +82,6 @@ export function wallpaperTargetLabel(target: WallpaperAssignmentTargetId): strin
   const surface = wallpaperSurfaces.find((item) => item.id === target);
   return (module?.label ?? "页面") + " · " + (surface?.label ?? "内容区");
 }
-export type BuiltInWallpaper = {
-  id: string;
-  name: string;
-  kind: "built-in";
-  desktopUrl: string;
-  mobileUrl: string;
-};
 export type WallpaperAssetMetadata = {
   id: string;
   name: string;
@@ -100,6 +94,7 @@ export type WallpaperAssetMetadata = {
   mobileHeight?: number;
   desktopThumbnailBytes?: number;
   mobileThumbnailBytes?: number;
+  isBuiltIn?: boolean;
   desktopName?: string;
   mobileName?: string;
 };
@@ -113,26 +108,40 @@ export type WallpaperAssetThumbnails = {
   desktopThumbnailBlob: Blob;
   mobileThumbnailBlob?: Blob;
 };
-export type WallpaperLibraryItem =
-  | BuiltInWallpaper
-  | (WallpaperAssetMetadata & { kind: "uploaded" });
+export type WallpaperLibraryItem = WallpaperAssetMetadata & {
+  kind: "built-in" | "uploaded";
+};
 export type WallpaperAssetDraft = {
   metadata: WallpaperAssetMetadata;
   files: WallpaperAssetFiles;
   thumbnails: WallpaperAssetThumbnails;
 };
+export type WallpaperSnapshot = {
+  revision: number;
+  hasUserData: boolean;
+  storageUsedBytes: number;
+  storageQuotaBytes: number;
+  preferences: WallpaperPreferences;
+  assets: WallpaperAssetMetadata[];
+  presets: WallpaperPreset[];
+};
 
-export const builtInWallpapers: BuiltInWallpaper[] = [
-  {
-    id: "anime-night",
-    name: "二次元夜樱",
-    kind: "built-in",
-    desktopUrl: "/backgrounds/stats-overview-desktop.webp",
-    mobileUrl: "/backgrounds/stats-overview-mobile.webp",
-  },
-];
+export const builtInWallpaperIds = [
+  "qiguang-fog-observatory",
+  "qiguang-rain-platform",
+  "qiguang-windowsill-sprout",
+  "qiguang-afternoon-reading-room",
+  "qiguang-river-tide",
+  "qiguang-mountain-shelter",
+  "qiguang-night-train-window",
+  "qiguang-woodwork-studio",
+  "qiguang-greenhouse-gardener",
+  "qiguang-record-shop",
+  "qiguang-rooftop-garden",
+  "qiguang-closing-market",
+] as const;
 
-const builtInIds = new Set(builtInWallpapers.map(({ id }) => id));
+const builtInIds = new Set<string>(builtInWallpaperIds);
 const databaseName = "daily-summary-wallpapers";
 const databaseVersion = 4;
 const preferenceStoreName = "preferences";
@@ -153,7 +162,26 @@ const defaultOverlay = 64;
 const minOverlay = 45;
 const maxOverlay = 85;
 export const maxWallpapersPerModule = 32;
+export const maxCustomWallpaperAssets = 32;
+export const maxWallpaperLibraryBytes = 256 * 1024 * 1024;
 export const maxWallpaperPresets = 30;
+
+export function wallpaperAssetStoredBytes(
+  asset: Pick<
+    WallpaperAssetMetadata,
+    "optimizedBytes" | "desktopThumbnailBytes" | "mobileThumbnailBytes"
+  >,
+): number {
+  return [
+    asset.optimizedBytes,
+    asset.desktopThumbnailBytes ?? 0,
+    asset.mobileThumbnailBytes ?? 0,
+  ].reduce(
+    (total, bytes) =>
+      total + (Number.isFinite(bytes) ? Math.max(0, Math.floor(bytes)) : 0),
+    0,
+  );
+}
 export const maxWallpaperPresetNameLength = 40;
 export const wallpaperPresetSchemaVersion = 1 as const;
 
@@ -187,6 +215,50 @@ export function defaultWallpaperPreferences(): WallpaperPreferences {
   return Object.fromEntries(
     wallpaperModules.map(({ id }) => [id, defaultWallpaperPreference(id)]),
   ) as WallpaperPreferences;
+}
+
+const qiguangPreferences = defaultWallpaperPreferences();
+qiguangPreferences.records.wallpaperIds = ["qiguang-rain-platform"];
+qiguangPreferences.records.overlay = 82;
+qiguangPreferences.search.wallpaperIds = ["qiguang-fog-observatory"];
+qiguangPreferences.search.overlay = 82;
+qiguangPreferences.today.surfaces["today.preview"] = {
+  wallpaperIds: ["qiguang-windowsill-sprout"],
+  overlay: 84,
+  cycleDaily: false,
+};
+qiguangPreferences.knowledge.wallpaperIds = ["qiguang-afternoon-reading-room"];
+qiguangPreferences.knowledge.overlay = 82;
+qiguangPreferences.stats.surfaces["stats.monthlyOverview"] = {
+  wallpaperIds: ["qiguang-river-tide"],
+  overlay: 68,
+  cycleDaily: false,
+};
+qiguangPreferences.reviews.surfaces["reviews.archive"] = {
+  wallpaperIds: ["qiguang-mountain-shelter"],
+  overlay: 83,
+  cycleDaily: false,
+};
+
+export const builtInWallpaperPresets: WallpaperPreset[] = [
+  {
+    id: "builtin-qiguang-light",
+    name: "栖光 · 轻描",
+    schemaVersion: wallpaperPresetSchemaVersion,
+    createdAt: 0,
+    updatedAt: 0,
+    source: "built-in",
+    preferences: qiguangPreferences,
+  },
+];
+
+export function findWallpaperPreset(
+  presetId: string,
+  savedPresets: readonly WallpaperPreset[],
+): WallpaperPreset | null {
+  return builtInWallpaperPresets.find((preset) => preset.id === presetId)
+    ?? savedPresets.find((preset) => preset.id === presetId)
+    ?? null;
 }
 
 function normalizeWallpaperPreferences(value: unknown): WallpaperPreferences {
@@ -703,21 +775,177 @@ export async function loadWallpaperAssetFiles(
   return files;
 }
 
+
+export type LocalWallpaperMigrationSource = {
+  migrationId: string;
+  preferences: WallpaperPreferences;
+  presets: WallpaperPreset[];
+  assets: WallpaperAssetDraft[];
+};
+
+const localWallpaperMigrationIdKey = "daily-summary-wallpaper-migration-id";
+
+async function createMigrationThumbnail(blob: Blob, name: string): Promise<Blob> {
+  const { processWallpaperFile } = await import("./wallpaperImageProcessing");
+  const type = ["image/jpeg", "image/png", "image/webp"].includes(blob.type)
+    ? blob.type
+    : name.toLowerCase().endsWith(".png")
+      ? "image/png"
+      : name.toLowerCase().endsWith(".jpg") || name.toLowerCase().endsWith(".jpeg")
+        ? "image/jpeg"
+        : "image/webp";
+  return (await processWallpaperFile(new File([blob], name, { type }))).thumbnail;
+}
+
+function getLocalWallpaperMigrationId(): string {
+  try {
+    const existing = globalThis.localStorage?.getItem(localWallpaperMigrationIdKey);
+    if (existing) return existing;
+    const id = newWallpaperId();
+    globalThis.localStorage?.setItem(localWallpaperMigrationIdKey, id);
+    return id;
+  } catch {
+    return newWallpaperId();
+  }
+}
+
+/** Read the former per-browser store only when an explicit server migration is needed. */
+export async function loadLocalWallpaperMigrationSource(): Promise<LocalWallpaperMigrationSource | null> {
+  const [storedPreferences, presets, metadata, thumbnails] = await Promise.all([
+    loadWallpaperPreferences(),
+    loadWallpaperPresets(),
+    loadWallpaperAssets(),
+    loadWallpaperAssetThumbnails(),
+  ]);
+  const files = await Promise.all(metadata.map((asset) => loadWallpaperAssetFiles(asset.id)));
+  const preferences = wallpaperPreferencesEqual(storedPreferences, defaultWallpaperPreferences())
+    ? defaultWallpaperPreferences()
+    : storedPreferences;
+  const thumbnailById = new Map(thumbnails.map((item) => [item.id, item]));
+  const fileById = new Map<string, WallpaperAssetFiles>();
+  metadata.forEach((asset, index) => {
+    const item = files[index];
+    if (item) fileById.set(asset.id, item);
+  });
+  const assets: WallpaperAssetDraft[] = [];
+  for (const asset of metadata) {
+    if (asset.isBuiltIn || builtInIds.has(asset.id)) continue;
+    const storedFiles = fileById.get(asset.id);
+    const storedThumbnails = thumbnailById.get(asset.id);
+    if (!storedFiles?.desktopBlob) {
+      throw new Error("本机壁纸“" + asset.name + "”缺少图片文件；本机副本仍保留，请重新导入该图片后再迁移。");
+    }
+    const desktopThumbnailBlob = storedThumbnails?.desktopThumbnailBlob
+      ?? await createMigrationThumbnail(storedFiles.desktopBlob, asset.desktopName ?? asset.name + ".webp");
+    const mobileThumbnailBlob = storedFiles.mobileBlob
+      ? storedThumbnails?.mobileThumbnailBlob
+        ?? await createMigrationThumbnail(storedFiles.mobileBlob, asset.mobileName ?? asset.name + "-mobile.webp")
+      : undefined;
+    const normalizedThumbnails = {
+      id: asset.id,
+      desktopThumbnailBlob,
+      mobileThumbnailBlob,
+    } satisfies WallpaperAssetThumbnails;
+    assets.push({
+      metadata: {
+        ...asset,
+        isBuiltIn: false,
+        originalBytes: Number.isFinite(asset.originalBytes) ? asset.originalBytes : storedFiles.desktopBlob.size + (storedFiles.mobileBlob?.size ?? 0),
+        optimizedBytes: storedFiles.desktopBlob.size + (storedFiles.mobileBlob?.size ?? 0),
+        desktopThumbnailBytes: desktopThumbnailBlob.size,
+        mobileThumbnailBytes: mobileThumbnailBlob?.size,
+      },
+      files: storedFiles,
+      thumbnails: normalizedThumbnails,
+    });
+  }
+  const hasData = assets.length > 0 || presets.length > 0 ||
+    !wallpaperPreferencesEqual(preferences, defaultWallpaperPreferences());
+  if (!hasData) return null;
+  return {
+    migrationId: getLocalWallpaperMigrationId(),
+    preferences,
+    presets,
+    assets,
+  };
+}
+
 export async function saveWallpaperAsset(
   metadata: WallpaperAssetMetadata,
   files: WallpaperAssetFiles,
   thumbnails: WallpaperAssetThumbnails,
 ): Promise<void> {
+  const imageBytes =
+    files.desktopBlob.size + (files.mobileBlob?.size ?? 0);
+  const thumbnailBytes =
+    thumbnails.desktopThumbnailBlob.size +
+    (thumbnails.mobileThumbnailBlob?.size ?? 0);
+  const incomingBytes = imageBytes + thumbnailBytes;
+  if (incomingBytes > maxWallpaperLibraryBytes) {
+    throw new Error("这组图片超过壁纸库容量上限 256 MiB。");
+  }
+
   const database = await openDatabase();
   const transaction = database.transaction(
     [assetMetadataStoreName, assetFilesStoreName, assetThumbnailsStoreName],
     "readwrite",
   );
   const completed = transactionCompletion(transaction);
-  transaction.objectStore(assetMetadataStoreName).put(metadata);
-  transaction.objectStore(assetFilesStoreName).put(files);
-  transaction.objectStore(assetThumbnailsStoreName).put(thumbnails);
-  await completed;
+  const metadataStore = transaction.objectStore(assetMetadataStoreName);
+  const request = metadataStore.getAll() as IDBRequest<WallpaperAssetMetadata[]>;
+  let operationError: Error | null = null;
+
+  request.onsuccess = () => {
+    try {
+      const existing = request.result.filter((asset) => asset.id !== metadata.id);
+      if (existing.length >= maxCustomWallpaperAssets) {
+        throw new Error(
+          "壁纸库已达到图片数量限制；请删除未引用的图片后再添加。",
+        );
+      }
+      const usedBytes = existing.reduce(
+        (total, asset) => total + wallpaperAssetStoredBytes(asset),
+        0,
+      );
+      if (usedBytes + incomingBytes > maxWallpaperLibraryBytes) {
+        throw new Error(
+          "壁纸库容量上限为 256 MiB；请删除未引用的图片或选择更小的图片。",
+        );
+      }
+
+      metadataStore.put({
+        ...metadata,
+        optimizedBytes: imageBytes,
+        desktopThumbnailBytes: thumbnails.desktopThumbnailBlob.size,
+        mobileThumbnailBytes: thumbnails.mobileThumbnailBlob?.size ?? 0,
+      } satisfies WallpaperAssetMetadata);
+      transaction.objectStore(assetFilesStoreName).put(files);
+      transaction.objectStore(assetThumbnailsStoreName).put(thumbnails);
+    } catch (error) {
+      operationError = error instanceof Error
+        ? error
+        : new Error("无法保存壁纸。");
+      transaction.abort();
+    }
+  };
+  request.onerror = () => transaction.abort();
+
+  try {
+    await completed;
+  } catch (error) {
+    if (operationError) throw operationError;
+    if (
+      error &&
+      typeof error === "object" &&
+      "name" in error &&
+      (error as { name?: unknown }).name === "QuotaExceededError"
+    ) {
+      throw new Error(
+        "浏览器可用存储空间不足；请删除未引用的壁纸或选择更小的图片。",
+      );
+    }
+    throw error;
+  }
 }
 
 async function updateWallpaperModulePreference(
@@ -900,6 +1128,9 @@ export async function saveWallpaperPreset(
   name: string,
   presetId?: string,
 ): Promise<WallpaperPreset> {
+  if (presetId && builtInWallpaperPresets.some((preset) => preset.id === presetId)) {
+    throw new Error("内置壁纸方案不可修改。");
+  }
   const safeName = normalizedPresetName(name);
   const nameKey = safeName.toLowerCase();
   const database = await openDatabase();
@@ -934,9 +1165,14 @@ export async function saveWallpaperPreset(
       if (!existing && currentPresets.length >= maxWallpaperPresets) {
         throw new Error("最多保存 " + maxWallpaperPresets + " 组壁纸方案，请先整理现有方案。");
       }
-      if (currentPresets.some((preset) =>
-        preset.id !== presetId && preset.name.toLowerCase() === nameKey,
-      )) throw new Error("已存在同名方案，请更换名称。");
+      if (
+        currentPresets.some((preset) =>
+          preset.id !== presetId && preset.name.toLowerCase() === nameKey,
+        ) ||
+        builtInWallpaperPresets.some((preset) =>
+          preset.id !== presetId && preset.name.toLowerCase() === nameKey,
+        )
+      ) throw new Error("已存在同名方案，请更换名称。");
 
       const currentPreferences = defaultWallpaperPreferences();
       for (const record of preferenceRecords) {
@@ -992,13 +1228,21 @@ export async function renameWallpaperPreset(
   presetId: string,
   name: string,
 ): Promise<WallpaperPreset> {
+  if (builtInWallpaperPresets.some((preset) => preset.id === presetId)) {
+    throw new Error("内置壁纸方案不可重命名。");
+  }
   const safeName = normalizedPresetName(name);
   const current = await loadWallpaperPresets();
   const preset = current.find((item) => item.id === presetId);
   if (!preset) throw new Error("找不到要重命名的壁纸方案。");
-  if (current.some((item) =>
-    item.id !== presetId && item.name.toLowerCase() === safeName.toLowerCase(),
-  )) throw new Error("已存在同名方案，请更换名称。");
+  if (
+    current.some((item) =>
+      item.id !== presetId && item.name.toLowerCase() === safeName.toLowerCase(),
+    ) ||
+    builtInWallpaperPresets.some((item) =>
+      item.id !== presetId && item.name.toLowerCase() === safeName.toLowerCase(),
+    )
+  ) throw new Error("已存在同名方案，请更换名称。");
 
   const updated: WallpaperPreset = {
     ...preset,
@@ -1017,6 +1261,9 @@ export async function renameWallpaperPreset(
 }
 
 export async function deleteWallpaperPreset(presetId: string): Promise<void> {
+  if (builtInWallpaperPresets.some((preset) => preset.id === presetId)) {
+    throw new Error("内置壁纸方案不可删除。");
+  }
   const database = await openDatabase();
   const transaction = database.transaction(presetStoreName, "readwrite");
   const completed = transactionCompletion(transaction);
@@ -1028,8 +1275,13 @@ export async function applyWallpaperPreset(
   presetId: string | null,
 ): Promise<WallpaperPreferences> {
   const database = await openDatabase();
-  if (presetId === null) {
-    const preferences = defaultWallpaperPreferences();
+  const builtInPreset = presetId
+    ? builtInWallpaperPresets.find((preset) => preset.id === presetId)
+    : undefined;
+  if (presetId === null || builtInPreset) {
+    const preferences = builtInPreset
+      ? normalizeWallpaperPreferences(builtInPreset.preferences)
+      : defaultWallpaperPreferences();
     const transaction = database.transaction(preferenceStoreName, "readwrite");
     const completed = transactionCompletion(transaction);
     const store = transaction.objectStore(preferenceStoreName);
