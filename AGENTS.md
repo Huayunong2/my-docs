@@ -127,7 +127,8 @@ server/src/server.rs 的 build_router 是 HTTP API 路由的唯一索引。前�
 | /knowledge-cards、/spaces、/review-items | server/src/knowledge.rs |
 | /review | server/src/review.rs |
 | /reviews、/ai | server/src/ai.rs，外部请求由 server/src/ai_client.rs 承担 |
-| /export | server/src/exports.rs；完整归档入口也在 server/src/server.rs |
+| /export | server/src/exports.rs、server/src/server.rs；完整 JSON 与版本化 ZIP 迁移包均保持兼容 |
+| /wallpapers | server/src/wallpapers.rs、server/src/wallpaper_package.rs；SQLite 持久化和迁移位于 server/src/db.rs |
 | /backups | server/src/backups.rs、server/src/backup_policy.rs |
 | /health、鉴权、CORS、安全响应头 | server/src/server.rs、server/src/middleware.rs |
 | 服务端启动、CLI 参数和快照 | server/src/main.rs |
@@ -261,3 +262,12 @@ curl http://127.0.0.1:8080/health
 - 统计月份选择：`src/components/workspace/MonthPicker.tsx`；路由加载错误恢复：`src/components/workspace/PageLoadError.tsx`。
 - 生产浏览器检查：`scripts/production-ui-regression.mjs`；`scripts/final-ui-regression.mjs` 支持 `KNOWLEDGE_FRONTEND_ORIGIN` 指定 loopback 来源。图表或构建修改必须额外检查优化后的生产资源，不能只看开发预览。
 - 本轮诊断、验证结果与回退参考根目录 `UI_REDESIGN.md` 的生产版修复章节。
+
+
+## 跨设备壁纸索引（2026-09-28）
+
+- 设置 UI：`src/components/settings/WallpaperManagerPanel.tsx`；通过 `src/components/settings/AppearancePanel.tsx` 和 `src/components/SettingsPage.tsx` 挂载。
+- 页面与组件背景：`src/App.tsx`、`src/components/workspace/WallpaperSurface.tsx`；前端领域模型和旧 IndexedDB 一次性迁移读取位于 `src/lib/wallpapers.ts`。
+- 同步 API：`src/lib/api.ts`；服务端认证路由在 `server/src/server.rs`，壁纸业务处理在 `server/src/wallpapers.rs`，版本化 ZIP 包在 `server/src/wallpaper_package.rs`。
+- 持久化：`server/src/db.rs` 的 v25 迁移、SQLite BLOB 资产、revision 冲突、一次性本机迁移与包导入事务。
+- 迁移包预览：`src/lib/fullPackage.ts` 使用 fflate 按流读取清单；旧完整 JSON 导入仍通过 `/articles/import-full` 兼容。

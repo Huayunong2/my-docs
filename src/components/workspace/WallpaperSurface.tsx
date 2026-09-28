@@ -9,15 +9,9 @@ import {
   type ElementType,
   type ReactNode,
 } from "react";
-import {
-  builtInWallpapers,
-  loadWallpaperAssetFiles,
-  wallpaperIdForDate,
-  wallpaperSurfaces,
-  type WallpaperModule,
-  type WallpaperPreferences,
-  type WallpaperSurfaceId,
-} from "../../lib/wallpapers";
+import { wallpaperIdForDate, wallpaperSurfaces, type WallpaperModule, type WallpaperPreferences, type WallpaperSurfaceId } from "../../lib/wallpapers";
+import * as api from "../../lib/api";
+import { loadWallpaperAssetFiles } from "../../lib/wallpapers";
 
 type SurfaceProps<T extends ElementType> = {
   target: WallpaperSurfaceId;
@@ -67,25 +61,32 @@ export function WallpaperSurface<T extends ElementType = "div">({
       : undefined;
   const wallpaperId =
     context && preference ? wallpaperIdForDate(preference, context.date) : null;
-  const builtIn = builtInWallpapers.find((asset) => asset.id === wallpaperId);
   const [loaded, setLoaded] = useState<LoadedSurfaceImages | null>(null);
 
   useEffect(() => {
     let current = true;
     const urls = new Set<string>();
     setLoaded(null);
-    if (!wallpaperId || builtIn) {
+    if (!wallpaperId) {
       return () => {
         current = false;
       };
     }
 
-    void loadWallpaperAssetFiles(wallpaperId)
-      .then((files) => {
-        if (!current || !files) return;
-        const desktopBlob = files.desktopBlob ?? files.mobileBlob;
-        const mobileBlob = files.mobileBlob ?? files.desktopBlob;
-        if (!desktopBlob || !mobileBlob) return;
+    const getAsset = async (variant: "desktop" | "mobile") => {
+      try {
+        return await api.getWallpaperAssetFile(wallpaperId, variant);
+      } catch {
+        const local = await loadWallpaperAssetFiles(wallpaperId);
+        if (!local) throw new Error("wallpaper image unavailable");
+        return variant === "mobile"
+          ? local.mobileBlob ?? local.desktopBlob
+          : local.desktopBlob ?? local.mobileBlob;
+      }
+    };
+    void Promise.all([getAsset("desktop"), getAsset("mobile")])
+      .then(([desktopBlob, mobileBlob]) => {
+        if (!current) return;
         const makeUrl = (blob: Blob) => {
           const url = URL.createObjectURL(blob);
           urls.add(url);
@@ -105,11 +106,7 @@ export function WallpaperSurface<T extends ElementType = "div">({
     };
   }, [wallpaperId, context?.assetsRevision]);
 
-  const images = builtIn
-    ? { desktopUrl: builtIn.desktopUrl, mobileUrl: builtIn.mobileUrl }
-    : loaded?.id === wallpaperId
-      ? loaded
-      : null;
+  const images = loaded?.id === wallpaperId ? loaded : null;
   const styleWithWallpaper = images && preference
     ? {
         ...style,

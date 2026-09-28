@@ -40,6 +40,13 @@ import WorkspaceHeader from "./workspace/WorkspaceHeader";
 import { WallpaperSurface } from "./workspace/WallpaperSurface";
 import { Tabs, TabsList, TabsTrigger } from "./ui/tabs";
 import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "./ui/select";
+import {
   readSessionStorage,
   removeSessionStorage,
   reviewLibraryReturnStorageKey,
@@ -826,15 +833,19 @@ export default function ReviewsPage({
               <label htmlFor="review-status-select" className="sr-only">
                 复盘状态
               </label>
-              <select
-                id="review-status-select"
-                value={statusFilter}
-                onChange={(event) => changeStatus(event.target.value)}
-              >
-                <option value="all">全部状态</option>
-                <option value="draft">待确认草稿</option>
-                <option value="confirmed">已确认版本</option>
-              </select>
+              <Select value={statusFilter} onValueChange={changeStatus}>
+                <SelectTrigger
+                  id="review-status-select"
+                  className="rp-status-trigger"
+                >
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent align="start" sideOffset={6}>
+                  <SelectItem value="all">全部状态</SelectItem>
+                  <SelectItem value="draft">待确认草稿</SelectItem>
+                  <SelectItem value="confirmed">已确认版本</SelectItem>
+                </SelectContent>
+              </Select>
             </div>
             {hasActiveFilters && (
               <button type="button" className="rp-clear" onClick={clearFilters}>

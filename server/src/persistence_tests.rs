@@ -2897,3 +2897,521 @@ fn deleting_a_card_hides_related_ids_until_the_card_is_restored() {
         "恢复 B 后原有关联应自动回来"
     );
 }
+
+#[test]
+fn wallpaper_snapshot_starts_with_plain_defaults_and_an_ordinary_sample_asset() {
+    let mut db = Database::new_in_memory().expect("in-memory database");
+    let snapshot = db.wallpapers().snapshot().expect("load wallpaper snapshot");
+
+    assert_eq!(snapshot.revision, 0);
+    assert_eq!(snapshot.storage_quota_bytes, 256 * 1024 * 1024);
+    assert_eq!(
+        snapshot.preferences["stats"].value.wallpaper_ids,
+        Vec::<String>::new()
+    );
+    assert_eq!(
+        snapshot.preferences["stats"].surfaces["stats.monthlyOverview"].wallpaper_ids,
+        Vec::<String>::new()
+    );
+    assert_eq!(snapshot.assets.len(), 13);
+    let night = snapshot
+        .assets
+        .iter()
+        .find(|asset| asset.id == "anime-night")
+        .expect("sample asset");
+    assert_eq!(night.name, "二次元夜樱");
+    assert!(!night.is_built_in);
+    assert_eq!(
+        snapshot
+            .assets
+            .iter()
+            .filter(|asset| asset.is_built_in)
+            .count(),
+        12
+    );
+    assert_eq!(snapshot.presets.len(), 0);
+}
+
+#[test]
+fn wallpaper_target_updates_are_versioned_and_do_not_accept_stale_devices() {
+    let mut db = Database::new_in_memory().expect("in-memory database");
+    let first = db.wallpapers().snapshot().expect("initial snapshot");
+    let explicit_choice = crate::models::WallpaperPreferenceValue {
+        wallpaper_ids: vec!["anime-night".into()],
+        overlay: 55,
+        cycle_daily: false,
+    };
+
+    assert!(db
+        .wallpapers()
+        .update_target("stats.monthlyOverview", &explicit_choice, first.revision,)
+        .expect("save target"));
+    let changed = db.wallpapers().snapshot().expect("read updated snapshot");
+    assert_eq!(changed.revision, first.revision + 1);
+    assert_eq!(
+        changed.preferences["stats"].surfaces["stats.monthlyOverview"].wallpaper_ids,
+        vec!["anime-night"]
+    );
+
+    let stale_choice = crate::models::WallpaperPreferenceValue {
+        wallpaper_ids: Vec::new(),
+        overlay: 64,
+        cycle_daily: false,
+    };
+    assert!(!db
+        .wallpapers()
+        .update_target("stats.monthlyOverview", &stale_choice, first.revision,)
+        .expect("reject stale target update"));
+    let after_conflict = db.wallpapers().snapshot().expect("read conflict result");
+    assert_eq!(after_conflict.revision, changed.revision);
+    assert_eq!(
+        after_conflict.preferences["stats"].surfaces["stats.monthlyOverview"].wallpaper_ids,
+        vec!["anime-night"]
+    );
+}
+
+#[test]
+fn deleting_wallpaper_asset_removes_every_active_reference_and_asset_bytes() {
+    let mut db = Database::new_in_memory().expect("in-memory database");
+    let before = db.wallpapers().snapshot().expect("initial snapshot");
+    let selected = crate::models::WallpaperPreferenceValue {
+        wallpaper_ids: vec!["anime-night".into()],
+        overlay: 55,
+        cycle_daily: false,
+    };
+    assert!(db
+        .wallpapers()
+        .update_target("stats.monthlyOverview", &selected, before.revision)
+        .expect("assign sample to one region"));
+    let assigned = db.wallpapers().snapshot().expect("read assigned image");
+    let _saved = db
+        .wallpapers()
+        .save_preset("保留方案快照", None, assigned.revision)
+        .expect("save referencing scheme")
+        .expect("revision is current");
+    let saved = db.wallpapers().snapshot().expect("read saved scheme");
+
+    assert!(db
+        .wallpapers()
+        .delete_asset("anime-night", saved.revision)
+        .expect("delete ordinary sample image"));
+    let deleted = db
+        .wallpapers()
+        .snapshot()
+        .expect("read deleted image state");
+    assert_eq!(
+        deleted.assets.len(),
+        12,
+        "only the deletable sample is removed"
+    );
+    assert!(deleted.assets.iter().all(|asset| asset.is_built_in));
+    assert!(
+        deleted.preferences["stats"].surfaces["stats.monthlyOverview"]
+            .wallpaper_ids
+            .is_empty()
+    );
+    assert_eq!(deleted.revision, saved.revision + 1);
+    assert_eq!(deleted.presets.len(), 1);
+    assert!(
+        deleted.presets[0].preferences["stats"].surfaces["stats.monthlyOverview"]
+            .wallpaper_ids
+            .is_empty()
+    );
+}
+
+#[test]
+fn wallpaper_upload_stores_both_responsive_variants_and_counts_them_toward_quota() {
+    let mut db = Database::new_in_memory().expect("in-memory database");
+    let before = db.wallpapers().snapshot().expect("initial snapshot");
+    let upload = crate::models::WallpaperAssetUpload {
+        metadata: crate::models::WallpaperAssetMetadata {
+            id: "wallpaper-test-pair".into(),
+            name: "桌面与移动配套图".into(),
+            created_at: 1,
+            original_bytes: 14,
+            optimized_bytes: 2,
+            desktop_width: 2,
+            desktop_height: 2,
+            mobile_width: Some(3),
+            mobile_height: Some(4),
+            desktop_thumbnail_bytes: 1,
+            mobile_thumbnail_bytes: Some(1),
+            is_built_in: false,
+            desktop_name: Some("desktop.webp".into()),
+            mobile_name: Some("mobile.webp".into()),
+        },
+        desktop_mime: "image/webp".into(),
+        desktop_blob: vec![1, 2],
+        mobile_mime: Some("image/webp".into()),
+        mobile_blob: Some(vec![3, 4, 5]),
+        desktop_thumbnail_mime: "image/webp".into(),
+        desktop_thumbnail_blob: vec![6],
+        mobile_thumbnail_mime: Some("image/webp".into()),
+        mobile_thumbnail_blob: Some(vec![7]),
+    };
+    assert!(db
+        .wallpapers()
+        .save_asset(upload, before.revision)
+        .expect("store paired image variants"));
+
+    let after = db.wallpapers().snapshot().expect("read uploaded asset");
+    assert_eq!(after.revision, before.revision + 1);
+    assert_eq!(after.storage_used_bytes, before.storage_used_bytes + 7);
+    let desktop = db
+        .wallpapers()
+        .asset_variant(
+            "wallpaper-test-pair",
+            crate::models::WallpaperAssetVariant::Desktop,
+        )
+        .expect("read desktop variant")
+        .expect("desktop variant exists");
+    let mobile = db
+        .wallpapers()
+        .asset_variant(
+            "wallpaper-test-pair",
+            crate::models::WallpaperAssetVariant::Mobile,
+        )
+        .expect("read mobile variant")
+        .expect("mobile variant exists");
+    assert_eq!(desktop, ("image/webp".into(), vec![1, 2]));
+    assert_eq!(mobile, ("image/webp".into(), vec![3, 4, 5]));
+}
+
+#[test]
+fn wallpaper_batch_apply_touches_only_selected_targets_and_restore_clears_all_targets() {
+    let mut db = Database::new_in_memory().expect("in-memory database");
+    let before = db.wallpapers().snapshot().expect("initial snapshot");
+    assert!(db
+        .wallpapers()
+        .apply_to_targets(
+            &["stats.monthlyOverview".into(), "knowledge".into()],
+            &["anime-night".into()],
+            crate::models::WallpaperApplyMode::Append,
+            before.revision,
+        )
+        .expect("apply to selected page and component"));
+    let applied = db.wallpapers().snapshot().expect("read applied state");
+    assert_eq!(
+        applied.preferences["stats"].value.wallpaper_ids,
+        Vec::<String>::new()
+    );
+    assert_eq!(
+        applied.preferences["stats"].surfaces["stats.monthlyOverview"].wallpaper_ids,
+        vec!["anime-night"]
+    );
+    assert_eq!(
+        applied.preferences["knowledge"].value.wallpaper_ids,
+        vec!["anime-night"]
+    );
+    assert!(applied.preferences["today"].value.wallpaper_ids.is_empty());
+
+    assert!(db
+        .wallpapers()
+        .restore_default(applied.revision)
+        .expect("restore project defaults"));
+    let restored = db.wallpapers().snapshot().expect("read restored state");
+    for preference in restored.preferences.values() {
+        assert!(preference.value.wallpaper_ids.is_empty());
+        assert!(preference
+            .surfaces
+            .values()
+            .all(|value| value.wallpaper_ids.is_empty()));
+    }
+    assert_eq!(
+        restored.assets.len(),
+        13,
+        "restoring defaults keeps user and built-in assets"
+    );
+    assert_eq!(restored.revision, applied.revision + 1);
+}
+
+#[test]
+fn wallpaper_scheme_roundtrip_restores_current_assignments_without_changing_the_snapshot() {
+    let mut db = Database::new_in_memory().expect("in-memory database");
+    let initial = db.wallpapers().snapshot().expect("initial snapshot");
+    let chosen = crate::models::WallpaperPreferenceValue {
+        wallpaper_ids: vec!["anime-night".into()],
+        overlay: 58,
+        cycle_daily: false,
+    };
+    assert!(db
+        .wallpapers()
+        .update_target("stats.monthlyOverview", &chosen, initial.revision)
+        .expect("assign sample"));
+    let assigned = db.wallpapers().snapshot().expect("read assigned state");
+    let preset = db
+        .wallpapers()
+        .save_preset("阅读氛围", None, assigned.revision)
+        .expect("save wallpaper scheme")
+        .expect("revision is current");
+
+    let saved = db.wallpapers().snapshot().expect("read saved scheme");
+    assert_eq!(saved.presets.len(), 1);
+    assert_eq!(saved.presets[0].name, "阅读氛围");
+    assert_eq!(saved.presets[0].preferences, saved.preferences);
+
+    assert!(db
+        .wallpapers()
+        .restore_default(saved.revision)
+        .expect("restore plain defaults"));
+    let defaults = db.wallpapers().snapshot().expect("read defaults");
+    assert!(
+        defaults.preferences["stats"].surfaces["stats.monthlyOverview"]
+            .wallpaper_ids
+            .is_empty()
+    );
+    assert_eq!(defaults.presets.len(), 1);
+
+    assert!(db
+        .wallpapers()
+        .apply_preset(&preset.id, defaults.revision)
+        .expect("apply saved scheme"));
+    let reapplied = db.wallpapers().snapshot().expect("read reapplied scheme");
+    assert_eq!(
+        reapplied.preferences["stats"].surfaces["stats.monthlyOverview"],
+        chosen
+    );
+    assert_eq!(reapplied.presets.len(), 1);
+}
+
+#[test]
+fn local_wallpaper_migration_applies_local_state_to_an_empty_server_once() {
+    let mut db = Database::new_in_memory().expect("in-memory database");
+    let initial = db.wallpapers().snapshot().expect("initial snapshot");
+    let mut local = crate::models::default_wallpaper_preferences();
+    let monthly = local
+        .get_mut("stats")
+        .unwrap()
+        .surfaces
+        .get_mut("stats.monthlyOverview")
+        .unwrap();
+    monthly.wallpaper_ids = vec!["anime-night".into()];
+    monthly.overlay = 57;
+
+    assert!(db
+        .wallpapers()
+        .merge_local_migration("local-migration-1", &local, &[], vec![], initial.revision,)
+        .expect("merge local state"));
+    let migrated = db.wallpapers().snapshot().expect("migrated snapshot");
+    assert_eq!(migrated.preferences, local);
+    assert_eq!(migrated.revision, initial.revision + 1);
+
+    assert!(db
+        .wallpapers()
+        .merge_local_migration("local-migration-1", &local, &[], vec![], initial.revision,)
+        .expect("idempotent retry"));
+    let retried = db.wallpapers().snapshot().expect("snapshot after retry");
+    assert_eq!(retried.revision, migrated.revision);
+    assert_eq!(retried.preferences, local);
+}
+
+#[test]
+fn local_wallpaper_migration_preserves_server_current_configuration_and_saves_local_as_a_preset() {
+    let mut db = Database::new_in_memory().expect("in-memory database");
+    let initial = db.wallpapers().snapshot().expect("initial snapshot");
+    let server_choice = crate::models::WallpaperPreferenceValue {
+        wallpaper_ids: vec!["anime-night".into()],
+        overlay: 62,
+        cycle_daily: false,
+    };
+    assert!(db
+        .wallpapers()
+        .update_target("stats.monthlyOverview", &server_choice, initial.revision)
+        .unwrap());
+    let server_state = db.wallpapers().snapshot().expect("server state");
+    let mut local = crate::models::default_wallpaper_preferences();
+    local.get_mut("today").unwrap().value.wallpaper_ids = vec!["qiguang-rain-platform".into()];
+
+    assert!(db
+        .wallpapers()
+        .merge_local_migration(
+            "local-migration-2",
+            &local,
+            &[],
+            vec![],
+            server_state.revision,
+        )
+        .expect("merge local state into populated server"));
+    let merged = db.wallpapers().snapshot().expect("merged snapshot");
+    assert_eq!(
+        merged.preferences["stats"].surfaces["stats.monthlyOverview"],
+        server_choice
+    );
+    assert!(merged.preferences["today"].value.wallpaper_ids.is_empty());
+    assert_eq!(merged.presets.len(), 1);
+    assert_eq!(merged.presets[0].preferences, local);
+    assert!(merged.presets[0].name.starts_with("本机当前配置"));
+}
+
+#[test]
+fn legacy_json_archive_import_leaves_existing_wallpaper_state_unchanged() {
+    let mut db = Database::new_in_memory().expect("in-memory database");
+    let before = db.wallpapers().snapshot().expect("wallpaper snapshot");
+    let mut assigned = crate::models::default_wallpaper_preferences();
+    assigned.get_mut("stats").unwrap().value.wallpaper_ids = vec!["anime-night".into()];
+    assert!(db
+        .wallpapers()
+        .replace_preferences(&assigned, before.revision)
+        .unwrap());
+    let saved_wallpapers = db.wallpapers().snapshot().expect("assigned wallpapers");
+
+    db.portable_archive()
+        .import_json(json!({
+            "version": 3,
+            "articles": [],
+            "reviews": [],
+            "knowledge_cards": [],
+            "review_items": [],
+            "knowledge_projects": [],
+        }))
+        .expect("import compatible legacy JSON archive");
+
+    let after = db
+        .wallpapers()
+        .snapshot()
+        .expect("wallpapers after JSON import");
+    assert_eq!(after.preferences, saved_wallpapers.preferences);
+    assert_eq!(after.assets, saved_wallpapers.assets);
+    assert_eq!(after.presets, saved_wallpapers.presets);
+    assert_eq!(after.revision, saved_wallpapers.revision);
+}
+
+#[test]
+fn full_package_preserves_changed_shipped_art_as_a_remapped_ordinary_asset() {
+    let mut db = Database::new_in_memory().expect("in-memory database");
+    let before = db.wallpapers().snapshot().expect("initial snapshot");
+    let canonical_river = db
+        .wallpapers()
+        .asset_variant(
+            "qiguang-river-tide",
+            crate::models::WallpaperAssetVariant::Desktop,
+        )
+        .unwrap()
+        .unwrap();
+    let source = before
+        .assets
+        .iter()
+        .find(|asset| asset.id == "qiguang-fog-observatory")
+        .unwrap()
+        .clone();
+    let mut variant = |id: &str, kind| db.wallpapers().asset_variant(id, kind).unwrap().unwrap();
+    let desktop = variant(
+        "qiguang-fog-observatory",
+        crate::models::WallpaperAssetVariant::Desktop,
+    );
+    let mobile = variant(
+        "qiguang-fog-observatory",
+        crate::models::WallpaperAssetVariant::Mobile,
+    );
+    let desktop_thumbnail = variant(
+        "qiguang-fog-observatory",
+        crate::models::WallpaperAssetVariant::DesktopThumbnail,
+    );
+    let mobile_thumbnail = variant(
+        "qiguang-fog-observatory",
+        crate::models::WallpaperAssetVariant::MobileThumbnail,
+    );
+    let mut packaged = source;
+    packaged.id = "qiguang-river-tide".into();
+    packaged.is_built_in = true;
+    let upload = crate::models::WallpaperAssetUpload {
+        metadata: packaged,
+        desktop_mime: desktop.0,
+        desktop_blob: desktop.1.clone(),
+        mobile_mime: Some(mobile.0),
+        mobile_blob: Some(mobile.1),
+        desktop_thumbnail_mime: desktop_thumbnail.0,
+        desktop_thumbnail_blob: desktop_thumbnail.1,
+        mobile_thumbnail_mime: Some(mobile_thumbnail.0),
+        mobile_thumbnail_blob: Some(mobile_thumbnail.1),
+    };
+    let mut preferences = crate::models::default_wallpaper_preferences();
+    preferences.get_mut("stats").unwrap().value.wallpaper_ids = vec!["qiguang-river-tide".into()];
+
+    assert!(db
+        .wallpapers()
+        .replace_package(
+            &preferences,
+            &[],
+            1,
+            before.revision,
+            |_| Ok(upload.clone()),
+        )
+        .expect("preserve package artwork across app versions"));
+    let after = db.wallpapers().snapshot().expect("read imported package");
+    let imported_id = &after.preferences["stats"].value.wallpaper_ids[0];
+    assert_ne!(imported_id, "qiguang-river-tide");
+    assert!(imported_id.starts_with("package-qiguang-river-tide-"));
+    assert!(
+        !after
+            .assets
+            .iter()
+            .find(|asset| asset.id == *imported_id)
+            .unwrap()
+            .is_built_in
+    );
+    assert_eq!(
+        db.wallpapers()
+            .asset_variant(
+                "qiguang-river-tide",
+                crate::models::WallpaperAssetVariant::Desktop
+            )
+            .unwrap()
+            .unwrap(),
+        canonical_river
+    );
+    assert_eq!(
+        db.wallpapers()
+            .asset_variant(imported_id, crate::models::WallpaperAssetVariant::Desktop)
+            .unwrap()
+            .unwrap(),
+        (upload.desktop_mime, upload.desktop_blob)
+    );
+}
+
+#[test]
+fn wallpaper_batch_delete_is_atomic_when_one_asset_is_missing() {
+    let mut db = Database::new_in_memory().expect("in-memory database");
+    let before = db.wallpapers().snapshot().expect("initial snapshot");
+
+    assert!(db
+        .wallpapers()
+        .delete_assets(
+            &["anime-night".into(), "missing-wallpaper".into()],
+            before.revision
+        )
+        .is_err());
+
+    let after = db
+        .wallpapers()
+        .snapshot()
+        .expect("state after rejected batch");
+    assert_eq!(after.revision, before.revision);
+    assert!(after.assets.iter().any(|asset| asset.id == "anime-night"));
+}
+
+#[test]
+fn wallpaper_full_preference_replace_accepts_builtin_assets_without_changing_defaults() {
+    let mut db = Database::new_in_memory().expect("in-memory database");
+    let before = db.wallpapers().snapshot().expect("initial snapshot");
+    let mut preset = crate::models::default_wallpaper_preferences();
+    preset.get_mut("stats").unwrap().value.wallpaper_ids = vec!["qiguang-river-tide".into()];
+
+    assert!(db
+        .wallpapers()
+        .replace_preferences(&preset, before.revision)
+        .expect("apply a read-only built-in preset"));
+    let applied = db
+        .wallpapers()
+        .snapshot()
+        .expect("read built-in preset state");
+    assert_eq!(
+        applied.preferences["stats"].value.wallpaper_ids,
+        vec!["qiguang-river-tide"]
+    );
+    assert!(applied.preferences["today"].value.wallpaper_ids.is_empty());
+    assert!(applied.preferences.values().all(|page| page
+        .surfaces
+        .values()
+        .all(|surface| surface.wallpaper_ids.is_empty())));
+}

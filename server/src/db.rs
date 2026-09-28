@@ -1,8 +1,13 @@
 use crate::models::{
-    AiConfig, AiRoutingConfig, AiTask, ArchiveMonth, Article, ArticleListResponse, ArticleSummary,
-    DailyReviewCount, DayExemption, KnowledgeCard, KnowledgeCardLabel, KnowledgeProject,
-    KnowledgeSummary, Review, ReviewCard, ReviewHistoryEntry, ReviewItem, ReviewSettings,
-    ReviewStats, ReviewStatsResponse, ReviewStatsSnapshot,
+    default_wallpaper_preferences, AiConfig, AiRoutingConfig, AiTask, ArchiveMonth, Article,
+    ArticleListResponse, ArticleSummary, DailyReviewCount, DayExemption, KnowledgeCard,
+    KnowledgeCardLabel, KnowledgeProject, KnowledgeSummary, Review, ReviewCard, ReviewHistoryEntry,
+    ReviewItem, ReviewSettings, ReviewStats, ReviewStatsResponse, ReviewStatsSnapshot,
+    WallpaperApplyMode, WallpaperAssetMetadata, WallpaperAssetUpload, WallpaperAssetVariant,
+    WallpaperPreferenceValue, WallpaperPreferences, WallpaperPreset, WallpaperSnapshot,
+    WALLPAPER_MAX_ASSETS_BYTES, WALLPAPER_MAX_PER_TARGET, WALLPAPER_MAX_PRESETS,
+    WALLPAPER_MAX_VARIANT_BYTES, WALLPAPER_MODULE_IDS, WALLPAPER_PRESET_SCHEMA_VERSION,
+    WALLPAPER_SURFACE_MODULES,
 };
 use chrono::{Duration, Local, NaiveDate};
 use rusqlite::types::{Type, Value as SqlValue};
@@ -61,6 +66,271 @@ const AI_RETRIES_KEY: &str = "ai_retries";
 const AI_MIN_INTERVAL_MS_KEY: &str = "ai_min_interval_ms";
 const AI_ROUTING_KEY: &str = "ai_routing";
 
+#[cfg(test)]
+type WallpaperSampleRow = (
+    Vec<u8>,
+    Vec<u8>,
+    bool,
+    bool,
+    Option<Vec<u8>>,
+    Option<Vec<u8>>,
+);
+type WallpaperBuiltInAssetRow = (bool, String, Vec<u8>, Option<String>, Option<Vec<u8>>);
+type WallpaperStoredAssetParts = (
+    String,
+    Vec<u8>,
+    Option<String>,
+    Option<Vec<u8>>,
+    Option<String>,
+    Option<Vec<u8>>,
+    Option<String>,
+    Option<Vec<u8>>,
+);
+
+struct WallpaperSeed {
+    id: &'static str,
+    name: &'static str,
+    desktop: &'static [u8],
+    mobile: &'static [u8],
+    desktop_thumbnail: &'static [u8],
+    mobile_thumbnail: &'static [u8],
+    desktop_width: u32,
+    desktop_height: u32,
+    mobile_width: u32,
+    mobile_height: u32,
+    is_builtin: bool,
+}
+
+const WALLPAPER_SEEDS: &[WallpaperSeed] = &[
+    WallpaperSeed {
+        id: "anime-night",
+        name: "二次元夜樱",
+        desktop: include_bytes!("../../public/backgrounds/stats-overview-desktop.webp"),
+        desktop_thumbnail: include_bytes!(
+            "../../public/backgrounds/stats-overview-desktop-thumb.webp"
+        ),
+        mobile: include_bytes!("../../public/backgrounds/stats-overview-mobile.webp"),
+        mobile_thumbnail: include_bytes!(
+            "../../public/backgrounds/stats-overview-mobile-thumb.webp"
+        ),
+        desktop_width: 2103,
+        desktop_height: 748,
+        mobile_width: 941,
+        mobile_height: 1672,
+        is_builtin: false,
+    },
+    WallpaperSeed {
+        id: "qiguang-fog-observatory",
+        name: "雾湾气象台",
+        desktop: include_bytes!("../../public/backgrounds/qiguang-fog-observatory-desktop.webp"),
+        desktop_thumbnail: include_bytes!(
+            "../../public/backgrounds/qiguang-fog-observatory-desktop-thumb.webp"
+        ),
+        mobile: include_bytes!("../../public/backgrounds/qiguang-fog-observatory-mobile.webp"),
+        mobile_thumbnail: include_bytes!(
+            "../../public/backgrounds/qiguang-fog-observatory-mobile-thumb.webp"
+        ),
+        desktop_width: 1586,
+        desktop_height: 992,
+        mobile_width: 971,
+        mobile_height: 1619,
+        is_builtin: true,
+    },
+    WallpaperSeed {
+        id: "qiguang-rain-platform",
+        name: "雨线站台",
+        desktop: include_bytes!("../../public/backgrounds/qiguang-rain-platform-desktop.webp"),
+        desktop_thumbnail: include_bytes!(
+            "../../public/backgrounds/qiguang-rain-platform-desktop-thumb.webp"
+        ),
+        mobile: include_bytes!("../../public/backgrounds/qiguang-rain-platform-mobile.webp"),
+        mobile_thumbnail: include_bytes!(
+            "../../public/backgrounds/qiguang-rain-platform-mobile-thumb.webp"
+        ),
+        desktop_width: 1586,
+        desktop_height: 992,
+        mobile_width: 971,
+        mobile_height: 1619,
+        is_builtin: true,
+    },
+    WallpaperSeed {
+        id: "qiguang-windowsill-sprout",
+        name: "窗台新叶",
+        desktop: include_bytes!("../../public/backgrounds/qiguang-windowsill-sprout-desktop.webp"),
+        desktop_thumbnail: include_bytes!(
+            "../../public/backgrounds/qiguang-windowsill-sprout-desktop-thumb.webp"
+        ),
+        mobile: include_bytes!("../../public/backgrounds/qiguang-windowsill-sprout-mobile.webp"),
+        mobile_thumbnail: include_bytes!(
+            "../../public/backgrounds/qiguang-windowsill-sprout-mobile-thumb.webp"
+        ),
+        desktop_width: 1586,
+        desktop_height: 992,
+        mobile_width: 971,
+        mobile_height: 1619,
+        is_builtin: true,
+    },
+    WallpaperSeed {
+        id: "qiguang-afternoon-reading-room",
+        name: "午后阅览室",
+        desktop: include_bytes!(
+            "../../public/backgrounds/qiguang-afternoon-reading-room-desktop.webp"
+        ),
+        desktop_thumbnail: include_bytes!(
+            "../../public/backgrounds/qiguang-afternoon-reading-room-desktop-thumb.webp"
+        ),
+        mobile: include_bytes!(
+            "../../public/backgrounds/qiguang-afternoon-reading-room-mobile.webp"
+        ),
+        mobile_thumbnail: include_bytes!(
+            "../../public/backgrounds/qiguang-afternoon-reading-room-mobile-thumb.webp"
+        ),
+        desktop_width: 1586,
+        desktop_height: 992,
+        mobile_width: 971,
+        mobile_height: 1619,
+        is_builtin: true,
+    },
+    WallpaperSeed {
+        id: "qiguang-river-tide",
+        name: "河口潮线",
+        desktop: include_bytes!("../../public/backgrounds/qiguang-river-tide-desktop.webp"),
+        desktop_thumbnail: include_bytes!(
+            "../../public/backgrounds/qiguang-river-tide-desktop-thumb.webp"
+        ),
+        mobile: include_bytes!("../../public/backgrounds/qiguang-river-tide-mobile.webp"),
+        mobile_thumbnail: include_bytes!(
+            "../../public/backgrounds/qiguang-river-tide-mobile-thumb.webp"
+        ),
+        desktop_width: 1586,
+        desktop_height: 992,
+        mobile_width: 971,
+        mobile_height: 1619,
+        is_builtin: true,
+    },
+    WallpaperSeed {
+        id: "qiguang-mountain-shelter",
+        name: "山路候车亭",
+        desktop: include_bytes!("../../public/backgrounds/qiguang-mountain-shelter-desktop.webp"),
+        desktop_thumbnail: include_bytes!(
+            "../../public/backgrounds/qiguang-mountain-shelter-desktop-thumb.webp"
+        ),
+        mobile: include_bytes!("../../public/backgrounds/qiguang-mountain-shelter-mobile.webp"),
+        mobile_thumbnail: include_bytes!(
+            "../../public/backgrounds/qiguang-mountain-shelter-mobile-thumb.webp"
+        ),
+        desktop_width: 1586,
+        desktop_height: 992,
+        mobile_width: 971,
+        mobile_height: 1619,
+        is_builtin: true,
+    },
+    WallpaperSeed {
+        id: "qiguang-night-train-window",
+        name: "夜航车窗",
+        desktop: include_bytes!("../../public/backgrounds/qiguang-night-train-window-desktop.webp"),
+        desktop_thumbnail: include_bytes!(
+            "../../public/backgrounds/qiguang-night-train-window-desktop-thumb.webp"
+        ),
+        mobile: include_bytes!("../../public/backgrounds/qiguang-night-train-window-mobile.webp"),
+        mobile_thumbnail: include_bytes!(
+            "../../public/backgrounds/qiguang-night-train-window-mobile-thumb.webp"
+        ),
+        desktop_width: 1586,
+        desktop_height: 992,
+        mobile_width: 971,
+        mobile_height: 1619,
+        is_builtin: true,
+    },
+    WallpaperSeed {
+        id: "qiguang-woodwork-studio",
+        name: "木作工坊",
+        desktop: include_bytes!("../../public/backgrounds/qiguang-woodwork-studio-desktop.webp"),
+        desktop_thumbnail: include_bytes!(
+            "../../public/backgrounds/qiguang-woodwork-studio-desktop-thumb.webp"
+        ),
+        mobile: include_bytes!("../../public/backgrounds/qiguang-woodwork-studio-mobile.webp"),
+        mobile_thumbnail: include_bytes!(
+            "../../public/backgrounds/qiguang-woodwork-studio-mobile-thumb.webp"
+        ),
+        desktop_width: 1586,
+        desktop_height: 992,
+        mobile_width: 971,
+        mobile_height: 1619,
+        is_builtin: true,
+    },
+    WallpaperSeed {
+        id: "qiguang-greenhouse-gardener",
+        name: "温室巡游",
+        desktop: include_bytes!(
+            "../../public/backgrounds/qiguang-greenhouse-gardener-desktop.webp"
+        ),
+        desktop_thumbnail: include_bytes!(
+            "../../public/backgrounds/qiguang-greenhouse-gardener-desktop-thumb.webp"
+        ),
+        mobile: include_bytes!("../../public/backgrounds/qiguang-greenhouse-gardener-mobile.webp"),
+        mobile_thumbnail: include_bytes!(
+            "../../public/backgrounds/qiguang-greenhouse-gardener-mobile-thumb.webp"
+        ),
+        desktop_width: 1586,
+        desktop_height: 992,
+        mobile_width: 971,
+        mobile_height: 1619,
+        is_builtin: true,
+    },
+    WallpaperSeed {
+        id: "qiguang-record-shop",
+        name: "旧唱片店",
+        desktop: include_bytes!("../../public/backgrounds/qiguang-record-shop-desktop.webp"),
+        desktop_thumbnail: include_bytes!(
+            "../../public/backgrounds/qiguang-record-shop-desktop-thumb.webp"
+        ),
+        mobile: include_bytes!("../../public/backgrounds/qiguang-record-shop-mobile.webp"),
+        mobile_thumbnail: include_bytes!(
+            "../../public/backgrounds/qiguang-record-shop-mobile-thumb.webp"
+        ),
+        desktop_width: 1586,
+        desktop_height: 992,
+        mobile_width: 971,
+        mobile_height: 1619,
+        is_builtin: true,
+    },
+    WallpaperSeed {
+        id: "qiguang-rooftop-garden",
+        name: "屋顶菜园",
+        desktop: include_bytes!("../../public/backgrounds/qiguang-rooftop-garden-desktop.webp"),
+        desktop_thumbnail: include_bytes!(
+            "../../public/backgrounds/qiguang-rooftop-garden-desktop-thumb.webp"
+        ),
+        mobile: include_bytes!("../../public/backgrounds/qiguang-rooftop-garden-mobile.webp"),
+        mobile_thumbnail: include_bytes!(
+            "../../public/backgrounds/qiguang-rooftop-garden-mobile-thumb.webp"
+        ),
+        desktop_width: 1586,
+        desktop_height: 992,
+        mobile_width: 971,
+        mobile_height: 1619,
+        is_builtin: true,
+    },
+    WallpaperSeed {
+        id: "qiguang-closing-market",
+        name: "收摊之后",
+        desktop: include_bytes!("../../public/backgrounds/qiguang-closing-market-desktop.webp"),
+        desktop_thumbnail: include_bytes!(
+            "../../public/backgrounds/qiguang-closing-market-desktop-thumb.webp"
+        ),
+        mobile: include_bytes!("../../public/backgrounds/qiguang-closing-market-mobile.webp"),
+        mobile_thumbnail: include_bytes!(
+            "../../public/backgrounds/qiguang-closing-market-mobile-thumb.webp"
+        ),
+        desktop_width: 1586,
+        desktop_height: 992,
+        mobile_width: 971,
+        mobile_height: 1619,
+        is_builtin: true,
+    },
+];
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ArticleDraft {
     pub(crate) date: String,
@@ -101,6 +371,10 @@ pub(crate) struct ReviewPersistence<'a> {
 }
 
 pub(crate) struct KnowledgePersistence<'a> {
+    conn: &'a mut Connection,
+}
+
+pub(crate) struct WallpaperPersistence<'a> {
     conn: &'a mut Connection,
 }
 
@@ -482,6 +756,12 @@ impl Database {
 
     pub(crate) fn knowledge(&mut self) -> KnowledgePersistence<'_> {
         KnowledgePersistence {
+            conn: &mut self.conn,
+        }
+    }
+
+    pub(crate) fn wallpapers(&mut self) -> WallpaperPersistence<'_> {
+        WallpaperPersistence {
             conn: &mut self.conn,
         }
     }
@@ -1624,6 +1904,82 @@ impl Database {
                 )?;
             }
             transaction.execute("INSERT INTO schema_version (version) VALUES (24)", [])?;
+            transaction.commit()?;
+        }
+
+        if current < 25 {
+            let transaction = self.conn.unchecked_transaction()?;
+            transaction.execute_batch(
+                "CREATE TABLE IF NOT EXISTS wallpaper_state (
+                    id INTEGER PRIMARY KEY CHECK (id=1),
+                    revision INTEGER NOT NULL DEFAULT 0,
+                    preferences_json TEXT NOT NULL,
+                    presets_json TEXT NOT NULL DEFAULT '[]'
+                );
+                CREATE TABLE IF NOT EXISTS wallpaper_migrations (
+                    migration_id TEXT PRIMARY KEY,
+                    migrated_at INTEGER NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS wallpaper_assets (
+                    id TEXT PRIMARY KEY,
+                    is_builtin INTEGER NOT NULL DEFAULT 0 CHECK (is_builtin IN (0, 1)),
+                    is_sample INTEGER NOT NULL DEFAULT 0 CHECK (is_sample IN (0, 1)),
+                    metadata_json TEXT NOT NULL,
+                    desktop_mime TEXT NOT NULL,
+                    desktop_blob BLOB NOT NULL,
+                    mobile_mime TEXT,
+                    mobile_blob BLOB,
+                    desktop_thumbnail_mime TEXT,
+                    desktop_thumbnail_blob BLOB,
+                    mobile_thumbnail_mime TEXT,
+                    mobile_thumbnail_blob BLOB
+                );",
+            )?;
+            let preferences_json = serde_json::to_string(&default_wallpaper_preferences())
+                .map_err(|error| rusqlite::Error::ToSqlConversionFailure(Box::new(error)))?;
+            transaction.execute(
+                "INSERT OR IGNORE INTO wallpaper_state
+                    (id, revision, preferences_json, presets_json)
+                 VALUES (1, 0, ?1, '[]')",
+                params![preferences_json],
+            )?;
+
+            // Seed shipped artwork once. The old night-sakura ID remains compatible,
+            // but only the other Qiguang artworks stay protected built-in assets.
+            for seed in WALLPAPER_SEEDS {
+                let created_at = if seed.is_builtin {
+                    0
+                } else {
+                    Local::now().timestamp_millis()
+                };
+                let desktop_thumbnail = seed.desktop_thumbnail;
+                let mobile_thumbnail = seed.mobile_thumbnail;
+                let metadata = serde_json::json!({
+                    "id": seed.id,
+                    "name": seed.name,
+                    "createdAt": created_at,
+                    "originalBytes": seed.desktop.len() + seed.mobile.len(),
+                    "optimizedBytes": seed.desktop.len() + seed.mobile.len(),
+                    "desktopWidth": seed.desktop_width,
+                    "desktopHeight": seed.desktop_height,
+                    "mobileWidth": seed.mobile_width,
+                    "mobileHeight": seed.mobile_height,
+                    "desktopThumbnailBytes": desktop_thumbnail.len(),
+                    "mobileThumbnailBytes": mobile_thumbnail.len(),
+                    "isBuiltIn": seed.is_builtin,
+                    "desktopName": format!("{}-PC.webp", seed.name),
+                    "mobileName": format!("{}-移动端.webp", seed.name)
+                });
+                transaction.execute(
+                    "INSERT OR IGNORE INTO wallpaper_assets (
+                        id, is_builtin, is_sample, metadata_json, desktop_mime, desktop_blob, mobile_mime, mobile_blob,
+                        desktop_thumbnail_mime, desktop_thumbnail_blob,
+                        mobile_thumbnail_mime, mobile_thumbnail_blob
+                     ) VALUES (?1, ?2, ?3, ?4, 'image/webp', ?5, 'image/webp', ?6, 'image/webp', ?7, 'image/webp', ?8)",
+                    params![seed.id, seed.is_builtin, seed.id == "anime-night", metadata.to_string(), seed.desktop, seed.mobile, desktop_thumbnail, mobile_thumbnail],
+                )?;
+            }
+            transaction.execute("INSERT INTO schema_version (version) VALUES (25)", [])?;
             transaction.commit()?;
         }
 
@@ -4962,7 +5318,7 @@ mod migration_tests {
                 row.get(0)
             })
             .unwrap();
-        assert_eq!(version, 24);
+        assert_eq!(version, 25);
     }
 
     #[test]
@@ -5099,7 +5455,7 @@ mod migration_tests {
                 row.get(0)
             })
             .expect("read schema version");
-        assert_eq!(version, 24);
+        assert_eq!(version, 25);
     }
 
     fn v3_knowledge_cards_table() -> &'static str {
@@ -5266,7 +5622,7 @@ mod migration_tests {
                 row.get(0)
             })
             .expect("read schema version");
-        assert_eq!(version, 24);
+        assert_eq!(version, 25);
 
         // 已迁移的库再次 initialize 必须幂等，不报重复列错误
         db.initialize().expect("re-initialize is idempotent");
@@ -5300,7 +5656,7 @@ mod migration_tests {
                 row.get(0)
             })
             .expect("read schema version");
-        assert_eq!(version, 24);
+        assert_eq!(version, 25);
 
         let settings = db.review_settings().expect("default review settings");
         assert_eq!(settings.new_cards_per_day, 20);
@@ -5725,8 +6081,1473 @@ mod migration_v5_tests {
                 row.get(0)
             })
             .expect("read schema version");
-        assert_eq!(version, 24);
+        assert_eq!(version, 25);
         db.initialize()
             .expect("re-initialize after v5 is idempotent");
     }
+}
+
+#[cfg(test)]
+mod wallpaper_migration_tests {
+    use super::*;
+    use serde_json::Value;
+
+    #[test]
+    fn v24_migration_creates_plain_wallpaper_defaults_and_one_deletable_sample() {
+        let conn = Connection::open_in_memory().expect("in-memory v24 database");
+        conn.execute_batch(
+            "CREATE TABLE schema_version (version INTEGER NOT NULL);
+             INSERT INTO schema_version (version) VALUES (24);",
+        )
+        .expect("create v24 schema marker");
+        let db = Database { conn };
+
+        db.initialize().expect("migrate v24 database");
+
+        let (revision, preferences_json): (i64, String) = db
+            .conn
+            .query_row(
+                "SELECT revision, preferences_json FROM wallpaper_state WHERE id=1",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .expect("read initial wallpaper state");
+        assert_eq!(revision, 0);
+        let preferences: Value =
+            serde_json::from_str(&preferences_json).expect("valid default preferences JSON");
+        for module in [
+            "today",
+            "records",
+            "search",
+            "knowledge",
+            "review",
+            "stats",
+            "reviews",
+            "settings",
+        ] {
+            assert_eq!(
+                preferences[module]["wallpaperIds"],
+                serde_json::json!([]),
+                "{module} must use its ordinary page background by default"
+            );
+        }
+        assert_eq!(
+            preferences["stats"]["surfaces"]["stats.monthlyOverview"]["wallpaperIds"],
+            serde_json::json!([]),
+            "monthly overview must not inherit the test image"
+        );
+
+        let sample: WallpaperSampleRow = db
+            .conn
+            .query_row(
+                "SELECT desktop_blob, mobile_blob, is_builtin, is_sample, desktop_thumbnail_blob, mobile_thumbnail_blob FROM wallpaper_assets WHERE id='anime-night'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?)),
+            )
+            .expect("seed the night-sakura image as an ordinary asset");
+        assert!(!sample.0.is_empty());
+        assert!(!sample.1.is_empty());
+        assert!(
+            sample.3,
+            "night-sakura is marked only for the initial empty-server check"
+        );
+        assert!(!sample.4.as_ref().expect("desktop thumbnail").is_empty());
+        assert!(!sample.5.as_ref().expect("mobile thumbnail").is_empty());
+        assert!(
+            !sample.2,
+            "night-sakura is deletable, unlike the Qiguang built-ins"
+        );
+        let builtin_count: i64 = db
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM wallpaper_assets WHERE is_builtin=1",
+                [],
+                |row| row.get(0),
+            )
+            .expect("count immutable Qiguang wallpapers");
+        assert_eq!(builtin_count, 12);
+
+        db.conn
+            .execute("DELETE FROM wallpaper_assets WHERE id='anime-night'", [])
+            .expect("delete the sample asset");
+        db.initialize().expect("re-initialization is idempotent");
+        let sample_count: i64 = db
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM wallpaper_assets WHERE id='anime-night'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("check sample was not reinserted");
+        assert_eq!(sample_count, 0, "deletion must not be undone by startup");
+        let builtin_count: i64 = db
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM wallpaper_assets WHERE is_builtin=1",
+                [],
+                |row| row.get(0),
+            )
+            .expect("built-in wallpapers remain protected");
+        assert_eq!(builtin_count, 12);
+        let version: i64 = db
+            .conn
+            .query_row("SELECT MAX(version) FROM schema_version", [], |row| {
+                row.get(0)
+            })
+            .expect("read schema version");
+        assert_eq!(version, 25);
+    }
+}
+
+impl WallpaperPersistence<'_> {
+    pub(crate) fn update_target(
+        &mut self,
+        target: &str,
+        preference: &WallpaperPreferenceValue,
+        expected_revision: i64,
+    ) -> std::result::Result<bool, WallpaperPersistenceError> {
+        let owner = if WALLPAPER_MODULE_IDS.contains(&target) {
+            Some(target)
+        } else {
+            WALLPAPER_SURFACE_MODULES
+                .iter()
+                .find(|(surface, _)| *surface == target)
+                .map(|(_, module)| *module)
+        }
+        .ok_or_else(|| WallpaperPersistenceError::Invalid("壁纸目标不存在。".into()))?;
+
+        let transaction = self.conn.transaction()?;
+        let (revision, preferences_json): (i64, String) = transaction.query_row(
+            "SELECT revision, preferences_json FROM wallpaper_state WHERE id=1",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )?;
+        if revision != expected_revision {
+            return Ok(false);
+        }
+
+        let mut preferences: WallpaperPreferences = serde_json::from_str(&preferences_json)
+            .map_err(|error| WallpaperPersistenceError::Invalid(error.to_string()))?;
+        validate_wallpaper_preference_value(preference)?;
+        let available_ids = wallpaper_asset_ids(&transaction)?;
+        if preference
+            .wallpaper_ids
+            .iter()
+            .any(|id| !available_ids.contains(id))
+        {
+            return Err(WallpaperPersistenceError::Invalid(
+                "所选壁纸已不在图库中；请刷新后重试。".into(),
+            ));
+        }
+        if WALLPAPER_MODULE_IDS.contains(&target) {
+            let page = preferences
+                .get_mut(owner)
+                .ok_or_else(|| WallpaperPersistenceError::Invalid("页面壁纸设置缺失。".into()))?;
+            page.value = preference.clone();
+        } else {
+            let page = preferences
+                .get_mut(owner)
+                .ok_or_else(|| WallpaperPersistenceError::Invalid("页面壁纸设置缺失。".into()))?;
+            page.surfaces.insert(target.to_string(), preference.clone());
+        }
+        let next_json = serde_json::to_string(&preferences)
+            .map_err(|error| WallpaperPersistenceError::Invalid(error.to_string()))?;
+        transaction.execute(
+            "UPDATE wallpaper_state SET revision=revision+1, preferences_json=?1 WHERE id=1",
+            params![next_json],
+        )?;
+        transaction.commit()?;
+        Ok(true)
+    }
+
+    pub(crate) fn apply_to_targets(
+        &mut self,
+        targets: &[String],
+        wallpaper_ids: &[String],
+        mode: WallpaperApplyMode,
+        expected_revision: i64,
+    ) -> std::result::Result<bool, WallpaperPersistenceError> {
+        if targets.is_empty() || wallpaper_ids.is_empty() {
+            return Err(WallpaperPersistenceError::Invalid(
+                "请选择壁纸和要应用的页面或区域。".into(),
+            ));
+        }
+        let mut unique_targets = Vec::new();
+        for target in targets {
+            if wallpaper_module_for_target(target).is_none() {
+                return Err(WallpaperPersistenceError::Invalid(
+                    "壁纸目标不存在。".into(),
+                ));
+            }
+            if !unique_targets.contains(target) {
+                unique_targets.push(target.clone());
+            }
+        }
+        let mut unique_ids = Vec::new();
+        for id in wallpaper_ids {
+            if !unique_ids.contains(id) {
+                unique_ids.push(id.clone());
+            }
+        }
+
+        let transaction = self.conn.transaction()?;
+        let (revision, preferences_json, presets_json): (i64, String, String) = transaction
+            .query_row(
+                "SELECT revision, preferences_json, presets_json FROM wallpaper_state WHERE id=1",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )?;
+        if revision != expected_revision {
+            return Ok(false);
+        }
+        let available_ids = wallpaper_asset_ids(&transaction)?;
+        if unique_ids.iter().any(|id| !available_ids.contains(id)) {
+            return Err(WallpaperPersistenceError::Invalid(
+                "所选壁纸已不在图库中；请刷新后重试。".into(),
+            ));
+        }
+        let mut preferences: WallpaperPreferences = serde_json::from_str(&preferences_json)
+            .map_err(|error| WallpaperPersistenceError::Invalid(error.to_string()))?;
+        let presets: Vec<WallpaperPreset> = serde_json::from_str(&presets_json)
+            .map_err(|error| WallpaperPersistenceError::Invalid(error.to_string()))?;
+
+        for target in unique_targets {
+            let current = wallpaper_preference_for_target(&preferences, &target)
+                .ok_or_else(|| WallpaperPersistenceError::Invalid("页面壁纸设置缺失。".into()))?;
+            let mut next_ids = if mode == WallpaperApplyMode::Replace {
+                unique_ids.clone()
+            } else {
+                let mut result = current.wallpaper_ids.clone();
+                for id in &unique_ids {
+                    if !result.contains(id) {
+                        result.push(id.clone());
+                    }
+                }
+                result
+            };
+            if next_ids.len() > WALLPAPER_MAX_PER_TARGET {
+                return Err(WallpaperPersistenceError::Invalid(format!(
+                    "每个页面或区域最多分配 {WALLPAPER_MAX_PER_TARGET} 张壁纸。"
+                )));
+            }
+            let cycle_daily = next_ids.len() > 1
+                && (mode == WallpaperApplyMode::Replace
+                    || current.cycle_daily
+                    || current.wallpaper_ids.len() <= 1);
+            let next = WallpaperPreferenceValue {
+                wallpaper_ids: std::mem::take(&mut next_ids),
+                overlay: current.overlay,
+                cycle_daily,
+            };
+            validate_wallpaper_preference_value(&next)?;
+            set_wallpaper_preference_for_target(&mut preferences, &target, next)?;
+        }
+        write_wallpaper_state(&transaction, revision + 1, &preferences, &presets)?;
+        transaction.commit()?;
+        Ok(true)
+    }
+
+    pub(crate) fn replace_preferences(
+        &mut self,
+        preferences: &WallpaperPreferences,
+        expected_revision: i64,
+    ) -> std::result::Result<bool, WallpaperPersistenceError> {
+        let transaction = self.conn.transaction()?;
+        let (revision, presets_json): (i64, String) = transaction.query_row(
+            "SELECT revision, presets_json FROM wallpaper_state WHERE id=1",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )?;
+        if revision != expected_revision {
+            return Ok(false);
+        }
+        let presets: Vec<WallpaperPreset> = serde_json::from_str(&presets_json)
+            .map_err(|error| WallpaperPersistenceError::Invalid(error.to_string()))?;
+        let available_ids = wallpaper_asset_ids(&transaction)?;
+        validate_wallpaper_preferences(preferences, &available_ids)?;
+        write_wallpaper_state(&transaction, revision + 1, preferences, &presets)?;
+        transaction.commit()?;
+        Ok(true)
+    }
+
+    pub(crate) fn replace_package<F>(
+        &mut self,
+        preferences: &WallpaperPreferences,
+        presets: &[WallpaperPreset],
+        asset_count: usize,
+        expected_revision: i64,
+        mut load_asset: F,
+    ) -> std::result::Result<bool, WallpaperPersistenceError>
+    where
+        F: FnMut(usize) -> std::result::Result<WallpaperAssetUpload, String>,
+    {
+        if asset_count > 1024 || presets.len() > WALLPAPER_MAX_PRESETS {
+            return Err(WallpaperPersistenceError::Invalid(
+                "完整迁移包中的壁纸数量超出上限。".into(),
+            ));
+        }
+        let transaction = self.conn.transaction()?;
+        let (revision,): (i64,) = transaction.query_row(
+            "SELECT revision FROM wallpaper_state WHERE id=1",
+            [],
+            |row| Ok((row.get(0)?,)),
+        )?;
+        if revision != expected_revision {
+            return Ok(false);
+        }
+        transaction.execute("DELETE FROM wallpaper_assets WHERE is_builtin=0", [])?;
+
+        let mut resolved_preferences = preferences.clone();
+        let mut resolved_presets = presets.to_vec();
+        let mut seen_ids = HashSet::new();
+        for index in 0..asset_count {
+            let mut upload = load_asset(index).map_err(WallpaperPersistenceError::Invalid)?;
+            let original_id = upload.metadata.id.clone();
+            if !seen_ids.insert(original_id.clone()) {
+                return Err(WallpaperPersistenceError::Invalid(
+                    "完整迁移包中有重复壁纸 ID。".into(),
+                ));
+            }
+            let mut checked_upload = upload.clone();
+            checked_upload.metadata.is_built_in = false;
+            validate_wallpaper_asset_upload(&checked_upload)?;
+
+            if upload.metadata.is_built_in {
+                let stored: Option<WallpaperBuiltInAssetRow> = transaction
+                    .query_row(
+                        "SELECT is_builtin, desktop_mime, desktop_blob, mobile_mime, mobile_blob
+                         FROM wallpaper_assets WHERE id=?1",
+                        params![original_id],
+                        |row| {
+                            Ok((
+                                row.get(0)?,
+                                row.get(1)?,
+                                row.get(2)?,
+                                row.get(3)?,
+                                row.get(4)?,
+                            ))
+                        },
+                    )
+                    .optional()?;
+                let matches_current_build = stored.is_some_and(|stored| {
+                    stored.0
+                        && stored.1 == upload.desktop_mime
+                        && stored.2 == upload.desktop_blob
+                        && stored.3 == upload.mobile_mime
+                        && stored.4 == upload.mobile_blob
+                });
+                if matches_current_build {
+                    continue;
+                }
+
+                // Keep the package artwork when a later app build ships different bytes
+                // under the same protected catalog ID. The package copy becomes an
+                // ordinary, user-managed asset and every imported reference follows it.
+                let imported_id = imported_wallpaper_id(&original_id);
+                remap_wallpaper_id(
+                    &mut resolved_preferences,
+                    &mut resolved_presets,
+                    &original_id,
+                    &imported_id,
+                );
+                upload.metadata.id = imported_id;
+                upload.metadata.is_built_in = false;
+            } else {
+                let reserved_id: bool = transaction.query_row(
+                    "SELECT EXISTS(SELECT 1 FROM wallpaper_assets WHERE id=?1 AND is_builtin=1)",
+                    params![upload.metadata.id],
+                    |row| row.get(0),
+                )?;
+                if reserved_id {
+                    return Err(WallpaperPersistenceError::Invalid(
+                        "迁移包的自定义图片使用了内置壁纸编号。".into(),
+                    ));
+                }
+            }
+
+            let mut metadata = upload.metadata.clone();
+            metadata.optimized_bytes = (upload.desktop_blob.len()
+                + upload.mobile_blob.as_ref().map_or(0, Vec::len))
+                as u64;
+            metadata.desktop_thumbnail_bytes = upload.desktop_thumbnail_blob.len() as u64;
+            metadata.mobile_thumbnail_bytes = upload
+                .mobile_thumbnail_blob
+                .as_ref()
+                .map(|blob| blob.len() as u64);
+            let metadata_json = serde_json::to_string(&metadata)
+                .map_err(|error| WallpaperPersistenceError::Invalid(error.to_string()))?;
+            transaction.execute(
+                "INSERT INTO wallpaper_assets (
+                    id, is_builtin, metadata_json, desktop_mime, desktop_blob, mobile_mime, mobile_blob,
+                    desktop_thumbnail_mime, desktop_thumbnail_blob,
+                    mobile_thumbnail_mime, mobile_thumbnail_blob
+                 ) VALUES (?1, 0, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+                params![
+                    metadata.id, metadata_json, upload.desktop_mime, upload.desktop_blob,
+                    upload.mobile_mime, upload.mobile_blob, upload.desktop_thumbnail_mime,
+                    upload.desktop_thumbnail_blob, upload.mobile_thumbnail_mime,
+                    upload.mobile_thumbnail_blob,
+                ],
+            )?;
+        }
+        if wallpaper_storage_used_bytes(&transaction)? > WALLPAPER_MAX_ASSETS_BYTES {
+            return Err(WallpaperPersistenceError::QuotaExceeded);
+        }
+        let available_ids = wallpaper_asset_ids(&transaction)?;
+        validate_wallpaper_preferences(&resolved_preferences, &available_ids)?;
+        let mut safe_presets = Vec::with_capacity(resolved_presets.len());
+        let mut preset_ids = HashSet::new();
+        let mut preset_names = HashSet::new();
+        for source in &resolved_presets {
+            if source.schema_version != WALLPAPER_PRESET_SCHEMA_VERSION
+                || !preset_ids.insert(source.id.as_str())
+            {
+                return Err(WallpaperPersistenceError::Invalid(
+                    "完整迁移包中的壁纸方案格式或编号无效。".into(),
+                ));
+            }
+            let name = normalize_wallpaper_preset_name(&source.name)?;
+            if !preset_names.insert(name.to_lowercase()) {
+                return Err(WallpaperPersistenceError::Invalid(
+                    "完整迁移包中存在重名壁纸方案。".into(),
+                ));
+            }
+            validate_wallpaper_preferences(&source.preferences, &available_ids)?;
+            let mut preset = source.clone();
+            preset.name = name;
+            safe_presets.push(preset);
+        }
+        write_wallpaper_state(
+            &transaction,
+            revision + 1,
+            &resolved_preferences,
+            &safe_presets,
+        )?;
+        transaction.commit()?;
+        Ok(true)
+    }
+
+    pub(crate) fn restore_default(
+        &mut self,
+        expected_revision: i64,
+    ) -> std::result::Result<bool, WallpaperPersistenceError> {
+        let transaction = self.conn.transaction()?;
+        let (revision, presets_json): (i64, String) = transaction.query_row(
+            "SELECT revision, presets_json FROM wallpaper_state WHERE id=1",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )?;
+        if revision != expected_revision {
+            return Ok(false);
+        }
+        let presets: Vec<WallpaperPreset> = serde_json::from_str(&presets_json)
+            .map_err(|error| WallpaperPersistenceError::Invalid(error.to_string()))?;
+        let defaults = default_wallpaper_preferences();
+        write_wallpaper_state(&transaction, revision + 1, &defaults, &presets)?;
+        transaction.commit()?;
+        Ok(true)
+    }
+
+    pub(crate) fn save_preset(
+        &mut self,
+        name: &str,
+        preset_id: Option<&str>,
+        expected_revision: i64,
+    ) -> std::result::Result<Option<WallpaperPreset>, WallpaperPersistenceError> {
+        let name = normalize_wallpaper_preset_name(name)?;
+        let transaction = self.conn.transaction()?;
+        let (revision, preferences_json, presets_json): (i64, String, String) = transaction
+            .query_row(
+                "SELECT revision, preferences_json, presets_json FROM wallpaper_state WHERE id=1",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )?;
+        if revision != expected_revision {
+            return Ok(None);
+        }
+        let preferences: WallpaperPreferences = serde_json::from_str(&preferences_json)
+            .map_err(|error| WallpaperPersistenceError::Invalid(error.to_string()))?;
+        let mut presets: Vec<WallpaperPreset> = serde_json::from_str(&presets_json)
+            .map_err(|error| WallpaperPersistenceError::Invalid(error.to_string()))?;
+        if presets.iter().any(|preset| {
+            Some(preset.id.as_str()) != preset_id && preset.name.eq_ignore_ascii_case(&name)
+        }) {
+            return Err(WallpaperPersistenceError::Invalid(
+                "已存在同名方案，请更换名称。".into(),
+            ));
+        }
+        let available_ids = wallpaper_asset_ids(&transaction)?;
+        if wallpaper_ids_in_preferences(&preferences)
+            .iter()
+            .any(|id| !available_ids.contains(id))
+        {
+            return Err(WallpaperPersistenceError::Invalid(
+                "当前设置引用的壁纸不在图库中；请先修复分配。".into(),
+            ));
+        }
+        let now = Local::now().timestamp_millis();
+        let saved = if let Some(id) = preset_id {
+            let preset = presets
+                .iter_mut()
+                .find(|preset| preset.id == id)
+                .ok_or_else(|| WallpaperPersistenceError::NotFound("壁纸方案不存在。".into()))?;
+            preset.name = name;
+            preset.updated_at = now;
+            preset.preferences = preferences;
+            preset.clone()
+        } else {
+            if presets.len() >= WALLPAPER_MAX_PRESETS {
+                return Err(WallpaperPersistenceError::Invalid(format!(
+                    "最多保存 {WALLPAPER_MAX_PRESETS} 组壁纸方案。"
+                )));
+            }
+            let preset = WallpaperPreset {
+                id: format!("wallpaper-preset-{}", Uuid::new_v4()),
+                name,
+                schema_version: WALLPAPER_PRESET_SCHEMA_VERSION,
+                created_at: now,
+                updated_at: now,
+                preferences,
+            };
+            presets.push(preset.clone());
+            preset
+        };
+        write_wallpaper_state(
+            &transaction,
+            revision + 1,
+            &read_wallpaper_preferences(&preferences_json)?,
+            &presets,
+        )?;
+        transaction.commit()?;
+        Ok(Some(saved))
+    }
+
+    pub(crate) fn apply_preset(
+        &mut self,
+        preset_id: &str,
+        expected_revision: i64,
+    ) -> std::result::Result<bool, WallpaperPersistenceError> {
+        let transaction = self.conn.transaction()?;
+        let (revision, preferences_json, presets_json): (i64, String, String) = transaction
+            .query_row(
+                "SELECT revision, preferences_json, presets_json FROM wallpaper_state WHERE id=1",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )?;
+        if revision != expected_revision {
+            return Ok(false);
+        }
+        let presets: Vec<WallpaperPreset> = serde_json::from_str(&presets_json)
+            .map_err(|error| WallpaperPersistenceError::Invalid(error.to_string()))?;
+        let preset = presets
+            .iter()
+            .find(|preset| preset.id == preset_id)
+            .ok_or_else(|| WallpaperPersistenceError::NotFound("壁纸方案不存在。".into()))?;
+        let available_ids = wallpaper_asset_ids(&transaction)?;
+        if wallpaper_ids_in_preferences(&preset.preferences)
+            .iter()
+            .any(|id| !available_ids.contains(id))
+        {
+            return Err(WallpaperPersistenceError::Invalid(
+                "此方案引用的壁纸不在图库中；请先修复方案。".into(),
+            ));
+        }
+        let _: WallpaperPreferences = serde_json::from_str(&preferences_json)
+            .map_err(|error| WallpaperPersistenceError::Invalid(error.to_string()))?;
+        write_wallpaper_state(&transaction, revision + 1, &preset.preferences, &presets)?;
+        transaction.commit()?;
+        Ok(true)
+    }
+
+    pub(crate) fn rename_preset(
+        &mut self,
+        preset_id: &str,
+        name: &str,
+        expected_revision: i64,
+    ) -> std::result::Result<bool, WallpaperPersistenceError> {
+        let name = normalize_wallpaper_preset_name(name)?;
+        let transaction = self.conn.transaction()?;
+        let (revision, preferences_json, presets_json): (i64, String, String) = transaction
+            .query_row(
+                "SELECT revision, preferences_json, presets_json FROM wallpaper_state WHERE id=1",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )?;
+        if revision != expected_revision {
+            return Ok(false);
+        }
+        let preferences: WallpaperPreferences = serde_json::from_str(&preferences_json)
+            .map_err(|error| WallpaperPersistenceError::Invalid(error.to_string()))?;
+        let mut presets: Vec<WallpaperPreset> = serde_json::from_str(&presets_json)
+            .map_err(|error| WallpaperPersistenceError::Invalid(error.to_string()))?;
+        if presets
+            .iter()
+            .any(|preset| preset.id != preset_id && preset.name.eq_ignore_ascii_case(&name))
+        {
+            return Err(WallpaperPersistenceError::Invalid(
+                "已存在同名方案，请更换名称。".into(),
+            ));
+        }
+        let preset = presets
+            .iter_mut()
+            .find(|preset| preset.id == preset_id)
+            .ok_or_else(|| WallpaperPersistenceError::NotFound("壁纸方案不存在。".into()))?;
+        preset.name = name;
+        preset.updated_at = Local::now().timestamp_millis();
+        write_wallpaper_state(&transaction, revision + 1, &preferences, &presets)?;
+        transaction.commit()?;
+        Ok(true)
+    }
+
+    pub(crate) fn delete_preset(
+        &mut self,
+        preset_id: &str,
+        expected_revision: i64,
+    ) -> std::result::Result<bool, WallpaperPersistenceError> {
+        let transaction = self.conn.transaction()?;
+        let (revision, preferences_json, presets_json): (i64, String, String) = transaction
+            .query_row(
+                "SELECT revision, preferences_json, presets_json FROM wallpaper_state WHERE id=1",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )?;
+        if revision != expected_revision {
+            return Ok(false);
+        }
+        let preferences: WallpaperPreferences = serde_json::from_str(&preferences_json)
+            .map_err(|error| WallpaperPersistenceError::Invalid(error.to_string()))?;
+        let mut presets: Vec<WallpaperPreset> = serde_json::from_str(&presets_json)
+            .map_err(|error| WallpaperPersistenceError::Invalid(error.to_string()))?;
+        let previous_len = presets.len();
+        presets.retain(|preset| preset.id != preset_id);
+        if presets.len() == previous_len {
+            return Err(WallpaperPersistenceError::NotFound(
+                "壁纸方案不存在。".into(),
+            ));
+        }
+        write_wallpaper_state(&transaction, revision + 1, &preferences, &presets)?;
+        transaction.commit()?;
+        Ok(true)
+    }
+
+    pub(crate) fn save_asset(
+        &mut self,
+        mut upload: WallpaperAssetUpload,
+        expected_revision: i64,
+    ) -> std::result::Result<bool, WallpaperPersistenceError> {
+        validate_wallpaper_asset_upload(&upload)?;
+        let transaction = self.conn.transaction()?;
+        let (revision, preferences_json, presets_json): (i64, String, String) = transaction
+            .query_row(
+                "SELECT revision, preferences_json, presets_json FROM wallpaper_state WHERE id=1",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )?;
+        if revision != expected_revision {
+            return Ok(false);
+        }
+        let exists: bool = transaction.query_row(
+            "SELECT EXISTS(SELECT 1 FROM wallpaper_assets WHERE id=?1)",
+            params![upload.metadata.id],
+            |row| row.get(0),
+        )?;
+        if exists {
+            return Err(WallpaperPersistenceError::Invalid(
+                "壁纸 ID 已存在；请刷新图库后重试。".into(),
+            ));
+        }
+        let current_bytes = wallpaper_storage_used_bytes(&transaction)?;
+        let added_bytes = wallpaper_asset_upload_bytes(&upload);
+        if current_bytes.saturating_add(added_bytes) > WALLPAPER_MAX_ASSETS_BYTES {
+            return Err(WallpaperPersistenceError::QuotaExceeded);
+        }
+        upload.metadata.created_at = Local::now().timestamp_millis();
+        upload.metadata.optimized_bytes =
+            (upload.desktop_blob.len() + upload.mobile_blob.as_ref().map_or(0, Vec::len)) as u64;
+        upload.metadata.desktop_thumbnail_bytes = upload.desktop_thumbnail_blob.len() as u64;
+        upload.metadata.mobile_thumbnail_bytes = upload
+            .mobile_thumbnail_blob
+            .as_ref()
+            .map(|blob| blob.len() as u64);
+        let metadata_json = serde_json::to_string(&upload.metadata)
+            .map_err(|error| WallpaperPersistenceError::Invalid(error.to_string()))?;
+        transaction.execute(
+            "INSERT INTO wallpaper_assets (
+                id, metadata_json, desktop_mime, desktop_blob, mobile_mime, mobile_blob,
+                desktop_thumbnail_mime, desktop_thumbnail_blob,
+                mobile_thumbnail_mime, mobile_thumbnail_blob
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+            params![
+                upload.metadata.id,
+                metadata_json,
+                upload.desktop_mime,
+                upload.desktop_blob,
+                upload.mobile_mime,
+                upload.mobile_blob,
+                upload.desktop_thumbnail_mime,
+                upload.desktop_thumbnail_blob,
+                upload.mobile_thumbnail_mime,
+                upload.mobile_thumbnail_blob,
+            ],
+        )?;
+        let preferences: WallpaperPreferences = serde_json::from_str(&preferences_json)
+            .map_err(|error| WallpaperPersistenceError::Invalid(error.to_string()))?;
+        let presets: Vec<WallpaperPreset> = serde_json::from_str(&presets_json)
+            .map_err(|error| WallpaperPersistenceError::Invalid(error.to_string()))?;
+        write_wallpaper_state(&transaction, revision + 1, &preferences, &presets)?;
+        transaction.commit()?;
+        Ok(true)
+    }
+
+    pub(crate) fn merge_local_migration(
+        &mut self,
+        migration_id: &str,
+        local_preferences: &WallpaperPreferences,
+        local_presets: &[WallpaperPreset],
+        uploads: Vec<WallpaperAssetUpload>,
+        expected_revision: i64,
+    ) -> std::result::Result<bool, WallpaperPersistenceError> {
+        let migration_id = migration_id.trim();
+        if migration_id.is_empty() || migration_id.len() > 120 {
+            return Err(WallpaperPersistenceError::Invalid(
+                "本机迁移编号无效。".into(),
+            ));
+        }
+        if local_presets.len() > WALLPAPER_MAX_PRESETS {
+            return Err(WallpaperPersistenceError::Invalid(
+                "本机保存的壁纸方案数量超出上限。".into(),
+            ));
+        }
+        for upload in &uploads {
+            validate_wallpaper_asset_upload(upload)?;
+        }
+
+        let transaction = self.conn.transaction()?;
+        let already_migrated: bool = transaction.query_row(
+            "SELECT EXISTS(SELECT 1 FROM wallpaper_migrations WHERE migration_id=?1)",
+            params![migration_id],
+            |row| row.get(0),
+        )?;
+        if already_migrated {
+            return Ok(true);
+        }
+        let (revision, current_preferences_json, current_presets_json): (i64, String, String) =
+            transaction.query_row(
+                "SELECT revision, preferences_json, presets_json FROM wallpaper_state WHERE id=1",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )?;
+        if revision != expected_revision {
+            return Ok(false);
+        }
+        let current_preferences: WallpaperPreferences =
+            read_wallpaper_preferences(&current_preferences_json)?;
+        let current_presets: Vec<WallpaperPreset> = serde_json::from_str(&current_presets_json)
+            .map_err(|error| WallpaperPersistenceError::Invalid(error.to_string()))?;
+        let default_preferences = default_wallpaper_preferences();
+        let user_asset_count: i64 = transaction.query_row(
+            "SELECT COUNT(*) FROM wallpaper_assets WHERE is_builtin=0 AND is_sample=0",
+            [],
+            |row| row.get(0),
+        )?;
+        let server_is_empty = current_preferences == default_preferences
+            && current_presets.is_empty()
+            && user_asset_count == 0;
+
+        for upload in uploads {
+            let existing: Option<WallpaperStoredAssetParts> = transaction
+                .query_row(
+                    "SELECT desktop_mime, desktop_blob, mobile_mime, mobile_blob,
+                            desktop_thumbnail_mime, desktop_thumbnail_blob,
+                            mobile_thumbnail_mime, mobile_thumbnail_blob
+                     FROM wallpaper_assets WHERE id=?1",
+                    params![upload.metadata.id],
+                    |row| {
+                        Ok((
+                            row.get(0)?,
+                            row.get(1)?,
+                            row.get(2)?,
+                            row.get(3)?,
+                            row.get(4)?,
+                            row.get(5)?,
+                            row.get(6)?,
+                            row.get(7)?,
+                        ))
+                    },
+                )
+                .optional()?;
+            if let Some(existing) = existing {
+                let same = existing.0 == upload.desktop_mime
+                    && existing.1 == upload.desktop_blob
+                    && existing.2 == upload.mobile_mime
+                    && existing.3 == upload.mobile_blob
+                    && existing.4.as_deref() == Some(upload.desktop_thumbnail_mime.as_str())
+                    && existing.5.as_deref() == Some(upload.desktop_thumbnail_blob.as_slice())
+                    && existing.6 == upload.mobile_thumbnail_mime
+                    && existing.7 == upload.mobile_thumbnail_blob;
+                if !same {
+                    return Err(WallpaperPersistenceError::Invalid(
+                        "本机壁纸编号与服务器现有图片冲突；本机数据仍保留。".into(),
+                    ));
+                }
+                continue;
+            }
+            let mut metadata = upload.metadata.clone();
+            metadata.is_built_in = false;
+            metadata.optimized_bytes = (upload.desktop_blob.len()
+                + upload.mobile_blob.as_ref().map_or(0, Vec::len))
+                as u64;
+            metadata.desktop_thumbnail_bytes = upload.desktop_thumbnail_blob.len() as u64;
+            metadata.mobile_thumbnail_bytes = upload
+                .mobile_thumbnail_blob
+                .as_ref()
+                .map(|blob| blob.len() as u64);
+            let metadata_json = serde_json::to_string(&metadata)
+                .map_err(|error| WallpaperPersistenceError::Invalid(error.to_string()))?;
+            transaction.execute(
+                "INSERT INTO wallpaper_assets (
+                    id, is_builtin, metadata_json, desktop_mime, desktop_blob, mobile_mime, mobile_blob,
+                    desktop_thumbnail_mime, desktop_thumbnail_blob,
+                    mobile_thumbnail_mime, mobile_thumbnail_blob
+                 ) VALUES (?1, 0, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+                params![
+                    metadata.id, metadata_json, upload.desktop_mime, upload.desktop_blob,
+                    upload.mobile_mime, upload.mobile_blob, upload.desktop_thumbnail_mime,
+                    upload.desktop_thumbnail_blob, upload.mobile_thumbnail_mime,
+                    upload.mobile_thumbnail_blob,
+                ],
+            )?;
+        }
+        if wallpaper_storage_used_bytes(&transaction)? > WALLPAPER_MAX_ASSETS_BYTES {
+            return Err(WallpaperPersistenceError::QuotaExceeded);
+        }
+
+        let available_ids = wallpaper_asset_ids(&transaction)?;
+        validate_wallpaper_preferences(local_preferences, &available_ids)?;
+        let mut merged_presets = current_presets.clone();
+        for local in local_presets {
+            if merged_presets
+                .iter()
+                .any(|existing| existing.preferences == local.preferences)
+            {
+                continue;
+            }
+            if merged_presets.len() >= WALLPAPER_MAX_PRESETS {
+                return Err(WallpaperPersistenceError::Invalid(
+                    "服务器壁纸方案已达上限；请先整理方案后重试本机迁移。".into(),
+                ));
+            }
+            validate_wallpaper_preferences(&local.preferences, &available_ids)?;
+            let mut preset = local.clone();
+            if merged_presets
+                .iter()
+                .any(|existing| existing.id == preset.id)
+            {
+                preset.id = format!("local-{}", Uuid::new_v4());
+            }
+            preset.schema_version = WALLPAPER_PRESET_SCHEMA_VERSION;
+            preset.name = unique_migrated_preset_name(&preset.name, &merged_presets)?;
+            merged_presets.push(preset);
+        }
+
+        let next_preferences = if server_is_empty {
+            local_preferences.clone()
+        } else {
+            if local_preferences != &current_preferences
+                && local_preferences != &default_preferences
+                && !merged_presets
+                    .iter()
+                    .any(|preset| preset.preferences == *local_preferences)
+            {
+                if merged_presets.len() >= WALLPAPER_MAX_PRESETS {
+                    return Err(WallpaperPersistenceError::Invalid(
+                        "服务器壁纸方案已达上限；请先整理方案后重试本机迁移。".into(),
+                    ));
+                }
+                let now = Local::now().timestamp_millis();
+                let preset = WallpaperPreset {
+                    id: format!("local-{}", Uuid::new_v4()),
+                    name: unique_migrated_preset_name("本机当前配置", &merged_presets)?,
+                    schema_version: WALLPAPER_PRESET_SCHEMA_VERSION,
+                    created_at: now,
+                    updated_at: now,
+                    preferences: local_preferences.clone(),
+                };
+                merged_presets.push(preset);
+            }
+            current_preferences
+        };
+        write_wallpaper_state(
+            &transaction,
+            revision + 1,
+            &next_preferences,
+            &merged_presets,
+        )?;
+        transaction.execute(
+            "INSERT INTO wallpaper_migrations (migration_id, migrated_at) VALUES (?1, ?2)",
+            params![migration_id, Local::now().timestamp_millis()],
+        )?;
+        transaction.commit()?;
+        Ok(true)
+    }
+
+    pub(crate) fn asset_variant_mime(
+        &self,
+        id: &str,
+        variant: WallpaperAssetVariant,
+    ) -> Result<Option<String>> {
+        let column = match variant {
+            WallpaperAssetVariant::Desktop => "desktop_mime",
+            WallpaperAssetVariant::Mobile => "mobile_mime",
+            WallpaperAssetVariant::DesktopThumbnail => "desktop_thumbnail_mime",
+            WallpaperAssetVariant::MobileThumbnail => "mobile_thumbnail_mime",
+        };
+        let sql = format!("SELECT {column} FROM wallpaper_assets WHERE id=?1");
+        self.conn
+            .query_row(&sql, params![id], |row| row.get(0))
+            .optional()
+            .map(Option::flatten)
+    }
+
+    pub(crate) fn asset_variant(
+        &self,
+        id: &str,
+        variant: WallpaperAssetVariant,
+    ) -> Result<Option<(String, Vec<u8>)>> {
+        let (mime_column, blob_column) = match variant {
+            WallpaperAssetVariant::Desktop => ("desktop_mime", "desktop_blob"),
+            WallpaperAssetVariant::Mobile => ("mobile_mime", "mobile_blob"),
+            WallpaperAssetVariant::DesktopThumbnail => {
+                ("desktop_thumbnail_mime", "desktop_thumbnail_blob")
+            }
+            WallpaperAssetVariant::MobileThumbnail => {
+                ("mobile_thumbnail_mime", "mobile_thumbnail_blob")
+            }
+        };
+        let sql = format!("SELECT {mime_column}, {blob_column} FROM wallpaper_assets WHERE id=?1");
+        self.conn
+            .query_row(&sql, params![id], |row| {
+                let mime: Option<String> = row.get(0)?;
+                let blob: Option<Vec<u8>> = row.get(1)?;
+                Ok(mime.zip(blob))
+            })
+            .optional()
+            .map(Option::flatten)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn delete_asset(
+        &mut self,
+        id: &str,
+        expected_revision: i64,
+    ) -> std::result::Result<bool, WallpaperPersistenceError> {
+        self.delete_assets(&[id.to_string()], expected_revision)
+    }
+
+    pub(crate) fn delete_assets(
+        &mut self,
+        ids: &[String],
+        expected_revision: i64,
+    ) -> std::result::Result<bool, WallpaperPersistenceError> {
+        if ids.is_empty() {
+            return Err(WallpaperPersistenceError::Invalid(
+                "请选择要删除的壁纸。".into(),
+            ));
+        }
+        let unique_ids: Vec<String> = ids
+            .iter()
+            .cloned()
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect();
+        let transaction = self.conn.transaction()?;
+        let (revision, preferences_json, presets_json): (i64, String, String) = transaction
+            .query_row(
+                "SELECT revision, preferences_json, presets_json FROM wallpaper_state WHERE id=1",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )?;
+        if revision != expected_revision {
+            return Ok(false);
+        }
+        for id in &unique_ids {
+            let asset_kind: Option<bool> = transaction
+                .query_row(
+                    "SELECT is_builtin FROM wallpaper_assets WHERE id=?1",
+                    params![id],
+                    |row| row.get(0),
+                )
+                .optional()?;
+            let Some(is_builtin) = asset_kind else {
+                return Err(WallpaperPersistenceError::NotFound(
+                    "所选壁纸中有资源已不存在。".into(),
+                ));
+            };
+            if is_builtin {
+                return Err(WallpaperPersistenceError::Invalid(
+                    "内置壁纸不能删除。".into(),
+                ));
+            }
+        }
+        let mut preferences: WallpaperPreferences = serde_json::from_str(&preferences_json)
+            .map_err(|error| WallpaperPersistenceError::Invalid(error.to_string()))?;
+        let mut presets: Vec<WallpaperPreset> = serde_json::from_str(&presets_json)
+            .map_err(|error| WallpaperPersistenceError::Invalid(error.to_string()))?;
+        for id in &unique_ids {
+            remove_wallpaper_reference(&mut preferences, id);
+            for preset in &mut presets {
+                remove_wallpaper_reference(&mut preset.preferences, id);
+            }
+            transaction.execute("DELETE FROM wallpaper_assets WHERE id=?1", params![id])?;
+        }
+        write_wallpaper_state(&transaction, revision + 1, &preferences, &presets)?;
+        transaction.commit()?;
+        Ok(true)
+    }
+
+    pub(crate) fn snapshot(&self) -> Result<WallpaperSnapshot> {
+        let (revision, preferences_json, presets_json): (i64, String, String) =
+            self.conn.query_row(
+                "SELECT revision, preferences_json, presets_json
+             FROM wallpaper_state WHERE id=1",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )?;
+        let preferences: WallpaperPreferences = serde_json::from_str(&preferences_json)
+            .map_err(|error| rusqlite::Error::ToSqlConversionFailure(Box::new(error)))?;
+        let presets: Vec<WallpaperPreset> = serde_json::from_str(&presets_json)
+            .map_err(|error| rusqlite::Error::ToSqlConversionFailure(Box::new(error)))?;
+        let asset_json: Vec<String> = {
+            let mut statement = self.conn.prepare(
+                "SELECT metadata_json FROM wallpaper_assets
+                 ORDER BY json_extract(metadata_json, '$.createdAt') DESC, id ASC",
+            )?;
+            let rows = statement.query_map([], |row| row.get(0))?;
+            rows.collect::<Result<_>>()?
+        };
+        let assets = asset_json
+            .into_iter()
+            .map(|json| {
+                serde_json::from_str::<WallpaperAssetMetadata>(&json)
+                    .map_err(|error| rusqlite::Error::ToSqlConversionFailure(Box::new(error)))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let storage_used_bytes: i64 = self.conn.query_row(
+            "SELECT COALESCE(SUM(
+                length(desktop_blob) + COALESCE(length(desktop_thumbnail_blob), 0) +
+                COALESCE(length(mobile_blob), 0) + COALESCE(length(mobile_thumbnail_blob), 0)
+             ), 0) FROM wallpaper_assets",
+            [],
+            |row| row.get(0),
+        )?;
+
+        let user_assets: i64 = self.conn.query_row(
+            "SELECT COUNT(*) FROM wallpaper_assets WHERE is_builtin=0 AND is_sample=0",
+            [],
+            |row| row.get(0),
+        )?;
+        let has_user_data = preferences != default_wallpaper_preferences()
+            || !presets.is_empty()
+            || user_assets > 0;
+
+        Ok(WallpaperSnapshot {
+            revision,
+            has_user_data,
+            storage_used_bytes: storage_used_bytes.max(0) as u64,
+            storage_quota_bytes: crate::models::WALLPAPER_MAX_ASSETS_BYTES,
+            preferences,
+            assets,
+            presets,
+        })
+    }
+}
+
+fn unique_migrated_preset_name(
+    name: &str,
+    existing: &[WallpaperPreset],
+) -> std::result::Result<String, WallpaperPersistenceError> {
+    let base = normalize_wallpaper_preset_name(name)?;
+    let is_unique = |candidate: &str| {
+        !existing
+            .iter()
+            .any(|preset| preset.name.eq_ignore_ascii_case(candidate))
+    };
+    if is_unique(&base) {
+        return Ok(base);
+    }
+    for suffix in [" · 本机", " · 本机 2", " · 本机 3", " · 本机 4"] {
+        let max_base_chars = 40usize.saturating_sub(suffix.chars().count());
+        let candidate = format!(
+            "{}{}",
+            base.chars().take(max_base_chars).collect::<String>(),
+            suffix
+        );
+        if is_unique(&candidate) {
+            return Ok(candidate);
+        }
+    }
+    Err(WallpaperPersistenceError::Invalid(
+        "本机方案与服务器方案重名，请先重命名后重试。".into(),
+    ))
+}
+
+fn normalize_wallpaper_preset_name(
+    name: &str,
+) -> std::result::Result<String, WallpaperPersistenceError> {
+    let normalized = name.split_whitespace().collect::<Vec<_>>().join(" ");
+    if normalized.is_empty() {
+        return Err(WallpaperPersistenceError::Invalid(
+            "请输入方案名称。".into(),
+        ));
+    }
+    if normalized.chars().count() > 40 {
+        return Err(WallpaperPersistenceError::Invalid(
+            "方案名称不能超过 40 个字符。".into(),
+        ));
+    }
+    Ok(normalized)
+}
+
+fn wallpaper_ids_in_preferences(preferences: &WallpaperPreferences) -> Vec<String> {
+    preferences
+        .values()
+        .flat_map(|page| {
+            std::iter::once(&page.value)
+                .chain(page.surfaces.values())
+                .flat_map(|value| value.wallpaper_ids.iter().cloned())
+        })
+        .collect()
+}
+
+fn read_wallpaper_preferences(
+    json: &str,
+) -> std::result::Result<WallpaperPreferences, WallpaperPersistenceError> {
+    serde_json::from_str(json)
+        .map_err(|error| WallpaperPersistenceError::Invalid(error.to_string()))
+}
+
+#[derive(Debug)]
+pub(crate) enum WallpaperPersistenceError {
+    Storage(rusqlite::Error),
+    Invalid(String),
+    NotFound(String),
+    QuotaExceeded,
+}
+
+impl fmt::Display for WallpaperPersistenceError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Storage(error) => write!(formatter, "{error}"),
+            Self::Invalid(message) | Self::NotFound(message) => formatter.write_str(message),
+            Self::QuotaExceeded => formatter.write_str("壁纸库容量不足；请删除部分壁纸后重试。"),
+        }
+    }
+}
+
+impl std::error::Error for WallpaperPersistenceError {}
+
+impl From<rusqlite::Error> for WallpaperPersistenceError {
+    fn from(error: rusqlite::Error) -> Self {
+        Self::Storage(error)
+    }
+}
+
+fn validate_wallpaper_preferences(
+    preferences: &WallpaperPreferences,
+    available_ids: &HashSet<String>,
+) -> std::result::Result<(), WallpaperPersistenceError> {
+    if preferences.len() != WALLPAPER_MODULE_IDS.len()
+        || WALLPAPER_MODULE_IDS
+            .iter()
+            .any(|module| !preferences.contains_key(*module))
+    {
+        return Err(WallpaperPersistenceError::Invalid(
+            "壁纸配置缺少页面设置。".into(),
+        ));
+    }
+    for module in WALLPAPER_MODULE_IDS {
+        let page = preferences
+            .get(module)
+            .ok_or_else(|| WallpaperPersistenceError::Invalid("页面壁纸设置缺失。".into()))?;
+        validate_wallpaper_preference_value(&page.value)?;
+        if page
+            .value
+            .wallpaper_ids
+            .iter()
+            .any(|id| !available_ids.contains(id))
+        {
+            return Err(WallpaperPersistenceError::Invalid(
+                "壁纸配置引用了图库中不存在的图片。".into(),
+            ));
+        }
+        let expected_surfaces: BTreeSet<&str> = WALLPAPER_SURFACE_MODULES
+            .iter()
+            .filter(|(_, owner)| *owner == module)
+            .map(|(surface, _)| *surface)
+            .collect();
+        let actual_surfaces: BTreeSet<&str> = page.surfaces.keys().map(String::as_str).collect();
+        if actual_surfaces != expected_surfaces {
+            return Err(WallpaperPersistenceError::Invalid(
+                "页面内容区域设置不完整。".into(),
+            ));
+        }
+        for value in page.surfaces.values() {
+            validate_wallpaper_preference_value(value)?;
+            if value
+                .wallpaper_ids
+                .iter()
+                .any(|id| !available_ids.contains(id))
+            {
+                return Err(WallpaperPersistenceError::Invalid(
+                    "壁纸配置引用了图库中不存在的图片。".into(),
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn validate_wallpaper_preference_value(
+    preference: &WallpaperPreferenceValue,
+) -> std::result::Result<(), WallpaperPersistenceError> {
+    if !(45..=85).contains(&preference.overlay) {
+        return Err(WallpaperPersistenceError::Invalid(
+            "背景遮罩范围必须为 45% 至 85%。".into(),
+        ));
+    }
+    if preference.wallpaper_ids.len() > WALLPAPER_MAX_PER_TARGET {
+        return Err(WallpaperPersistenceError::Invalid(format!(
+            "每个页面或区域最多分配 {WALLPAPER_MAX_PER_TARGET} 张壁纸。"
+        )));
+    }
+    let unique: HashSet<&String> = preference.wallpaper_ids.iter().collect();
+    if unique.len() != preference.wallpaper_ids.len() {
+        return Err(WallpaperPersistenceError::Invalid(
+            "壁纸分配中不能包含重复图片。".into(),
+        ));
+    }
+    if preference.cycle_daily && preference.wallpaper_ids.len() < 2 {
+        return Err(WallpaperPersistenceError::Invalid(
+            "至少分配两张壁纸后才能开启每日轮换。".into(),
+        ));
+    }
+    Ok(())
+}
+
+fn wallpaper_asset_ids(conn: &Connection) -> Result<HashSet<String>> {
+    let mut statement = conn.prepare("SELECT id FROM wallpaper_assets")?;
+    let rows = statement.query_map([], |row| row.get(0))?;
+    rows.collect()
+}
+
+fn validate_wallpaper_asset_upload(
+    upload: &WallpaperAssetUpload,
+) -> std::result::Result<(), WallpaperPersistenceError> {
+    let metadata = &upload.metadata;
+    if metadata.id.trim().is_empty() || metadata.id.len() > 120 {
+        return Err(WallpaperPersistenceError::Invalid("壁纸 ID 无效。".into()));
+    }
+    if metadata.is_built_in {
+        return Err(WallpaperPersistenceError::Invalid(
+            "上传资源不能标记为内置壁纸。".into(),
+        ));
+    }
+    let name = metadata.name.trim();
+    if name.is_empty() || name.chars().count() > 80 {
+        return Err(WallpaperPersistenceError::Invalid(
+            "壁纸名称不能为空且不能超过 80 个字符。".into(),
+        ));
+    }
+    if metadata.original_bytes > (WALLPAPER_MAX_VARIANT_BYTES as u64) * 2 {
+        return Err(WallpaperPersistenceError::Invalid(
+            "单张原图不能超过 20 MiB。".into(),
+        ));
+    }
+    if !valid_wallpaper_mime(&upload.desktop_mime)
+        || upload
+            .mobile_mime
+            .as_deref()
+            .is_some_and(|mime| !valid_wallpaper_mime(mime))
+        || !valid_wallpaper_mime(&upload.desktop_thumbnail_mime)
+        || upload
+            .mobile_thumbnail_mime
+            .as_deref()
+            .is_some_and(|mime| !valid_wallpaper_mime(mime))
+    {
+        return Err(WallpaperPersistenceError::Invalid(
+            "壁纸仅支持 PNG、JPEG 或 WebP。".into(),
+        ));
+    }
+    let blobs = [
+        Some(upload.desktop_blob.as_slice()),
+        upload.mobile_blob.as_deref(),
+        Some(upload.desktop_thumbnail_blob.as_slice()),
+        upload.mobile_thumbnail_blob.as_deref(),
+    ];
+    if blobs
+        .iter()
+        .flatten()
+        .any(|blob| blob.is_empty() || blob.len() > WALLPAPER_MAX_VARIANT_BYTES)
+    {
+        return Err(WallpaperPersistenceError::Invalid(
+            "单张处理后图片不能超过 20 MiB。".into(),
+        ));
+    }
+    if upload.desktop_blob.is_empty() || upload.desktop_thumbnail_blob.is_empty() {
+        return Err(WallpaperPersistenceError::Invalid(
+            "电脑端壁纸和缩略图不能为空。".into(),
+        ));
+    }
+    if upload.mobile_blob.is_some() != upload.mobile_mime.is_some()
+        || upload.mobile_thumbnail_blob.is_some() != upload.mobile_thumbnail_mime.is_some()
+    {
+        return Err(WallpaperPersistenceError::Invalid(
+            "移动端图片数据不完整。".into(),
+        ));
+    }
+    Ok(())
+}
+
+fn valid_wallpaper_mime(mime: &str) -> bool {
+    matches!(mime, "image/jpeg" | "image/png" | "image/webp")
+}
+
+fn wallpaper_asset_upload_bytes(upload: &WallpaperAssetUpload) -> u64 {
+    upload.desktop_blob.len() as u64
+        + upload
+            .mobile_blob
+            .as_ref()
+            .map_or(0, |blob| blob.len() as u64)
+        + upload.desktop_thumbnail_blob.len() as u64
+        + upload
+            .mobile_thumbnail_blob
+            .as_ref()
+            .map_or(0, |blob| blob.len() as u64)
+}
+
+fn wallpaper_storage_used_bytes(conn: &Connection) -> Result<u64> {
+    let bytes: i64 = conn.query_row(
+        "SELECT COALESCE(SUM(
+            length(desktop_blob) + COALESCE(length(desktop_thumbnail_blob), 0) +
+            COALESCE(length(mobile_blob), 0) + COALESCE(length(mobile_thumbnail_blob), 0)
+         ), 0) FROM wallpaper_assets",
+        [],
+        |row| row.get(0),
+    )?;
+    Ok(bytes.max(0) as u64)
+}
+
+fn write_wallpaper_state(
+    transaction: &rusqlite::Transaction<'_>,
+    revision: i64,
+    preferences: &WallpaperPreferences,
+    presets: &[WallpaperPreset],
+) -> Result<()> {
+    let preferences_json = serde_json::to_string(preferences)
+        .map_err(|error| rusqlite::Error::ToSqlConversionFailure(Box::new(error)))?;
+    let presets_json = serde_json::to_string(presets)
+        .map_err(|error| rusqlite::Error::ToSqlConversionFailure(Box::new(error)))?;
+    transaction.execute(
+        "UPDATE wallpaper_state SET revision=?1, preferences_json=?2, presets_json=?3 WHERE id=1",
+        params![revision, preferences_json, presets_json],
+    )?;
+    Ok(())
+}
+
+fn imported_wallpaper_id(id: &str) -> String {
+    let prefix = id.chars().take(88).collect::<String>();
+    let suffix = Uuid::new_v4().simple().to_string();
+    format!("package-{prefix}-{}", &suffix[..12])
+}
+
+fn remap_wallpaper_id(
+    preferences: &mut WallpaperPreferences,
+    presets: &mut [WallpaperPreset],
+    original_id: &str,
+    imported_id: &str,
+) {
+    let replace = |preferences: &mut WallpaperPreferences| {
+        for page in preferences.values_mut() {
+            for id in &mut page.value.wallpaper_ids {
+                if id == original_id {
+                    *id = imported_id.to_string();
+                }
+            }
+            for value in page.surfaces.values_mut() {
+                for id in &mut value.wallpaper_ids {
+                    if id == original_id {
+                        *id = imported_id.to_string();
+                    }
+                }
+            }
+        }
+    };
+    replace(preferences);
+    for preset in presets {
+        replace(&mut preset.preferences);
+    }
+}
+
+fn remove_wallpaper_reference(preferences: &mut WallpaperPreferences, id: &str) {
+    for preference in preferences.values_mut() {
+        preference
+            .value
+            .wallpaper_ids
+            .retain(|wallpaper_id| wallpaper_id != id);
+        if preference.value.wallpaper_ids.len() <= 1 {
+            preference.value.cycle_daily = false;
+        }
+        for surface in preference.surfaces.values_mut() {
+            surface
+                .wallpaper_ids
+                .retain(|wallpaper_id| wallpaper_id != id);
+            if surface.wallpaper_ids.len() <= 1 {
+                surface.cycle_daily = false;
+            }
+        }
+    }
+}
+
+fn wallpaper_module_for_target(target: &str) -> Option<&'static str> {
+    if WALLPAPER_MODULE_IDS.contains(&target) {
+        return WALLPAPER_MODULE_IDS
+            .iter()
+            .copied()
+            .find(|module| *module == target);
+    }
+    WALLPAPER_SURFACE_MODULES
+        .iter()
+        .find(|(surface, _)| *surface == target)
+        .map(|(_, module)| *module)
+}
+
+fn wallpaper_preference_for_target<'a>(
+    preferences: &'a WallpaperPreferences,
+    target: &str,
+) -> Option<&'a WallpaperPreferenceValue> {
+    let module = wallpaper_module_for_target(target)?;
+    let page = preferences.get(module)?;
+    if WALLPAPER_MODULE_IDS.contains(&target) {
+        Some(&page.value)
+    } else {
+        page.surfaces.get(target)
+    }
+}
+
+fn set_wallpaper_preference_for_target(
+    preferences: &mut WallpaperPreferences,
+    target: &str,
+    value: WallpaperPreferenceValue,
+) -> std::result::Result<(), WallpaperPersistenceError> {
+    let module = wallpaper_module_for_target(target)
+        .ok_or_else(|| WallpaperPersistenceError::Invalid("壁纸目标不存在。".into()))?;
+    let page = preferences
+        .get_mut(module)
+        .ok_or_else(|| WallpaperPersistenceError::Invalid("页面壁纸设置缺失。".into()))?;
+    if WALLPAPER_MODULE_IDS.contains(&target) {
+        page.value = value;
+    } else {
+        page.surfaces.insert(target.to_string(), value);
+    }
+    Ok(())
 }

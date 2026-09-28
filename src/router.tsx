@@ -394,6 +394,12 @@ function SettingsRoute() {
       wallpaperPreferences={shell.wallpaperPreferences}
       wallpaperPreferencesReady={shell.wallpaperPreferencesReady}
       wallpaperStorageError={shell.wallpaperStorageError}
+      wallpaperReadOnly={shell.wallpaperReadOnly}
+      wallpaperStorageUsedBytes={shell.wallpaperStorageUsedBytes}
+      wallpaperStorageQuotaBytes={shell.wallpaperStorageQuotaBytes}
+      localWallpaperMigration={shell.localWallpaperMigration}
+      onMigrateLocalWallpaper={shell.onMigrateLocalWallpaper}
+      onRefreshWallpaperSnapshot={shell.onRefreshWallpaperSnapshot}
       wallpaperAssets={shell.wallpaperAssets}
       wallpaperPresets={shell.wallpaperPresets}
       onChangeWallpaperPreference={shell.onChangeWallpaperPreference}

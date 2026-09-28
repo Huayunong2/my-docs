@@ -32,6 +32,7 @@ import {
 } from "../lib/storage";
 import { type ThemeMode } from "../lib/theme";
 import {
+  type LocalWallpaperMigrationSource,
   type WallpaperApplyMode,
   type WallpaperAssetDraft,
   type WallpaperAssetMetadata,
@@ -77,6 +78,12 @@ interface SettingsPageProps {
   wallpaperPreferences: WallpaperPreferences;
   wallpaperPreferencesReady: boolean;
   wallpaperStorageError: string | null;
+  wallpaperReadOnly: boolean;
+  wallpaperStorageUsedBytes: number;
+  wallpaperStorageQuotaBytes: number;
+  localWallpaperMigration: { source: LocalWallpaperMigrationSource; serverHasUserData: boolean } | null;
+  onMigrateLocalWallpaper: () => Promise<boolean>;
+  onRefreshWallpaperSnapshot: () => Promise<boolean>;
   wallpaperAssets: WallpaperAssetMetadata[];
   wallpaperPresets: WallpaperPreset[];
   onChangeWallpaperPreference: (
@@ -106,6 +113,12 @@ export default function SettingsPage({
   wallpaperPreferences,
   wallpaperPreferencesReady,
   wallpaperStorageError,
+  wallpaperReadOnly,
+  wallpaperStorageUsedBytes,
+  wallpaperStorageQuotaBytes,
+  localWallpaperMigration,
+  onMigrateLocalWallpaper,
+  onRefreshWallpaperSnapshot,
   wallpaperAssets,
   wallpaperPresets,
   onChangeWallpaperPreference,
@@ -404,6 +417,7 @@ export default function SettingsPage({
               "data",
               <DataSafetyPanel
                 onDirtyChange={(dirty) => markDirty("data", dirty)}
+                onWallpaperImported={onRefreshWallpaperSnapshot}
               />,
             )}
             {panel(
@@ -416,6 +430,12 @@ export default function SettingsPage({
                 wallpaperPreferences={wallpaperPreferences}
                 wallpaperPreferencesReady={wallpaperPreferencesReady}
                 wallpaperStorageError={wallpaperStorageError}
+                wallpaperReadOnly={wallpaperReadOnly}
+                wallpaperStorageUsedBytes={wallpaperStorageUsedBytes}
+                wallpaperStorageQuotaBytes={wallpaperStorageQuotaBytes}
+                localWallpaperMigration={localWallpaperMigration}
+                onMigrateLocalWallpaper={onMigrateLocalWallpaper}
+                onRefreshWallpaperSnapshot={onRefreshWallpaperSnapshot}
                 wallpaperAssets={wallpaperAssets}
                 wallpaperPresets={wallpaperPresets}
                 onChangeWallpaperPreference={onChangeWallpaperPreference}

@@ -1,6 +1,164 @@
 use serde::{Deserialize, Deserializer, Serialize};
 use std::collections::BTreeMap;
 
+pub(crate) const WALLPAPER_DEFAULT_OVERLAY: u8 = 64;
+pub(crate) const WALLPAPER_MAX_ASSETS_BYTES: u64 = 256 * 1024 * 1024;
+pub(crate) const WALLPAPER_MAX_VARIANT_BYTES: usize = 20 * 1024 * 1024;
+pub(crate) const WALLPAPER_MAX_PER_TARGET: usize = 32;
+pub(crate) const WALLPAPER_MAX_PRESETS: usize = 30;
+pub(crate) const WALLPAPER_PRESET_SCHEMA_VERSION: u32 = 1;
+
+pub(crate) const WALLPAPER_MODULE_IDS: [&str; 8] = [
+    "today",
+    "records",
+    "search",
+    "knowledge",
+    "review",
+    "stats",
+    "reviews",
+    "settings",
+];
+
+pub(crate) const WALLPAPER_SURFACE_MODULES: [(&str, &str); 21] = [
+    ("today.editor", "today"),
+    ("today.preview", "today"),
+    ("records.timeline", "records"),
+    ("records.detail", "records"),
+    ("search.results", "search"),
+    ("knowledge.library", "knowledge"),
+    ("knowledge.reader", "knowledge"),
+    ("review.session", "review"),
+    ("review.schedule", "review"),
+    ("stats.monthlyOverview", "stats"),
+    ("stats.metrics", "stats"),
+    ("stats.calendar", "stats"),
+    ("stats.dailyWords", "stats"),
+    ("stats.quickReview", "stats"),
+    ("stats.moods", "stats"),
+    ("stats.reviewTrends", "stats"),
+    ("stats.upcoming", "stats"),
+    ("stats.heatmap", "stats"),
+    ("stats.knowledge", "stats"),
+    ("stats.generate", "stats"),
+    ("reviews.archive", "reviews"),
+];
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct WallpaperPreferenceValue {
+    pub(crate) wallpaper_ids: Vec<String>,
+    pub(crate) overlay: u8,
+    pub(crate) cycle_daily: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct WallpaperPreference {
+    #[serde(flatten)]
+    pub(crate) value: WallpaperPreferenceValue,
+    pub(crate) surfaces: BTreeMap<String, WallpaperPreferenceValue>,
+}
+
+pub(crate) type WallpaperPreferences = BTreeMap<String, WallpaperPreference>;
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub(crate) enum WallpaperApplyMode {
+    Append,
+    Replace,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct WallpaperPreset {
+    pub(crate) id: String,
+    pub(crate) name: String,
+    pub(crate) schema_version: u32,
+    pub(crate) created_at: i64,
+    pub(crate) updated_at: i64,
+    pub(crate) preferences: WallpaperPreferences,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct WallpaperAssetMetadata {
+    pub(crate) id: String,
+    pub(crate) name: String,
+    pub(crate) created_at: i64,
+    pub(crate) original_bytes: u64,
+    pub(crate) optimized_bytes: u64,
+    pub(crate) desktop_width: u32,
+    pub(crate) desktop_height: u32,
+    pub(crate) mobile_width: Option<u32>,
+    pub(crate) mobile_height: Option<u32>,
+    pub(crate) desktop_thumbnail_bytes: u64,
+    pub(crate) mobile_thumbnail_bytes: Option<u64>,
+    pub(crate) is_built_in: bool,
+    pub(crate) desktop_name: Option<String>,
+    pub(crate) mobile_name: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct WallpaperSnapshot {
+    pub(crate) revision: i64,
+    pub(crate) has_user_data: bool,
+    pub(crate) storage_used_bytes: u64,
+    pub(crate) storage_quota_bytes: u64,
+    pub(crate) preferences: WallpaperPreferences,
+    pub(crate) assets: Vec<WallpaperAssetMetadata>,
+    pub(crate) presets: Vec<WallpaperPreset>,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct WallpaperAssetUpload {
+    pub(crate) metadata: WallpaperAssetMetadata,
+    pub(crate) desktop_mime: String,
+    pub(crate) desktop_blob: Vec<u8>,
+    pub(crate) mobile_mime: Option<String>,
+    pub(crate) mobile_blob: Option<Vec<u8>>,
+    pub(crate) desktop_thumbnail_mime: String,
+    pub(crate) desktop_thumbnail_blob: Vec<u8>,
+    pub(crate) mobile_thumbnail_mime: Option<String>,
+    pub(crate) mobile_thumbnail_blob: Option<Vec<u8>>,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum WallpaperAssetVariant {
+    Desktop,
+    Mobile,
+    DesktopThumbnail,
+    MobileThumbnail,
+}
+
+fn default_wallpaper_value() -> WallpaperPreferenceValue {
+    WallpaperPreferenceValue {
+        wallpaper_ids: Vec::new(),
+        overlay: WALLPAPER_DEFAULT_OVERLAY,
+        cycle_daily: false,
+    }
+}
+
+pub(crate) fn default_wallpaper_preferences() -> WallpaperPreferences {
+    WALLPAPER_MODULE_IDS
+        .into_iter()
+        .map(|module| {
+            let surfaces = WALLPAPER_SURFACE_MODULES
+                .iter()
+                .filter(|(_, owner)| *owner == module)
+                .map(|(surface, _)| ((*surface).to_string(), default_wallpaper_value()))
+                .collect();
+            (
+                module.to_string(),
+                WallpaperPreference {
+                    value: default_wallpaper_value(),
+                    surfaces,
+                },
+            )
+        })
+        .collect()
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub(crate) struct Article {
     pub(crate) id: String,

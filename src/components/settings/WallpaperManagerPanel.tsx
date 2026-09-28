@@ -10,21 +10,29 @@ import {
   ArrowDown,
   ArrowUp,
   Check,
-  ChevronDown,
   HardDrive,
   ChevronRight,
   ImagePlus,
   Images,
   Layers,
   Monitor,
+  MoreHorizontal,
   Plus,
-  Pencil,
   RotateCcw,
   Save,
+  Search,
   Smartphone,
   Trash2,
 } from "lucide-react";
 import { useConfirmDialog } from "../ui/Feedback";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "../ui/dropdown-menu";
+import * as api from "../../lib/api";
 import * as Dialog from "@radix-ui/react-dialog";
 import {
   Select,
@@ -40,23 +48,25 @@ import {
   TabsTrigger,
 } from "../ui/tabs";
 import { processWallpaperFile } from "../../lib/wallpaperImageProcessing";
+import { loadWallpaperAssetFiles, loadWallpaperAssetThumbnails } from "../../lib/wallpapers";
 import {
-  builtInWallpapers,
+  builtInWallpaperPresets,
   defaultWallpaperPreference,
   defaultWallpaperPreferences,
   newWallpaperId,
-  loadWallpaperAssetFiles,
-  loadWallpaperAssetThumbnails,
   defaultWallpaperSurfacePreference,
   maxWallpapersPerModule,
+  maxCustomWallpaperAssets,
   maxWallpaperPresets,
   maxWallpaperPresetNameLength,
   wallpaperPreferenceForTarget,
+  wallpaperModuleForTarget,
   wallpaperPreferencesEqual,
   wallpaperSurfaces,
   wallpaperSurfacesForModule,
   wallpaperTargetLabel,
   wallpaperIdForDate,
+  wallpaperAssetStoredBytes,
   wallpaperModules,
   type WallpaperApplyMode,
   type WallpaperAssetDraft,
@@ -67,18 +77,20 @@ import {
   type WallpaperPreferenceValue,
   type WallpaperPreferences,
   type WallpaperPreset,
+  type LocalWallpaperMigrationSource,
   type WallpaperSurfaceId,
 } from "../../lib/wallpapers";
 
 type Device = "desktop" | "mobile";
+type LibraryUsageFilter = "all" | "referenced" | "unused";
 type Feedback = { kind: "error" | "success"; text: string } | null;
 type PreviewFiles = { assetId: string; desktopUrl: string; mobileUrl: string };
 type ThumbnailUrls = Record<string, { desktop: string; mobile: string }>;
 
 const formatBytes = (bytes: number) => {
-  if (bytes <= 0) return "0 KB";
-  if (bytes < 1024 * 1024) return Math.max(1, Math.round(bytes / 1024)) + " KB";
-  return (bytes / 1024 / 1024).toFixed(1) + " MB";
+  if (bytes <= 0) return "0 KiB";
+  if (bytes < 1024 * 1024) return Math.max(1, Math.round(bytes / 1024)) + " KiB";
+  return (bytes / 1024 / 1024).toFixed(1) + " MiB";
 };
 
 const fileBaseName = (filename: string) =>
@@ -179,43 +191,27 @@ function WallpaperTargetGroup({
 
 function WallpaperPresetArtwork({
   assetIds,
-  label,
-  selected,
   items,
   thumbnails,
   previewFiles,
   device,
-  onSelect,
 }: {
   assetIds: string[];
-  label: string;
-  selected: boolean;
   items: Map<string, WallpaperLibraryItem>;
   thumbnails: ThumbnailUrls;
   previewFiles: PreviewFiles | null;
   device: Device;
-  onSelect: () => void;
 }) {
   return (
-    <button
-      type="button"
-      className="wm-preset-art"
-      aria-label={"预览方案：" + label}
-      aria-pressed={selected}
-      onClick={onSelect}
-    >
+    <span className="wm-preset-art" aria-hidden="true">
       {assetIds.length === 0 ? (
-        <span className="wm-preset-art-empty" aria-hidden="true">
-          <Layers size={20} />
-        </span>
+        <span className="wm-preset-art-empty"><Layers size={22} /></span>
       ) : assetIds.slice(0, 4).map((id) => {
         const item = items.get(id);
-        const src = item?.kind === "built-in"
-          ? device === "desktop" ? item.desktopUrl : item.mobileUrl
-          : thumbnails[id]?.[device] ?? thumbnails[id]?.desktop ??
-            (previewFiles?.assetId === id
-              ? device === "desktop" ? previewFiles.desktopUrl : previewFiles.mobileUrl
-              : undefined);
+        const src = thumbnails[id]?.[device] ?? thumbnails[id]?.desktop ??
+          (previewFiles?.assetId === id
+            ? device === "desktop" ? previewFiles.desktopUrl : previewFiles.mobileUrl
+            : undefined);
         return src ? (
           <img key={id} src={src} alt="" loading="lazy" decoding="async" />
         ) : (
@@ -224,12 +220,48 @@ function WallpaperPresetArtwork({
           </span>
         );
       })}
-    </button>
+    </span>
+  );
+}
+
+function WallpaperPagination({
+  page,
+  pageCount,
+  pageStart,
+  pageSize,
+  total,
+  label,
+  onChange,
+}: {
+  page: number;
+  pageCount: number;
+  pageStart: number;
+  pageSize: number;
+  total: number;
+  label: string;
+  onChange: (page: number) => void;
+}) {
+  if (pageCount <= 1) return null;
+  const first = pageStart + 1;
+  const last = Math.min(pageStart + pageSize, total);
+  return (
+    <nav className="wm-pagination" aria-label={label}>
+      <span>{first}–{last} / 共 {total} 项</span>
+      <div>
+        <button type="button" className="ui-button-secondary" disabled={page === 1} onClick={() => onChange(page - 1)}>
+          上一页
+        </button>
+        <span aria-live="polite">{page} / {pageCount}</span>
+        <button type="button" className="ui-button-secondary" disabled={page === pageCount} onClick={() => onChange(page + 1)}>
+          下一页
+        </button>
+      </div>
+    </nav>
   );
 }
 
 function libraryItem(asset: WallpaperAssetMetadata): WallpaperLibraryItem {
-  return { ...asset, kind: "uploaded" };
+  return { ...asset, kind: asset.isBuiltIn ? "built-in" : "uploaded" };
 }
 
 function presetTargetPreferences(preferences: WallpaperPreferences) {
@@ -249,10 +281,27 @@ function presetSummary(preferences: WallpaperPreferences) {
   };
 }
 
+function configuredWallpaperTargets(preferences: WallpaperPreferences): WallpaperAssignmentTargetId[] {
+  const targets: WallpaperAssignmentTargetId[] = [];
+  for (const { id: module } of wallpaperModules) {
+    if (preferences[module].wallpaperIds.length > 0) targets.push(module);
+    for (const surface of wallpaperSurfacesForModule(module)) {
+      if (preferences[module].surfaces[surface.id]?.wallpaperIds.length) targets.push(surface.id);
+    }
+  }
+  return targets;
+}
+
 export default function WallpaperManagerPanel({
   wallpaperPreferences,
   wallpaperPreferencesReady,
   wallpaperStorageError,
+  wallpaperReadOnly,
+  wallpaperStorageUsedBytes,
+  wallpaperStorageQuotaBytes,
+  localWallpaperMigration,
+  onMigrateLocalWallpaper,
+  onRefreshWallpaperSnapshot,
   wallpaperAssets,
   wallpaperPresets,
   onChangeWallpaperPreference,
@@ -268,6 +317,12 @@ export default function WallpaperManagerPanel({
   wallpaperPreferences: WallpaperPreferences;
   wallpaperPreferencesReady: boolean;
   wallpaperStorageError: string | null;
+  wallpaperReadOnly: boolean;
+  wallpaperStorageUsedBytes: number;
+  wallpaperStorageQuotaBytes: number;
+  localWallpaperMigration: { source: LocalWallpaperMigrationSource; serverHasUserData: boolean } | null;
+  onMigrateLocalWallpaper: () => Promise<boolean>;
+  onRefreshWallpaperSnapshot: () => Promise<boolean>;
   wallpaperAssets: WallpaperAssetMetadata[];
   wallpaperPresets: WallpaperPreset[];
   onChangeWallpaperPreference: (
@@ -288,6 +343,10 @@ export default function WallpaperManagerPanel({
   onResetWallpaper: (target: WallpaperAssignmentTargetId) => Promise<boolean>;
 }) {
   const { confirm, dialog } = useConfirmDialog();
+  const allPresets = useMemo(
+    () => [...builtInWallpaperPresets, ...wallpaperPresets],
+    [wallpaperPresets],
+  );
   const [view, setView] = useState<"library" | "modules" | "presets">("library");
   const [presetDialog, setPresetDialog] = useState<{
     mode: "save" | "rename";
@@ -296,6 +355,16 @@ export default function WallpaperManagerPanel({
   const [presetNameDraft, setPresetNameDraft] = useState("");
   const [presetDialogError, setPresetDialogError] = useState("");
   const [previewPresetId, setPreviewPresetId] = useState<string | null>(null);
+  const [previewAssetId, setPreviewAssetId] = useState<string | null>(null);
+  const [previewTargetOverride, setPreviewTargetOverride] = useState<WallpaperAssignmentTargetId | null>(null);
+  const [libraryPage, setLibraryPage] = useState(1);
+  const [presetPage, setPresetPage] = useState(1);
+  const [isMobile, setIsMobile] = useState(() =>
+    typeof window !== "undefined" && window.matchMedia("(max-width: 767px)").matches,
+  );
+  const [librarySearch, setLibrarySearch] = useState("");
+  const [libraryUsageFilter, setLibraryUsageFilter] =
+    useState<LibraryUsageFilter>("all");
   const [module, setModule] = useState<WallpaperModule>("stats");
   const [surfaceTarget, setSurfaceTarget] = useState<"page" | WallpaperSurfaceId>("page");
   const [device, setDevice] = useState<Device>(() =>
@@ -304,9 +373,10 @@ export default function WallpaperManagerPanel({
       ? "mobile"
       : "desktop",
   );
-  const [mobilePreviewExpanded, setMobilePreviewExpanded] = useState(false);
+  const [previewOpen, setPreviewOpen] = useState(false);
   const [selectedWallpaperIds, setSelectedWallpaperIds] = useState<string[]>([]);
   const [targetIds, setTargetIds] = useState<WallpaperAssignmentTargetId[]>([]);
+  const contextualTarget = useRef<WallpaperAssignmentTargetId | null>(null);
   const [expandedTargetGroups, setExpandedTargetGroups] = useState<WallpaperModule[]>(["stats"]);
   const [applyMode, setApplyMode] = useState<WallpaperApplyMode>("append");
   const [importOpen, setImportOpen] = useState(false);
@@ -315,6 +385,8 @@ export default function WallpaperManagerPanel({
   const [desktopFile, setDesktopFile] = useState<File | null>(null);
   const [mobileFile, setMobileFile] = useState<File | null>(null);
   const [busy, setBusy] = useState(false);
+  const [localMigrationOpen, setLocalMigrationOpen] = useState(false);
+  const promptedMigrationId = useRef<string | null>(null);
   const [feedback, setFeedback] = useState<Feedback>(null);
   const [overlayDraft, setOverlayDraft] = useState(
     wallpaperPreferences[module].overlay,
@@ -328,22 +400,80 @@ export default function WallpaperManagerPanel({
     surfaceTarget === "page" ? module : surfaceTarget;
   const preference = wallpaperPreferenceForTarget(wallpaperPreferences, targetId);
   const moduleLabel =
-    wallpaperModules.find((item) => item.id === module)?.label ?? "当前组件";
+    wallpaperModules.find((item) => item.id === module)?.label ?? "当前页面";
   const targetLabel =
     surfaceTarget === "page"
       ? "整个页面"
       : wallpaperSurfaces.find((surface) => surface.id === surfaceTarget)?.label ?? "内容区域";
   const items = useMemo<WallpaperLibraryItem[]>(
-    () => [
-      ...builtInWallpapers,
-      ...wallpaperAssets.map(libraryItem),
-    ],
+    () => wallpaperAssets.map(libraryItem),
     [wallpaperAssets],
   );
   const itemById = useMemo(
     () => new Map(items.map((item) => [item.id, item])),
     [items],
   );
+  const wallpaperAssetSignature = JSON.stringify(wallpaperAssets);
+  const wallpaperUsage = useMemo(() => {
+    const usage = new Map<string, string[]>();
+    const addReference = (id: string, label: string) => {
+      const references = usage.get(id) ?? [];
+      if (!references.includes(label)) references.push(label);
+      usage.set(id, references);
+    };
+
+    for (const module of wallpaperModules) {
+      const preference = wallpaperPreferences[module.id];
+      for (const id of preference.wallpaperIds) {
+        addReference(id, wallpaperTargetLabel(module.id));
+      }
+      for (const surface of wallpaperSurfacesForModule(module.id)) {
+        for (const id of preference.surfaces[surface.id]?.wallpaperIds ?? []) {
+          addReference(id, wallpaperTargetLabel(surface.id));
+        }
+      }
+    }
+    for (const preset of allPresets) {
+      for (const id of presetSummary(preset.preferences).assets) {
+        addReference(id, "方案 · " + preset.name);
+      }
+    }
+    return usage;
+  }, [allPresets, wallpaperPreferences]);
+  const filteredItems = useMemo(() => {
+    const query = librarySearch.trim().toLocaleLowerCase();
+    return items.filter((item) => {
+      if (query && !item.name.toLocaleLowerCase().includes(query)) return false;
+      const referenced = (wallpaperUsage.get(item.id)?.length ?? 0) > 0;
+      return libraryUsageFilter === "all" ||
+        (libraryUsageFilter === "referenced" && referenced) ||
+        (libraryUsageFilter === "unused" && !referenced);
+    });
+  }, [items, librarySearch, libraryUsageFilter, wallpaperUsage]);
+  const preferredLibraryPageSize = isMobile ? 4 : 6;
+  const libraryPageCount = Math.max(1, Math.ceil(filteredItems.length / preferredLibraryPageSize));
+  const visibleLibraryPage = Math.min(libraryPage, libraryPageCount);
+  const libraryBasePageSize = Math.floor(filteredItems.length / libraryPageCount);
+  const largerLibraryPages = filteredItems.length % libraryPageCount;
+  const visibleLibraryStart =
+    (visibleLibraryPage - 1) * libraryBasePageSize + Math.min(visibleLibraryPage - 1, largerLibraryPages);
+  const visibleLibraryPageSize = libraryBasePageSize + (visibleLibraryPage <= largerLibraryPages ? 1 : 0);
+  const visibleLibraryItems = filteredItems.slice(
+    visibleLibraryStart,
+    visibleLibraryStart + visibleLibraryPageSize,
+  );
+  const presetPageSize = isMobile ? 3 : 4;
+  const presetPageCount = Math.max(1, Math.ceil(allPresets.length / presetPageSize));
+  const visiblePresetPage = Math.min(presetPage, presetPageCount);
+  const visiblePresets = allPresets.slice(
+    (visiblePresetPage - 1) * presetPageSize,
+    visiblePresetPage * presetPageSize,
+  );
+  const referencedItemCount = items.reduce(
+    (count, item) => count + ((wallpaperUsage.get(item.id)?.length ?? 0) > 0 ? 1 : 0),
+    0,
+  );
+  const unusedItemCount = items.length - referencedItemCount;
   const targetGroups = useMemo(
     () => {
       const orderedModules = [
@@ -377,44 +507,56 @@ export default function WallpaperManagerPanel({
   );
   const activePreset = currentIsProjectDefault
     ? null
-    : wallpaperPresets.find((preset) =>
+    : allPresets.find((preset) =>
         wallpaperPreferencesEqual(wallpaperPreferences, preset.preferences),
       ) ?? null;
   const previewPreferences = view === "presets"
     ? previewPresetId === "__project-default__"
       ? projectDefaultPreferences
-      : wallpaperPresets.find((preset) => preset.id === previewPresetId)?.preferences ??
+      : allPresets.find((preset) => preset.id === previewPresetId)?.preferences ??
         wallpaperPreferences
     : wallpaperPreferences;
-  const previewTargetPreference =
-    (view === "modules" || view === "presets") && surfaceTarget !== "page"
-      ? wallpaperPreferenceForTarget(previewPreferences, targetId)
-      : previewPreferences[module];
-  const previewWallpaperId =
-    view === "library" && selectedWallpaperIds.length > 0
-      ? selectedWallpaperIds[0]
-      : wallpaperIdForDate(previewTargetPreference);
+  const configuredPreviewTargets = view === "presets"
+    ? configuredWallpaperTargets(previewPreferences)
+    : [];
+  const previewTargetId: WallpaperAssignmentTargetId = view === "presets"
+    ? previewTargetOverride && configuredPreviewTargets.includes(previewTargetOverride)
+      ? previewTargetOverride
+      : configuredPreviewTargets.find((target) => wallpaperModuleForTarget(target) === module)
+        ?? configuredPreviewTargets[0]
+        ?? targetId
+    : targetId;
+  const previewModule = wallpaperModuleForTarget(previewTargetId);
+  const previewModuleLabel = wallpaperModules.find((item) => item.id === previewModule)?.label ?? "页面";
+  const previewTargetLabel = wallpaperTargetLabel(previewTargetId);
+  const previewHeading = previewTargetId === previewModule
+    ? previewModuleLabel + "页面"
+    : wallpaperSurfaces.find((surface) => surface.id === previewTargetId)?.label ?? previewModuleLabel;
+  const previewTargetPreference = view === "library"
+    ? previewPreferences[module]
+    : wallpaperPreferenceForTarget(previewPreferences, previewTargetId);
+  const visiblePreviewAssetId = previewAssetId && filteredItems.some((item) => item.id === previewAssetId)
+    ? previewAssetId
+    : visibleLibraryItems[0]?.id;
+  const previewWallpaperId = view === "library"
+    ? visiblePreviewAssetId ?? wallpaperIdForDate(previewTargetPreference)
+    : wallpaperIdForDate(previewTargetPreference);
   const previewItem = previewWallpaperId
     ? itemById.get(previewWallpaperId) ?? null
     : null;
   const previewMissingAsset = !!previewWallpaperId && !itemById.has(previewWallpaperId);
-  const builtInPreview =
-    previewItem?.kind === "built-in" ? previewItem : null;
-  const activePreviewUrls = builtInPreview
-    ? {
-        desktopUrl: builtInPreview.desktopUrl,
-        mobileUrl: builtInPreview.mobileUrl,
-      }
-    : previewFiles?.assetId === previewWallpaperId
-      ? previewFiles
+  const previewThumbnail = previewWallpaperId ? thumbnailUrls[previewWallpaperId] : null;
+  const activePreviewUrls = previewFiles?.assetId === previewWallpaperId
+    ? previewFiles
+    : previewThumbnail && previewWallpaperId
+      ? { assetId: previewWallpaperId, desktopUrl: previewThumbnail.desktop, mobileUrl: previewThumbnail.mobile }
       : null;
-  const isSurfacePreview =
-    (view === "modules" || view === "presets") && surfaceTarget !== "page";
+  const isSurfacePreview = view !== "library" && previewTargetId !== previewModule;
   const previewPresetName = view === "presets"
     ? previewPresetId === "__project-default__"
       ? "项目默认"
       : previewPresetId
-        ? wallpaperPresets.find((preset) => preset.id === previewPresetId)?.name ?? "当前配置"
+        ? allPresets.find((preset) => preset.id === previewPresetId)?.name ?? "当前配置"
         : currentIsProjectDefault ? "项目默认" : activePreset?.name ?? "未保存的自定义配置"
     : null;
   const previewStyle = {
@@ -433,16 +575,16 @@ export default function WallpaperManagerPanel({
     "--wallpaper-preview-overlay": String(previewTargetPreference.overlay / 100),
   } as CSSProperties;
   const deletableSelection = selectedWallpaperIds.filter(
-    (id) => !builtInWallpapers.some((builtIn) => builtIn.id === id),
+    (id) => itemById.get(id)?.kind === "uploaded",
   );
-  const totalStorageBytes = wallpaperAssets.reduce(
-    (total, asset) =>
-      total +
-      asset.optimizedBytes +
-      (asset.desktopThumbnailBytes ?? 0) +
-      (asset.mobileThumbnailBytes ?? 0),
-    0,
-  );
+  const totalStorageBytes = wallpaperStorageUsedBytes;
+  const customWallpaperCount = wallpaperAssets.filter(
+    (asset) => !asset.isBuiltIn,
+  ).length;
+  const assetCountAtCapacity =
+    customWallpaperCount >= maxCustomWallpaperAssets;
+  const libraryAtCapacity =
+    assetCountAtCapacity || totalStorageBytes >= wallpaperStorageQuotaBytes;
   const defaultPreference =
     surfaceTarget === "page"
       ? defaultWallpaperPreference(module)
@@ -464,6 +606,29 @@ export default function WallpaperManagerPanel({
   }, [module]);
 
   useEffect(() => {
+    const media = window.matchMedia("(max-width: 767px)");
+    const update = () => setIsMobile(media.matches);
+    update();
+    media.addEventListener?.("change", update);
+    return () => media.removeEventListener?.("change", update);
+  }, []);
+
+  useEffect(() => {
+    setLibraryPage(1);
+  }, [librarySearch, libraryUsageFilter, isMobile]);
+
+  useEffect(() => {
+    if (wallpaperPreferencesReady) void onRefreshWallpaperSnapshot();
+  }, [view, wallpaperPreferencesReady, onRefreshWallpaperSnapshot]);
+
+  useEffect(() => {
+    const migrationId = localWallpaperMigration?.source.migrationId;
+    if (!migrationId || promptedMigrationId.current === migrationId) return;
+    promptedMigrationId.current = migrationId;
+    setLocalMigrationOpen(true);
+  }, [localWallpaperMigration?.source.migrationId]);
+
+  useEffect(() => {
     overlayRef.current = preference.overlay;
     setOverlayDraft(preference.overlay);
   }, [targetId, preference.overlay]);
@@ -472,17 +637,38 @@ export default function WallpaperManagerPanel({
     let current = true;
     const urls = new Set<string>();
     setThumbnailUrls({});
-    void loadWallpaperAssetThumbnails()
+    void Promise.all(wallpaperAssets.map(async (asset) => {
+      const read = async (variant: "desktop-thumbnail" | "mobile-thumbnail") => {
+        try {
+          return await api.getWallpaperAssetFile(asset.id, variant);
+        } catch {
+          const [legacyThumbnails, files] = await Promise.all([
+            loadWallpaperAssetThumbnails(),
+            loadWallpaperAssetFiles(asset.id),
+          ]);
+          const local = legacyThumbnails.find((item) => item.id === asset.id);
+          if (variant === "desktop-thumbnail") {
+            return local?.desktopThumbnailBlob ?? files?.desktopBlob ?? files?.mobileBlob ?? null;
+          }
+          return local?.mobileThumbnailBlob ?? local?.desktopThumbnailBlob ?? files?.mobileBlob ?? files?.desktopBlob ?? null;
+        }
+      };
+      const [desktopBlob, mobileBlob] = await Promise.all([
+        read("desktop-thumbnail"),
+        read("mobile-thumbnail"),
+      ]);
+      return { id: asset.id, desktopBlob, mobileBlob };
+    }))
       .then((thumbnails) => {
         if (!current) return;
         const next: ThumbnailUrls = {};
         for (const thumbnail of thumbnails) {
-          const desktopBlob = thumbnail.desktopThumbnailBlob;
-          const mobileBlob =
-            thumbnail.mobileThumbnailBlob ?? thumbnail.desktopThumbnailBlob;
-          const desktop = URL.createObjectURL(desktopBlob);
-          const mobile =
-            mobileBlob === desktopBlob ? desktop : URL.createObjectURL(mobileBlob);
+          if (!thumbnail.desktopBlob) continue;
+          const desktop = URL.createObjectURL(thumbnail.desktopBlob);
+          const mobileBlob = thumbnail.mobileBlob ?? thumbnail.desktopBlob;
+          const mobile = mobileBlob === thumbnail.desktopBlob
+            ? desktop
+            : URL.createObjectURL(mobileBlob);
           urls.add(desktop);
           if (mobile !== desktop) urls.add(mobile);
           next[thumbnail.id] = { desktop, mobile };
@@ -496,32 +682,33 @@ export default function WallpaperManagerPanel({
       current = false;
       urls.forEach((url) => URL.revokeObjectURL(url));
     };
-  }, [wallpaperAssets]);
+  }, [wallpaperAssetSignature]);
 
   useEffect(() => {
     let current = true;
     const urls = new Set<string>();
     setPreviewFiles(null);
     setPreviewLoading(false);
-    if (!previewWallpaperId || builtInPreview) {
+    if (!previewWallpaperId) {
       return () => {
         current = false;
       };
     }
     setPreviewLoading(true);
-    void loadWallpaperAssetFiles(previewWallpaperId)
-      .then((files) => {
+    const readPreview = async (variant: "desktop" | "mobile") => {
+      try {
+        return await api.getWallpaperAssetFile(previewWallpaperId, variant);
+      } catch {
+        const local = await loadWallpaperAssetFiles(previewWallpaperId);
+        if (!local) throw new Error("wallpaper image unavailable");
+        return variant === "mobile"
+          ? local.mobileBlob ?? local.desktopBlob
+          : local.desktopBlob ?? local.mobileBlob;
+      }
+    };
+    void Promise.all([readPreview("desktop"), readPreview("mobile")])
+      .then(([desktopBlob, mobileBlob]) => {
         if (!current) return;
-        if (!files) {
-          setPreviewLoading(false);
-          return;
-        }
-        const desktopBlob = files.desktopBlob ?? files.mobileBlob;
-        const mobileBlob = files.mobileBlob ?? files.desktopBlob;
-        if (!desktopBlob || !mobileBlob) {
-          setPreviewLoading(false);
-          return;
-        }
         const makeUrl = (blob: Blob) => {
           const url = URL.createObjectURL(blob);
           urls.add(url);
@@ -540,7 +727,7 @@ export default function WallpaperManagerPanel({
       current = false;
       urls.forEach((url) => URL.revokeObjectURL(url));
     };
-  }, [previewWallpaperId, builtInPreview]);
+  }, [previewWallpaperId]);
 
   const updatePreference = async (
     next: WallpaperPreferenceValue,
@@ -555,6 +742,7 @@ export default function WallpaperManagerPanel({
   };
 
   const toggleWallpaperSelection = (id: string) => {
+    setPreviewAssetId(id);
     if (
       !selectedWallpaperIds.includes(id) &&
       selectedWallpaperIds.length >= maxWallpapersPerModule
@@ -574,9 +762,9 @@ export default function WallpaperManagerPanel({
   };
 
   const selectAllWallpapers = () => {
-    setSelectedWallpaperIds(items.slice(0, maxWallpapersPerModule).map((item) => item.id));
+    setSelectedWallpaperIds(filteredItems.slice(0, maxWallpapersPerModule).map((item) => item.id));
     setFeedback(
-      items.length > maxWallpapersPerModule
+      filteredItems.length > maxWallpapersPerModule
         ? {
             kind: "error",
             text: "每个页面区域最多分配 " + maxWallpapersPerModule + " 张壁纸；已选择前 " + maxWallpapersPerModule + " 张。",
@@ -612,6 +800,11 @@ export default function WallpaperManagerPanel({
 
   const handleBulkApplyOpenChange = (open: boolean) => {
     setBulkApplyOpen(open);
+    if (open && targetIds.length === 0 && contextualTarget.current) {
+      setTargetIds([contextualTarget.current]);
+      const owner = wallpaperModuleForTarget(contextualTarget.current);
+      setExpandedTargetGroups((current) => current.includes(owner) ? current : [...current, owner]);
+    }
     if (!open) {
       setTargetIds([]);
       setFeedback((current) => current?.kind === "error" ? null : current);
@@ -684,12 +877,25 @@ export default function WallpaperManagerPanel({
           }
         : {
             kind: "error",
-            text: "本机壁纸设置无法保存；原有分配保持不变。",
+            text: "壁纸设置未同步到服务器；原有分配保持不变。",
           },
     );
     if (applied) {
       setTargetIds([]);
       setBulkApplyOpen(false);
+      if (contextualTarget.current) setView("modules");
+      contextualTarget.current = null;
+    }
+  };
+
+  const handleMigrateLocalWallpaper = async () => {
+    if (!localWallpaperMigration || busy || wallpaperReadOnly) return;
+    setBusy(true);
+    const migrated = await onMigrateLocalWallpaper();
+    setBusy(false);
+    if (migrated) {
+      setLocalMigrationOpen(false);
+      setFeedback({ kind: "success", text: "本机壁纸已迁移到当前服务器；本机副本仍保留作离线缓存。" });
     }
   };
 
@@ -762,6 +968,16 @@ export default function WallpaperManagerPanel({
 
   const handleAddWallpaper = async () => {
     if ((!desktopFile && !mobileFile) || busy) return;
+    if (assetCountAtCapacity) {
+      setFeedback({
+        kind: "error",
+        text:
+          "壁纸库最多保存 " +
+          maxCustomWallpaperAssets +
+          " 张自定义壁纸；请删除未引用图片后再添加。",
+      });
+      return;
+    }
     setBusy(true);
     setFeedback(null);
     try {
@@ -796,6 +1012,12 @@ export default function WallpaperManagerPanel({
         desktopName: desktopFile?.name,
         mobileName: mobileFile?.name,
       };
+      const incomingBytes = wallpaperAssetStoredBytes(metadata);
+      if (totalStorageBytes + incomingBytes > wallpaperStorageQuotaBytes) {
+        throw new Error(
+          "服务器壁纸库容量上限为 " + formatBytes(wallpaperStorageQuotaBytes) + "；删除未引用图片或选择更小的图片后重试。",
+        );
+      }
       const added = await onAddWallpaperAsset({
         metadata,
         files: {
@@ -810,10 +1032,19 @@ export default function WallpaperManagerPanel({
         },
       });
       if (!added) {
-        throw new Error("本机壁纸库保存失败；请稍后重试或减少图片大小。");
+        throw new Error(
+          "壁纸未能上传到服务器；请检查网络和服务器容量后重试。",
+        );
       }
       setSelectedWallpaperIds([id]);
-      setTargetIds([]);
+      setPreviewAssetId(id);
+      setLibraryPage(1);
+      if (contextualTarget.current) {
+        setTargetIds([contextualTarget.current]);
+        setBulkApplyOpen(true);
+      } else {
+        setTargetIds([]);
+      }
       setDesktopFile(null);
       setMobileFile(null);
       setWallpaperName("");
@@ -906,7 +1137,7 @@ export default function WallpaperManagerPanel({
       setPresetDialogError("方案名称不能超过 " + maxWallpaperPresetNameLength + " 个字符。");
       return;
     }
-    if (wallpaperPresets.some((preset) =>
+    if (allPresets.some((preset) =>
       preset.id !== presetDialog.presetId &&
       preset.name.toLowerCase() === name.toLowerCase(),
     )) {
@@ -925,6 +1156,7 @@ export default function WallpaperManagerPanel({
     }
     setPresetDialog(null);
     setPresetDialogError("");
+    setPresetPage(1);
     setFeedback({
       kind: "success",
       text: presetDialog.mode === "rename" ? "方案名称已更新。" : "当前壁纸设置已保存为方案。",
@@ -935,7 +1167,7 @@ export default function WallpaperManagerPanel({
     if (busy) return;
     const isDefault = presetId === null;
     const preset = presetId
-      ? wallpaperPresets.find((item) => item.id === presetId)
+      ? allPresets.find((item) => item.id === presetId)
       : null;
     if (presetId && !preset) return;
     const confirmed = await confirm({
@@ -953,6 +1185,7 @@ export default function WallpaperManagerPanel({
     setBusy(false);
     if (applied) {
       setPreviewPresetId(presetId ?? "__project-default__");
+      setPreviewTargetOverride(null);
       setFeedback({
         kind: "success",
         text: isDefault ? "所有页面和内容区域已恢复项目默认。" : "壁纸方案已应用。",
@@ -966,7 +1199,7 @@ export default function WallpaperManagerPanel({
   };
 
   const handleUpdatePreset = async (preset: WallpaperPreset) => {
-    if (busy) return;
+    if (busy || preset.source === "built-in") return;
     if (missingCurrentAssets.length > 0) {
       setFeedback({ kind: "error", text: "当前设置引用的壁纸不在图库中；请先修复分配后再更新方案。" });
       return;
@@ -991,7 +1224,7 @@ export default function WallpaperManagerPanel({
   };
 
   const handleDeletePreset = async (preset: WallpaperPreset) => {
-    if (busy) return;
+    if (busy || preset.source === "built-in") return;
     const confirmed = await confirm({
       title: "删除壁纸方案？",
       message:
@@ -1003,7 +1236,10 @@ export default function WallpaperManagerPanel({
     setBusy(true);
     const deleted = await onDeleteWallpaperPreset(preset.id);
     setBusy(false);
-    if (previewPresetId === preset.id) setPreviewPresetId(null);
+    if (previewPresetId === preset.id) {
+      setPreviewPresetId(null);
+      setPreviewTargetOverride(null);
+    }
     setFeedback(
       deleted
         ? { kind: "success", text: "壁纸方案已删除。" }
@@ -1040,44 +1276,97 @@ export default function WallpaperManagerPanel({
               </span>
               <div className="st-section-copy wm-title-copy">
                 <h3>壁纸管理</h3>
-                <p>整理壁纸，再把同一组背景分配给多个组件。</p>
+                <p>整理壁纸，并为页面和内容区域设置背景。</p>
               </div>
             </div>
-            <TabsList className="wm-view-switch" aria-label="壁纸管理视图">
-              <TabsTrigger value="library" disabled={!wallpaperPreferencesReady || !!wallpaperStorageError}>
-                壁纸库
-                <span>{items.length}</span>
-              </TabsTrigger>
-              <TabsTrigger value="modules" disabled={!wallpaperPreferencesReady || !!wallpaperStorageError}>
-                组件分配
-              </TabsTrigger>
-              <TabsTrigger value="presets" disabled={!wallpaperPreferencesReady || !!wallpaperStorageError}>
-                壁纸方案
-                <span>{wallpaperPresets.length}</span>
-              </TabsTrigger>
-            </TabsList>
-          </header>
-
-          {wallpaperStorageError ? (
-            <div className="wm-storage-blocked">
-              <div>
-                <strong>壁纸数据无法完整读取</strong>
-                <p role="alert">{wallpaperStorageError}</p>
-              </div>
+            <div className="wm-heading-tools">
+              <TabsList className="wm-view-switch" aria-label="壁纸管理视图">
+                <TabsTrigger value="library" disabled={!wallpaperPreferencesReady}>
+                  壁纸库
+                  <span>{items.length}</span>
+                </TabsTrigger>
+                <TabsTrigger value="modules" disabled={!wallpaperPreferencesReady}>
+                  页面与区域
+                </TabsTrigger>
+                <TabsTrigger value="presets" disabled={!wallpaperPreferencesReady}>
+                  壁纸方案
+                  <span>{wallpaperPresets.length + builtInWallpaperPresets.length}</span>
+                </TabsTrigger>
+              </TabsList>
               <button
                 type="button"
-                className="ui-button-secondary"
-                onClick={() => window.location.reload()}
+                className="ui-button-secondary wm-preview-trigger"
+                aria-expanded={previewOpen}
+                aria-controls={previewOpen ? "wm-preview-panel" : undefined}
+                onClick={() => setPreviewOpen((open) => !open)}
               >
-                刷新重试
+                {previewOpen ? "收起预览" : "查看效果"}
               </button>
             </div>
-          ) : !wallpaperPreferencesReady ? (
-            <div className="wm-storage-loading" role="status">
-              正在读取本机壁纸数据…
+          </header>
+
+          {localWallpaperMigration && (
+            <div className="wm-sync-banner wm-migration-banner" role="status">
+              <span>
+                发现此设备有 {localWallpaperMigration.source.assets.length} 张旧壁纸、{localWallpaperMigration.source.presets.length} 组方案和本机分配。
+              </span>
+              <button type="button" className="ui-button-secondary" onClick={() => setLocalMigrationOpen(true)}>
+                查看迁移
+              </button>
             </div>
+          )}
+          <Dialog.Root
+            open={localMigrationOpen && !!localWallpaperMigration}
+            onOpenChange={(open) => {
+              setLocalMigrationOpen(open);
+            }}
+          >
+            <Dialog.Portal>
+              <Dialog.Overlay className="ui-overlay fixed inset-0 z-[70] data-[state=open]:animate-fade-in" />
+              <Dialog.Content className="ui-modal-surface wm-bulk-dialog fixed left-1/2 top-1/2 z-[71] -translate-x-1/2 -translate-y-1/2 outline-hidden">
+                <div className="wm-bulk-dialog-heading">
+                  <span className="wm-bulk-dialog-icon" aria-hidden="true"><HardDrive size={17} /></span>
+                  <div>
+                    <Dialog.Title>迁移此设备的旧壁纸</Dialog.Title>
+                    <Dialog.Description>先查看将同步到当前服务器的数据，再确认迁移。</Dialog.Description>
+                  </div>
+                  <Dialog.Close asChild>
+                    <button type="button" className="wm-import-close" aria-label="稍后迁移">×</button>
+                  </Dialog.Close>
+                </div>
+                {localWallpaperMigration && (
+                  <div className="wm-migration-summary">
+                    <p><strong>{localWallpaperMigration.source.assets.length}</strong> 张图片 · <strong>{localWallpaperMigration.source.presets.length}</strong> 组保存方案</p>
+                    <p>{localWallpaperMigration.serverHasUserData
+                      ? "服务器已有壁纸数据：服务器当前配置会保留；本机当前配置会作为一组新方案保存，图片与本机方案会合并。"
+                      : "服务器目前只有项目素材和默认空分配：本机当前分配会成为服务器当前配置，图片与方案会一起迁入。"}</p>
+                    <p>迁移成功后，同一服务器上的设备会共享这些图片和配置。本机副本保留；取消或容量不足时可以稍后重试。</p>
+                  </div>
+                )}
+                <div className="wm-bulk-dialog-footer">
+                  <Dialog.Close asChild>
+                    <button type="button" className="ui-button-secondary">稍后</button>
+                  </Dialog.Close>
+                  <button type="button" className="ui-button-primary" disabled={busy || wallpaperReadOnly} onClick={() => void handleMigrateLocalWallpaper()}>
+                    {busy ? "正在迁移…" : "确认并迁移"}
+                  </button>
+                </div>
+              </Dialog.Content>
+            </Dialog.Portal>
+          </Dialog.Root>
+
+          {wallpaperStorageError && (
+            <div className="wm-sync-banner" role="status">
+              <span>{wallpaperStorageError}</span>
+              <button type="button" className="ui-button-secondary" onClick={() => void onRefreshWallpaperSnapshot()}>
+                重试连接
+              </button>
+            </div>
+          )}
+          {!wallpaperPreferencesReady ? (
+            <div className="wm-storage-loading" role="status">正在同步服务器壁纸数据…</div>
           ) : (
-            <div className="wm-layout">
+            <div className="wm-layout" data-preview-open={previewOpen}>
             <div className="wm-main">
               <TabsContent value="library" className="wm-tab-panel">
                 <div className="wm-library">
@@ -1086,26 +1375,87 @@ export default function WallpaperManagerPanel({
                       <div>
                         <strong>壁纸图库</strong>
                         <span>
-                          {wallpaperAssets.length} 张自定义 · {builtInWallpapers.length} 张内置
+                          {customWallpaperCount} / {maxCustomWallpaperAssets} 张自定义 · {wallpaperAssets.length - customWallpaperCount} 张内置
                         </span>
                       </div>
                     </div>
                     <div className="wm-toolbar-actions">
-                      <span className="wm-storage-pill">
+                      <span
+                        className="wm-storage-pill"
+                        role="status"
+                        aria-label={
+                          "服务器图库占用 " +
+                          formatBytes(totalStorageBytes) +
+                          "，上限 " +
+                          formatBytes(wallpaperStorageQuotaBytes)
+                        }
+                      >
                         <HardDrive size={14} aria-hidden="true" />
-                        占用 {formatBytes(totalStorageBytes)}
+                        <strong>{formatBytes(totalStorageBytes)} / {formatBytes(wallpaperStorageQuotaBytes)}</strong>
                       </span>
                       <button
                         type="button"
                         className="ui-button-primary wm-import-trigger"
                         aria-expanded={importOpen}
-                        disabled={busy}
+                        disabled={busy || wallpaperReadOnly}
+                        title={
+                          assetCountAtCapacity
+                            ? "自定义壁纸已达 " + maxCustomWallpaperAssets + " 张上限"
+                            : totalStorageBytes >= wallpaperStorageQuotaBytes
+                              ? "壁纸库容量已满；请删除未引用图片后再添加"
+                              : undefined
+                        }
                         onClick={() => setImportOpen((open) => !open)}
                       >
                         <Plus size={15} aria-hidden="true" />
                         {importOpen ? "关闭导入" : "添加壁纸"}
                       </button>
                     </div>
+                  </div>
+
+                  <div className="wm-library-filters">
+                    <label className="wm-library-search">
+                      <Search size={15} aria-hidden="true" />
+                      <input
+                        type="search"
+                        aria-label="按名称搜索壁纸"
+                        placeholder="搜索壁纸名称"
+                        value={librarySearch}
+                        onChange={(event) => setLibrarySearch(event.currentTarget.value)}
+                      />
+                    </label>
+                    <div
+                      className="wm-library-usage-filter"
+                      role="group"
+                      aria-label="按壁纸引用状态筛选"
+                    >
+                      <button
+                        type="button"
+                        aria-pressed={libraryUsageFilter === "all"}
+                        onClick={() => setLibraryUsageFilter("all")}
+                      >
+                        全部 <small>{items.length}</small>
+                      </button>
+                      <button
+                        type="button"
+                        aria-pressed={libraryUsageFilter === "referenced"}
+                        onClick={() => setLibraryUsageFilter("referenced")}
+                      >
+                        已引用 <small>{referencedItemCount}</small>
+                      </button>
+                      <button
+                        type="button"
+                        aria-pressed={libraryUsageFilter === "unused"}
+                        onClick={() => setLibraryUsageFilter("unused")}
+                      >
+                        未引用 <small>{unusedItemCount}</small>
+                      </button>
+                    </div>
+                    <span className="wm-library-result-count" role="status">
+                      {filteredItems.length === items.length
+                        ? "共 " + items.length + " 张"
+                        : "匹配 " + filteredItems.length + " / " + items.length}
+                    </span>
                   </div>
 
                   {importOpen && (
@@ -1119,7 +1469,7 @@ export default function WallpaperManagerPanel({
                           type="button"
                           className="wm-import-close"
                           aria-label="关闭壁纸导入"
-                          disabled={busy}
+                          disabled={busy || wallpaperReadOnly}
                           onClick={() => setImportOpen(false)}
                         >
                           ×
@@ -1147,7 +1497,7 @@ export default function WallpaperManagerPanel({
                           <input
                             type="file"
                             accept="image/png,image/jpeg,image/webp"
-                            disabled={busy}
+                            disabled={busy || wallpaperReadOnly}
                             onChange={(event) => updateFile("desktop", event)}
                           />
                         </label>
@@ -1160,23 +1510,29 @@ export default function WallpaperManagerPanel({
                           <input
                             type="file"
                             accept="image/png,image/jpeg,image/webp"
-                            disabled={busy}
+                            disabled={busy || wallpaperReadOnly}
                             onChange={(event) => updateFile("mobile", event)}
                           />
                         </label>
                       </div>
                       <div className="wm-import-footer">
                         <p>
-                          图片在浏览器本机处理并保存，不会上传到服务端。
+                          图片保存在当前服务器并可跨设备共享。最多保存 {maxCustomWallpaperAssets} 张自定义壁纸；总量上限 {formatBytes(wallpaperStorageQuotaBytes)}。
                         </p>
                         <button
                           type="button"
                           className="ui-button-primary"
-                          disabled={busy || (!desktopFile && !mobileFile)}
+                          disabled={
+                            busy || wallpaperReadOnly ||
+                            (!desktopFile && !mobileFile) ||
+                            libraryAtCapacity
+                          }
                           onClick={() => void handleAddWallpaper()}
                         >
                           <Plus size={15} aria-hidden="true" />
-                          {busy ? "正在优化并保存…" : "保存到壁纸库"}
+                          {busy
+                            ? "正在优化并保存…"
+                            : libraryAtCapacity ? "壁纸库已达上限" : "保存到壁纸库"}
                         </button>
                       </div>
                     </div>
@@ -1190,7 +1546,11 @@ export default function WallpaperManagerPanel({
                         </span>
                         <div>
                           <strong>张壁纸已选</strong>
-                          <small>可统一分配到多个页面区域</small>
+                          <small>
+                            {selectedWallpaperIds.length === 1
+                              ? "下一步选择要应用的页面或区域。"
+                              : "可统一应用到多个页面区域。"}
+                          </small>
                         </div>
                       </div>
                       <div className="wm-selection-actions">
@@ -1199,7 +1559,7 @@ export default function WallpaperManagerPanel({
                           className="ui-button-ghost wm-text-action"
                           onClick={selectAllWallpapers}
                         >
-                          全选
+                          全选筛选结果
                         </button>
                         <button
                           type="button"
@@ -1220,7 +1580,7 @@ export default function WallpaperManagerPanel({
                               className="ui-button-primary wm-apply-trigger"
                             >
                               <Layers size={15} aria-hidden="true" />
-                              批量应用
+                              {selectedWallpaperIds.length === 1 ? "选择应用位置" : "批量应用"}
                             </button>
                           </Dialog.Trigger>
                           <Dialog.Portal>
@@ -1298,7 +1658,7 @@ export default function WallpaperManagerPanel({
                                 <button
                                   type="button"
                                   className="ui-button-primary"
-                                  disabled={busy || targetIds.length === 0}
+                                  disabled={busy || wallpaperReadOnly || targetIds.length === 0}
                                   onClick={() => void handleApply()}
                                 >
                                   {busy ? "正在应用…" : "应用到所选区域"}
@@ -1310,7 +1670,7 @@ export default function WallpaperManagerPanel({
                         <button
                           type="button"
                           className="ui-button-danger wm-delete-trigger"
-                          disabled={busy || deletableSelection.length === 0}
+                          disabled={busy || wallpaperReadOnly || deletableSelection.length === 0}
                           onClick={() => void handleDeleteSelection()}
                         >
                           <Trash2 size={15} aria-hidden="true" />
@@ -1320,29 +1680,29 @@ export default function WallpaperManagerPanel({
                     </div>
                   )}
 
-                  <div className="wm-library-grid" role="group" aria-label="壁纸库">
-                    {items.map((item) => {
+                  <div className="wm-library-grid" role="group" aria-label="壁纸图库">
+                    {filteredItems.length === 0 && (
+                      <p className="wm-library-empty" role="status">
+                        没有符合条件的壁纸；调整搜索词或引用状态筛选。
+                      </p>
+                    )}
+                    {visibleLibraryItems.map((item) => {
                       const selected = selectedWallpaperIds.includes(item.id);
-                      const usedIn = wallpaperModules.flatMap((target) => [
-                        ...(wallpaperPreferences[target.id].wallpaperIds.includes(item.id)
-                          ? [{ label: target.label + " · 整个页面" }]
-                          : []),
-                        ...wallpaperSurfacesForModule(target.id)
-                          .filter((surface) =>
-                            wallpaperPreferences[target.id].surfaces[surface.id]?.wallpaperIds.includes(item.id),
-                          )
-                          .map((surface) => ({ label: target.label + " · " + surface.label })),
-                      ]);
-                      const thumbnail =
-                        item.kind === "built-in"
-                          ? device === "desktop"
-                            ? item.desktopUrl
-                            : item.mobileUrl
-                          : thumbnailUrls[item.id]?.[device] ??
-                            thumbnailUrls[item.id]?.desktop ??
-                            (previewFiles?.assetId === item.id
-                              ? device === "desktop" ? previewFiles.desktopUrl : previewFiles.mobileUrl
-                              : "");
+                      const usedIn = wallpaperUsage.get(item.id) ?? [];
+                      const assignmentRefs = usedIn.filter((reference) => !reference.startsWith("方案 · "));
+                      const presetRefs = usedIn.length - assignmentRefs.length;
+                      const usageSummary = [
+                        assignmentRefs.length ? "用于 " + assignmentRefs.length + " 处" : "",
+                        presetRefs ? presetRefs + " 组方案引用" : "",
+                      ].filter(Boolean).join(" · ") || "尚未引用";
+                      const usageDetails = usedIn.length
+                        ? "引用于 " + usedIn.join("、")
+                        : "尚未被页面或方案引用";
+                      const thumbnail = thumbnailUrls[item.id]?.[device] ??
+                        thumbnailUrls[item.id]?.desktop ??
+                        (previewFiles?.assetId === item.id
+                          ? device === "desktop" ? previewFiles.desktopUrl : previewFiles.mobileUrl
+                          : "");
                       return (
                         <button
                           key={item.id}
@@ -1352,11 +1712,9 @@ export default function WallpaperManagerPanel({
                           aria-label={
                             (selected ? "取消选择：" : "选择：") +
                             item.name +
-                            (usedIn.length
-                              ? "，已用于 " +
-                                usedIn.map((entry) => entry.label).join("、")
-                              : "")
+                            "，" + usageDetails
                           }
+                          title={usageDetails}
                           onClick={() => toggleWallpaperSelection(item.id)}
                         >
                           <span className="wm-asset-thumb">
@@ -1372,11 +1730,9 @@ export default function WallpaperManagerPanel({
                                 <ImagePlus size={19} aria-hidden="true" />
                               </span>
                             )}
-                            {selected && (
-                              <i className="wm-asset-selected">
-                                <Check size={14} aria-hidden="true" />
-                              </i>
-                            )}
+                            <i className="wm-asset-selected" data-selected={selected} aria-hidden="true">
+                              {selected && <Check size={14} />}
+                            </i>
                           </span>
                           <span className="wm-asset-copy">
                             <strong>{item.name}</strong>
@@ -1385,32 +1741,22 @@ export default function WallpaperManagerPanel({
                                 ? "内置壁纸 · 双端适配"
                                 : "自定义壁纸 · " + formatBytes(item.optimizedBytes)}
                             </small>
-                            <small>
-                              {usedIn.length
-                                ? "用于 " + usedIn.map((entry) => entry.label).join("、")
-                                : "尚未分配"}
-                            </small>
+                            <small>{usageSummary}</small>
                           </span>
                         </button>
                       );
                     })}
-                    <button
-                      type="button"
-                      className="wm-upload-card"
-                      aria-label="添加一张壁纸到图库"
-                      onClick={() => setImportOpen(true)}
-                    >
-                      <span className="wm-upload-art">
-                        <ImagePlus size={24} aria-hidden="true" />
-                        <span>导入电脑与手机壁纸</span>
-                      </span>
-                      <span className="wm-asset-copy">
-                        <strong>添加到壁纸库</strong>
-                        <small>支持 PNG、JPEG 和 WebP</small>
-                        <small>本机优化，随时应用到组件</small>
-                      </span>
-                    </button>
+
                   </div>
+                  <WallpaperPagination
+                    page={visibleLibraryPage}
+                    pageCount={libraryPageCount}
+                    pageStart={visibleLibraryStart}
+                    pageSize={visibleLibraryPageSize}
+                    total={filteredItems.length}
+                    label="壁纸图库翻页"
+                    onChange={setLibraryPage}
+                  />
                 </div>
                 {feedback && !bulkApplyOpen && (
                   <p
@@ -1453,6 +1799,7 @@ export default function WallpaperManagerPanel({
                       <label htmlFor="wm-surface-select">应用区域</label>
                       <Select
                         value={surfaceTarget}
+                        disabled={wallpaperReadOnly}
                         onValueChange={(value) =>
                           setSurfaceTarget(value as "page" | WallpaperSurfaceId)
                         }
@@ -1482,7 +1829,13 @@ export default function WallpaperManagerPanel({
                     <button
                       type="button"
                       className="ui-button-ghost wm-text-action"
-                      onClick={() => setView("library")}
+                      disabled={wallpaperReadOnly}
+                      onClick={() => {
+                        contextualTarget.current = targetId;
+                        setSelectedWallpaperIds([]);
+                        setTargetIds([targetId]);
+                        setView("library");
+                      }}
                     >
                       从壁纸库添加到此区域
                     </button>
@@ -1493,12 +1846,14 @@ export default function WallpaperManagerPanel({
                     </p>
                   )}
                   {assignedItems.length > 0 ? (
-                    <ol className="wm-assigned-list">
+                    <ol
+                      className="wm-assigned-list"
+                      aria-label={isMobile ? "已分配壁纸" : "已分配壁纸，可滚动浏览"}
+                      tabIndex={isMobile ? undefined : 0}
+                    >
                       {assignedItems.map((item, index) => {
-                        const thumbnail =
-                          item.kind === "built-in"
-                            ? item.desktopUrl
-                            : thumbnailUrls[item.id]?.desktop ?? "";
+                        const thumbnail = thumbnailUrls[item.id]?.desktop ??
+                          (previewFiles?.assetId === item.id ? previewFiles.desktopUrl : "");
                         return (
                           <li key={item.id} className="wm-assigned-item">
                             <span className="wm-assigned-thumb">
@@ -1519,7 +1874,7 @@ export default function WallpaperManagerPanel({
                               <button
                                 type="button"
                                 className="wm-icon-button"
-                                disabled={index === 0}
+                                disabled={wallpaperReadOnly || index === 0}
                                 aria-label={"将" + item.name + "上移"}
                                 onClick={() => reorderModuleWallpapers(index, -1)}
                               >
@@ -1528,7 +1883,7 @@ export default function WallpaperManagerPanel({
                               <button
                                 type="button"
                                 className="wm-icon-button"
-                                disabled={index === assignedItems.length - 1}
+                                disabled={wallpaperReadOnly || index === assignedItems.length - 1}
                                 aria-label={"将" + item.name + "下移"}
                                 onClick={() => reorderModuleWallpapers(index, 1)}
                               >
@@ -1553,6 +1908,7 @@ export default function WallpaperManagerPanel({
                       <input
                         type="checkbox"
                         checked={preference.cycleDaily}
+                        disabled={wallpaperReadOnly}
                         onChange={toggleWallpaperCycle}
                       />
                       <span>
@@ -1574,6 +1930,7 @@ export default function WallpaperManagerPanel({
                         max={85}
                         step={1}
                         value={overlayDraft}
+                        disabled={wallpaperReadOnly}
                         aria-valuetext={overlayDraft + "%"}
                         onChange={(event) => {
                           const value = Number(event.currentTarget.value);
@@ -1591,7 +1948,7 @@ export default function WallpaperManagerPanel({
                       <button
                         type="button"
                         className="ui-button-secondary"
-                        disabled={busy}
+                        disabled={busy || wallpaperReadOnly}
                         onClick={() => void handleResetModule()}
                       >
                         <RotateCcw size={15} aria-hidden="true" />
@@ -1622,7 +1979,7 @@ export default function WallpaperManagerPanel({
                     <button
                       type="button"
                       className="ui-button-primary wm-save-preset-trigger"
-                      disabled={busy || missingCurrentAssets.length > 0 || wallpaperPresets.length >= maxWallpaperPresets}
+                      disabled={busy || wallpaperReadOnly || missingCurrentAssets.length > 0 || wallpaperPresets.length >= maxWallpaperPresets}
                       title={wallpaperPresets.length >= maxWallpaperPresets
                         ? "最多保存 " + maxWallpaperPresets + " 组方案"
                         : undefined}
@@ -1640,38 +1997,47 @@ export default function WallpaperManagerPanel({
                   )}
                   <div className="wm-preset-section-heading">
                     <strong>方案列表</strong>
-                    {wallpaperPresets.length > 0 && (
-                      <small>{wallpaperPresets.length} 组已保存</small>
-                    )}
+                    <small>
+                      {builtInWallpaperPresets.length} 个内置 · {wallpaperPresets.length} 个自定义
+                    </small>
                   </div>
 
-                  <div className="wm-preset-list">
+                  <div className="wm-preset-list" role="group" aria-label="壁纸方案列表">
                     <article
                       className="wm-preset-card wm-preset-card-default"
                       data-active={currentIsProjectDefault}
+                      data-previewed={previewPresetId === "__project-default__"}
                     >
-                      <WallpaperPresetArtwork
-                        assetIds={projectDefaultSummary.assets}
-                        label="项目默认"
-                        selected={previewPresetId === "__project-default__"}
-                        items={itemById}
-                        thumbnails={thumbnailUrls}
-                        previewFiles={previewFiles}
-                        device={device}
-                        onSelect={() => setPreviewPresetId("__project-default__")}
-                      />
-                      <div className="wm-preset-copy">
-                        <strong>项目默认</strong>
-                        <p>清除壁纸分配，恢复所有页面与内容区域的默认样式。</p>
-                      </div>
+                      <button
+                        type="button"
+                        className="wm-preset-preview"
+                        aria-pressed={previewPresetId === "__project-default__"}
+                        aria-label="预览项目默认背景"
+                        onClick={() => {
+                          setPreviewPresetId("__project-default__");
+                          setPreviewTargetOverride(null);
+                        }}
+                      >
+                        <WallpaperPresetArtwork
+                          assetIds={projectDefaultSummary.assets}
+                          items={itemById}
+                          thumbnails={thumbnailUrls}
+                          previewFiles={previewFiles}
+                          device={device}
+                        />
+                        <span className="wm-preset-copy">
+                          <strong>项目默认</strong>
+                          <span>所有页面和内容区域使用原有背景</span>
+                        </span>
+                      </button>
                       <div className="wm-preset-actions">
                         {currentIsProjectDefault ? (
                           <span className="wm-preset-current-state" role="status">当前使用</span>
                         ) : (
                           <button
                             type="button"
-                            className="ui-button-primary"
-                            disabled={busy}
+                            className="ui-button-secondary"
+                            disabled={busy || wallpaperReadOnly}
                             onClick={() => void handleApplyPreset(null)}
                           >
                             恢复默认
@@ -1680,89 +2046,97 @@ export default function WallpaperManagerPanel({
                       </div>
                     </article>
 
-                    {wallpaperPresets.map((preset) => {
+                    {visiblePresets.map((preset) => {
                       const summary = presetSummary(preset.preferences);
                       const missingAssets = summary.assets.filter((id) => !itemById.has(id));
-                      const isActive = wallpaperPreferencesEqual(
-                        wallpaperPreferences,
-                        preset.preferences,
-                      );
+                      const isActive = wallpaperPreferencesEqual(wallpaperPreferences, preset.preferences);
                       return (
                         <article
                           key={preset.id}
                           className="wm-preset-card"
                           data-active={isActive}
+                          data-previewed={previewPresetId === preset.id}
                         >
-                          <WallpaperPresetArtwork
-                            assetIds={summary.assets}
-                            label={preset.name}
-                            selected={previewPresetId === preset.id}
-                            items={itemById}
-                            thumbnails={thumbnailUrls}
-                            previewFiles={previewFiles}
-                            device={device}
-                            onSelect={() => setPreviewPresetId(preset.id)}
-                          />
-                          <div className="wm-preset-copy">
-                            <strong>{preset.name}</strong>
-                            <p>{summary.areas} 个已配置区域 · {summary.assets.length} 张引用图片</p>
-                            <small>更新于 {formatPresetDate(preset.updatedAt)}</small>
-                            {missingAssets.length > 0 && (
-                              <small className="wm-preset-missing">
-                                缺少 {missingAssets.length} 张壁纸；更新此方案可用当前设置修复。
-                              </small>
-                            )}
-                          </div>
-                          <div className="wm-preset-actions" data-active={isActive}>
+                          <button
+                            type="button"
+                            className="wm-preset-preview"
+                            aria-pressed={previewPresetId === preset.id}
+                            aria-label={"预览方案：" + preset.name}
+                            onClick={() => {
+                              setPreviewPresetId(preset.id);
+                              setPreviewTargetOverride(null);
+                            }}
+                          >
+                            <WallpaperPresetArtwork
+                              assetIds={summary.assets}
+                              items={itemById}
+                              thumbnails={thumbnailUrls}
+                              previewFiles={previewFiles}
+                              device={device}
+                            />
+                            <span className="wm-preset-copy">
+                              <strong>{preset.name}</strong>
+                              <span>{summary.areas} 个已配置区域 · {summary.assets.length} 张图片</span>
+                              <small>{preset.source === "built-in" ? "内置方案" : "更新于 " + formatPresetDate(preset.updatedAt)}</small>
+                              {missingAssets.length > 0 && (
+                                <small className="wm-preset-missing">缺少 {missingAssets.length} 张图片，请更新方案。</small>
+                              )}
+                            </span>
+                          </button>
+                          <div className="wm-preset-actions">
                             {isActive ? (
                               <span className="wm-preset-current-state" role="status">当前使用</span>
                             ) : (
                               <button
                                 type="button"
-                                className="ui-button-primary"
-                                disabled={busy || missingAssets.length > 0}
+                                className="ui-button-secondary"
+                                disabled={busy || wallpaperReadOnly || missingAssets.length > 0}
                                 onClick={() => void handleApplyPreset(preset.id)}
                               >
-                                {missingAssets.length ? "图片缺失" : "应用方案"}
+                                {missingAssets.length ? "图片缺失" : "应用"}
                               </button>
                             )}
-                            <button
-                              type="button"
-                              className="ui-button-secondary"
-                              disabled={busy || isActive}
-                              onClick={() => void handleUpdatePreset(preset)}
-                            >
-                              更新为当前
-                            </button>
-                            <button
-                              type="button"
-                              className="ui-button-secondary"
-                              disabled={busy}
-                              onClick={() => openRenamePresetDialog(preset)}
-                            >
-                              <Pencil size={14} aria-hidden="true" />
-                              重命名
-                            </button>
-                            <button
-                              type="button"
-                              className="ui-button-danger"
-                              disabled={busy}
-                              onClick={() => void handleDeletePreset(preset)}
-                            >
-                              <Trash2 size={14} aria-hidden="true" />
-                              删除
-                            </button>
+                            {preset.source !== "built-in" && (
+                              <DropdownMenu>
+                                <DropdownMenuTrigger asChild>
+                                  <button
+                                    type="button"
+                                    className="wm-preset-more"
+                                    aria-label={"更多方案操作：" + preset.name}
+                                    disabled={busy || wallpaperReadOnly}
+                                  >
+                                    <MoreHorizontal size={18} aria-hidden="true" />
+                                  </button>
+                                </DropdownMenuTrigger>
+                                <DropdownMenuContent align="end">
+                                  <DropdownMenuItem disabled={isActive} onSelect={() => void handleUpdatePreset(preset)}>
+                                    更新为当前设置
+                                  </DropdownMenuItem>
+                                  <DropdownMenuItem onSelect={() => openRenamePresetDialog(preset)}>
+                                    重命名
+                                  </DropdownMenuItem>
+                                  <DropdownMenuSeparator />
+                                  <DropdownMenuItem className="text-[var(--ui-danger-text)]" onSelect={() => void handleDeletePreset(preset)}>
+                                    删除方案
+                                  </DropdownMenuItem>
+                                </DropdownMenuContent>
+                              </DropdownMenu>
+                            )}
                           </div>
                         </article>
                       );
                     })}
                   </div>
+                  <WallpaperPagination
+                    page={visiblePresetPage}
+                    pageCount={presetPageCount}
+                    pageStart={(visiblePresetPage - 1) * presetPageSize}
+                    pageSize={presetPageSize}
+                    total={allPresets.length}
+                    label="壁纸方案翻页"
+                    onChange={setPresetPage}
+                  />
 
-                  {wallpaperPresets.length === 0 && (
-                    <div className="wm-empty wm-preset-empty">
-                      暂无自定义方案
-                    </div>
-                  )}
                   {feedback && (
                     <p
                       className={feedback.kind === "error" ? "wm-error" : "wm-status"}
@@ -1799,7 +2173,7 @@ export default function WallpaperManagerPanel({
                             type="button"
                             className="wm-import-close"
                             aria-label="关闭方案编辑"
-                            disabled={busy}
+                            disabled={busy || wallpaperReadOnly}
                           >
                             ×
                           </button>
@@ -1832,11 +2206,11 @@ export default function WallpaperManagerPanel({
                         )}
                         <div className="wm-profile-dialog-footer">
                           <Dialog.Close asChild>
-                            <button type="button" className="ui-button-secondary" disabled={busy}>
+                            <button type="button" className="ui-button-secondary" disabled={busy || wallpaperReadOnly}>
                               取消
                             </button>
                           </Dialog.Close>
-                          <button type="submit" className="ui-button-primary" disabled={busy}>
+                          <button type="submit" className="ui-button-primary" disabled={busy || wallpaperReadOnly}>
                             {busy ? "正在保存…" : presetDialog?.mode === "rename" ? "保存名称" : "保存方案"}
                           </button>
                         </div>
@@ -1847,17 +2221,17 @@ export default function WallpaperManagerPanel({
               </TabsContent>
             </div>
 
-            <aside
-              className="wm-preview"
-              data-mobile-expanded={mobilePreviewExpanded}
-            >
+            {previewOpen && (
+            <aside id="wm-preview-panel" className="wm-preview" aria-label="壁纸效果预览">
               <div className="wm-preview-toolbar">
                 <div>
                   <span className="wm-preview-kicker">
-                    {view === "presets" ? "方案预览 · " + previewPresetName : "实时预览"}
+                    {view === "presets" ? "方案预览" : view === "library" ? "图库预览" : "区域效果"}
                   </span>
                   <strong>
-                    {previewItem?.name ?? (previewMissingAsset ? "壁纸图片缺失" : "尚未分配壁纸")}
+                    {view === "presets"
+                      ? previewPresetName
+                      : previewItem?.name ?? (previewMissingAsset ? "壁纸图片缺失" : "原有背景")}
                   </strong>
                 </div>
                 <div className="wm-device-switch" role="group" aria-label="预览设备">
@@ -1866,27 +2240,48 @@ export default function WallpaperManagerPanel({
                     aria-pressed={device === "desktop"}
                     onClick={() => setDevice("desktop")}
                   >
-                    <Monitor size={14} aria-hidden="true" />电脑
+                    <Monitor size={16} aria-hidden="true" />电脑
                   </button>
                   <button
                     type="button"
                     aria-pressed={device === "mobile"}
                     onClick={() => setDevice("mobile")}
                   >
-                    <Smartphone size={14} aria-hidden="true" />手机
+                    <Smartphone size={16} aria-hidden="true" />手机
                   </button>
                 </div>
                 <button
                   type="button"
-                  className="wm-mobile-preview-toggle"
-                  aria-expanded={mobilePreviewExpanded}
-                  aria-controls="wm-preview-canvas"
-                  onClick={() => setMobilePreviewExpanded((expanded) => !expanded)}
+                  className="wm-icon-button wm-preview-close"
+                  aria-label="收起壁纸预览"
+                  onClick={() => setPreviewOpen(false)}
                 >
-                  {mobilePreviewExpanded ? "收起预览" : "查看预览"}
-                  <ChevronDown size={14} aria-hidden="true" />
+                  ×
                 </button>
               </div>
+              {view === "presets" && configuredPreviewTargets.length > 0 && (
+                <div className="wm-preview-target-row">
+                  <div>
+                    <strong>预览区域</strong>
+                    <span>{configuredPreviewTargets.length} 个区域已配置</span>
+                  </div>
+                  <Select
+                    value={previewTargetId}
+                    onValueChange={(value) => setPreviewTargetOverride(value as WallpaperAssignmentTargetId)}
+                  >
+                    <SelectTrigger className="wm-preview-target-select" aria-label="选择方案预览区域">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent position="popper">
+                      {configuredPreviewTargets.map((target) => (
+                        <SelectItem key={target} value={target}>
+                          {wallpaperTargetLabel(target)}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              )}
               <div
                 id="wm-preview-canvas"
                 className="wm-preview-canvas"
@@ -1894,31 +2289,20 @@ export default function WallpaperManagerPanel({
                 data-target={isSurfacePreview ? "surface" : "page"}
                 style={previewStyle}
                 role="group"
-                aria-label={
-                  (previewPresetName ? previewPresetName + " · " : "") +
-                  moduleLabel + " · " + targetLabel + "壁纸预览"
-                }
+                aria-label={(previewPresetName ? previewPresetName + " · " : "") + previewTargetLabel + "壁纸预览"}
               >
                 <div className="wm-preview-page">
                   <div className="wm-preview-page-heading">
-                    <small>
-                      {moduleLabel}
-                    </small>
-                    <strong>
-                      {isSurfacePreview
-                        ? targetLabel
-                        : module === "stats"
-                          ? "本月概览"
-                          : moduleLabel}
-                    </strong>
+                    <small>{previewModuleLabel}</small>
+                    <strong>{previewHeading}</strong>
                   </div>
                   <div className="wm-preview-page-content">
                     <div
                       className="wm-preview-content-card"
                       data-wallpaper-preview-target={isSurfacePreview ? "true" : undefined}
                     >
-                      <small>{isSurfacePreview ? targetLabel : "内容示意"}</small>
-                      <strong>{isSurfacePreview ? "选定区域" : "标题与正文"}</strong>
+                      <small>{isSurfacePreview ? "内容区域" : "内容示意"}</small>
+                      <strong>标题与正文</strong>
                       <i />
                       <i />
                     </div>
@@ -1929,20 +2313,20 @@ export default function WallpaperManagerPanel({
                   </div>
                 </div>
               </div>
+              <p className="wm-preview-caption">
+                {view === "library"
+                  ? "预览当前图片；应用前不会更改页面背景。"
+                  : "页面内容为示意，壁纸与遮罩反映所选区域的配置。"}
+              </p>
               {previewLoading && <p className="wm-help" role="status">正在读取壁纸…</p>}
               {previewMissingAsset && (
                 <p className="wm-error" role="alert">当前设置引用的壁纸不在图库中。</p>
               )}
-              {view === "library" && selectedWallpaperIds.length > 1 && (
-                <p className="wm-help">预览所选列表中的第一张壁纸。</p>
-              )}
             </aside>
+            )}
             </div>
           )}
 
-          <p className="wm-storage-note">
-            壁纸图片与方案保存在本机浏览器；清理站点数据后需重新导入图片并重新保存方案。
-          </p>
         </Tabs>
       </section>
     </>
