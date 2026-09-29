@@ -85,20 +85,10 @@ fn create_backup_sync(db: AppState) -> Result<BackupMeta, (StatusCode, String)> 
         suffix
     );
     let path = dir.join(filename);
-    let path_str = path
-        .to_str()
-        .ok_or_else(|| {
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "Invalid backup path".to_string(),
-            )
-        })?
-        .to_string();
-
     let mut db = db
         .lock()
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-    db.snapshot_to(&path_str)
+    db.snapshot_without_wallpapers_to(&path)
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     drop(db);
 
@@ -209,18 +199,50 @@ fn restore_backup_sync(
         suffix
     );
     let pre_restore_path = dir.join(&pre_restore_name);
-    let pre_restore_path_str = pre_restore_path.to_str().ok_or_else(|| {
+    let restore_state_dir = dir.join(format!(".restore-state-{suffix}"));
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::DirBuilderExt;
+        let mut builder = fs::DirBuilder::new();
+        builder
+            .mode(0o700)
+            .create(&restore_state_dir)
+            .map_err(|error| (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()))?;
+    }
+    #[cfg(not(unix))]
+    fs::create_dir(&restore_state_dir)
+        .map_err(|error| (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()))?;
+    let restore_state_path = restore_state_dir.join("database.db");
+    let restore_state_str = restore_state_path.to_str().ok_or_else(|| {
         (
             StatusCode::INTERNAL_SERVER_ERROR,
-            "Invalid backup path".to_string(),
+            "Invalid restore state path".to_string(),
         )
     })?;
-
     let mut database = db
         .lock()
         .map_err(|error| (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()))?;
-    if let Err(error) = database.snapshot_to(pre_restore_path_str) {
+    if let Err(error) = database.snapshot_to(restore_state_str) {
+        let _ = fs::remove_dir_all(&restore_state_dir);
+        return Err((StatusCode::INTERNAL_SERVER_ERROR, error.to_string()));
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if let Err(error) =
+            fs::set_permissions(&restore_state_path, fs::Permissions::from_mode(0o600))
+        {
+            let _ = fs::remove_dir_all(&restore_state_dir);
+            return Err((StatusCode::INTERNAL_SERVER_ERROR, error.to_string()));
+        }
+    }
+    if let Err(error) = Database::verify_file(&restore_state_path) {
+        let _ = fs::remove_dir_all(&restore_state_dir);
+        return Err((StatusCode::INTERNAL_SERVER_ERROR, error));
+    }
+    if let Err(error) = database.snapshot_without_wallpapers_to(&pre_restore_path) {
         let _ = fs::remove_file(&pre_restore_path);
+        let _ = fs::remove_dir_all(&restore_state_dir);
         return Err((StatusCode::INTERNAL_SERVER_ERROR, error.to_string()));
     }
     #[cfg(unix)]
@@ -230,36 +252,59 @@ fn restore_backup_sync(
             fs::set_permissions(&pre_restore_path, fs::Permissions::from_mode(0o600))
         {
             let _ = fs::remove_file(&pre_restore_path);
+            let _ = fs::remove_dir_all(&restore_state_dir);
             return Err((StatusCode::INTERNAL_SERVER_ERROR, error.to_string()));
         }
     }
     if let Err(error) = Database::verify_file(&pre_restore_path) {
         let _ = fs::remove_file(&pre_restore_path);
+        let _ = fs::remove_dir_all(&restore_state_dir);
         return Err((
             StatusCode::INTERNAL_SERVER_ERROR,
             format!("恢复前保护点校验失败：{error}"),
         ));
     }
 
-    if let Err(restore_error) = database.restore_from_snapshot(&source) {
-        let rollback_result = database.restore_from_snapshot(&pre_restore_path);
-        return match rollback_result {
-            Ok(()) => Err((
+    let restore_result = database
+        .restore_from_snapshot(&source)
+        .and_then(|()| database.initialize())
+        .and_then(|()| database.restore_wallpaper_state_from_snapshot(&restore_state_path));
+    if let Err(restore_error) = restore_result {
+        let rollback_result = database.restore_from_snapshot(&restore_state_path);
+        if rollback_result.is_ok() {
+            let _ = fs::remove_dir_all(&restore_state_dir);
+            return Err((
                 StatusCode::BAD_REQUEST,
                 format!("恢复失败：{restore_error}；当前数据已保持不变。"),
-            )),
-            Err(rollback_error) => Err((
-                StatusCode::INTERNAL_SERVER_ERROR,
-                format!(
-                    "恢复失败且自动回滚也失败：{restore_error}；回滚错误：{rollback_error}。请保留恢复前保护点 {pre_restore_name} 并停止继续写入。"
-                ),
-            )),
-        };
+            ));
+        }
+        let rollback_error = rollback_result.unwrap_err();
+        return Err((StatusCode::INTERNAL_SERVER_ERROR, format!(
+            "恢复失败且自动回滚也失败：{restore_error}；回滚错误：{rollback_error}。请保留临时保护点 {} 并停止继续写入。",
+            restore_state_path.display()
+        )));
     }
     drop(database);
+    if let Err(error) = fs::remove_dir_all(&restore_state_dir) {
+        return Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("数据已恢复，但临时壁纸保护文件无法清除：{error}"),
+        ));
+    }
 
     let latest = dir.join("daily-summary-latest.db");
-    backup_policy::publish_latest_snapshot(&source, &latest).map_err(|error| {
+    let latest_snapshot = dir.join(format!(".latest-{}.db", Uuid::new_v4()));
+    {
+        let mut database = db
+            .lock()
+            .map_err(|error| (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()))?;
+        database
+            .snapshot_without_wallpapers_to(&latest_snapshot)
+            .map_err(|error| (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()))?;
+    }
+    let latest_result = backup_policy::publish_latest_snapshot(&latest_snapshot, &latest);
+    let _ = fs::remove_file(&latest_snapshot);
+    latest_result.map_err(|error| {
         (
             StatusCode::INTERNAL_SERVER_ERROR,
             format!("数据已恢复，但更新最近快照失败：{error}"),

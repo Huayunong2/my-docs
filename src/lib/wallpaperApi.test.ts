@@ -117,6 +117,17 @@ describe("wallpaper server API", () => {
     expect(importOptions.body).toBe(file);
   });
 
+  it("includes a cache version in the authenticated wallpaper URL", async () => {
+    vi.stubGlobal("window", { __TAURI_INTERNALS__: {} });
+    vi.stubGlobal("localStorage", storage({ server_url: "https://summary.test/api", api_token: "secret-test-token" }));
+    const blob = new Blob([new Uint8Array([4])], { type: "image/webp" });
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, status: 200, blob: () => Promise.resolve(blob) });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(getWallpaperAssetFile("anime-night", "mobile", "cache-v2")).resolves.toBe(blob);
+    expect(fetchMock.mock.calls[0][0]).toBe("https://summary.test/api/wallpapers/assets/anime-night/mobile?v=cache-v2");
+  });
+
   it("fetches protected image bytes through the shared API auth helper", async () => {
     vi.stubGlobal("window", { __TAURI_INTERNALS__: {} });
     vi.stubGlobal("localStorage", storage({ server_url: "https://summary.test/api", api_token: "secret-test-token" }));

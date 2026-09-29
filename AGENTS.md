@@ -269,5 +269,5 @@ curl http://127.0.0.1:8080/health
 - 设置 UI：`src/components/settings/WallpaperManagerPanel.tsx`；通过 `src/components/settings/AppearancePanel.tsx` 和 `src/components/SettingsPage.tsx` 挂载。
 - 页面与组件背景：`src/App.tsx`、`src/components/workspace/WallpaperSurface.tsx`；前端领域模型和旧 IndexedDB 一次性迁移读取位于 `src/lib/wallpapers.ts`。
 - 同步 API：`src/lib/api.ts`；服务端认证路由在 `server/src/server.rs`，壁纸业务处理在 `server/src/wallpapers.rs`，版本化 ZIP 包在 `server/src/wallpaper_package.rs`。
-- 持久化：`server/src/db.rs` 的 v25 迁移、SQLite BLOB 资产、revision 冲突、一次性本机迁移与包导入事务。
+- 持久化：`server/src/db.rs` 的 v25/v26 迁移、SQLite BLOB 资产、`cacheVersion` 版本化缓存、revision 冲突、一次性本机迁移与包导入事务；普通数据库快照不含壁纸数据，恢复时保留目标端壁纸。
 - 迁移包预览：`src/lib/fullPackage.ts` 使用 fflate 按流读取清单；旧完整 JSON 导入仍通过 `/articles/import-full` 兼容。

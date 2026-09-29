@@ -20,6 +20,7 @@ import Sidebar from "./components/Sidebar";
 import CommandPalette from "./components/CommandPalette";
 import * as api from "./lib/api";
 import { wallpaperConnectionMessage } from "./lib/wallpaperSyncStatus";
+import { useResponsiveWallpaperImage } from "./lib/useResponsiveWallpaperImage";
 import { connectionReturnStorageKey, readLocalStorage, readSessionStorage, removeSessionStorage, writeLocalStorage } from "./lib/storage";
 import { colorSchemeForMode, nextExplicitThemeMode, resolveDarkTheme, themeColorForMode, type ThemeMode } from "./lib/theme";
 import {
@@ -27,7 +28,6 @@ import {
   defaultWallpaperPreference,
   defaultWallpaperSurfacePreference,
   findWallpaperPreset,
-  loadWallpaperAssetFiles,
   loadLocalWallpaperMigrationSource,
   wallpaperIdForDate,
   wallpaperModuleForPage,
@@ -228,11 +228,6 @@ export function AppShell() {
   const [wallpaperAssetsRevision, setWallpaperAssetsRevision] = useState(0);
   const [localWallpaperMigrationSource, setLocalWallpaperMigrationSource] = useState<LocalWallpaperMigrationSource | null>(null);
   const [wallpaperDate, setWallpaperDate] = useState(() => new Date());
-  const [loadedWallpaperAsset, setLoadedWallpaperAsset] = useState<{
-    assetId: string;
-    desktopUrl: string;
-    mobileUrl: string;
-  } | null>(null);
   const wallpaperRevisionRef = useRef(wallpaperSnapshot.revision);
   const snapshotRequestRef = useRef(0);
   const localMigrationScanRef = useRef(false);
@@ -663,6 +658,12 @@ export function AppShell() {
     wallpaperPreference,
     wallpaperDate,
   );
+  const selectedWallpaperCacheVersion = wallpaperAssets.find((asset) => asset.id === selectedWallpaperId)?.cacheVersion;
+  const { url: selectedWallpaperUrl } = useResponsiveWallpaperImage(
+    selectedWallpaperId,
+    selectedWallpaperCacheVersion,
+    wallpaperAssetsRevision,
+  );
 
   useEffect(() => {
     const now = new Date();
@@ -678,55 +679,13 @@ export function AppShell() {
     return () => window.clearTimeout(timer);
   }, [wallpaperDate]);
 
-  useEffect(() => {
-    let current = true;
-    const objectUrls = new Set<string>();
-    setLoadedWallpaperAsset(null);
-
-    if (!selectedWallpaperId) {
-      return () => { current = false; };
-    }
-
-    const getAsset = async (variant: "desktop" | "mobile") => {
-      try {
-        return await api.getWallpaperAssetFile(selectedWallpaperId, variant);
-      } catch {
-        const local = await loadWallpaperAssetFiles(selectedWallpaperId);
-        if (!local) throw new Error("wallpaper image unavailable");
-        return variant === "mobile"
-          ? local.mobileBlob ?? local.desktopBlob
-          : local.desktopBlob ?? local.mobileBlob;
-      }
-    };
-    void Promise.all([getAsset("desktop"), getAsset("mobile")])
-      .then(([desktopBlob, mobileBlob]) => {
-        if (!current) return;
-        const makeUrl = (blob: Blob) => {
-          const url = URL.createObjectURL(blob);
-          objectUrls.add(url);
-          return url;
-        };
-        const desktopUrl = makeUrl(desktopBlob);
-        const mobileUrl = mobileBlob === desktopBlob ? desktopUrl : makeUrl(mobileBlob);
-        setLoadedWallpaperAsset({ assetId: selectedWallpaperId, desktopUrl, mobileUrl });
-      })
-      .catch(() => {
-        if (current) setLoadedWallpaperAsset(null);
-      });
-
-    return () => {
-      current = false;
-      objectUrls.forEach((url) => URL.revokeObjectURL(url));
-    };
-  }, [selectedWallpaperId, wallpaperAssetsRevision]);
-
-  const activeWallpaper = loadedWallpaperAsset?.assetId === selectedWallpaperId
-    ? loadedWallpaperAsset
+  const activeWallpaper = selectedWallpaperId && selectedWallpaperUrl
+    ? { assetId: selectedWallpaperId, desktopUrl: selectedWallpaperUrl, mobileUrl: selectedWallpaperUrl }
     : null;
   const wallpaperStyle = activeWallpaper
     ? ({
-        "--module-wallpaper-desktop": `url("${activeWallpaper.desktopUrl}")`,
-        "--module-wallpaper-mobile": `url("${activeWallpaper.mobileUrl}")`,
+        "--module-wallpaper-desktop": "url(\"" + activeWallpaper.desktopUrl + "\")",
+        "--module-wallpaper-mobile": "url(\"" + activeWallpaper.mobileUrl + "\")",
         "--module-wallpaper-overlay": String(wallpaperPreference.overlay / 100),
       } as CSSProperties)
     : undefined;
@@ -815,6 +774,7 @@ export function AppShell() {
                 value={{
                   module: wallpaperModule,
                   preferences: wallpaperPreferences,
+                  assets: wallpaperAssets,
                   date: wallpaperDate,
                   assetsRevision: wallpaperAssetsRevision,
                 }}

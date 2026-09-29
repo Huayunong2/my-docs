@@ -3,6 +3,7 @@ use crate::db::{
     ReviewDraft, ReviewItemDraft, ReviewPageQuery,
 };
 use crate::models::{Article, KnowledgeCard, Review};
+use rusqlite::Connection;
 use serde_json::json;
 
 #[test]
@@ -563,6 +564,187 @@ fn sqlite_snapshot_can_be_verified_before_restore() {
 
     Database::verify_file(&path).unwrap();
     std::fs::remove_file(path).unwrap();
+}
+
+#[test]
+fn ordinary_snapshot_excludes_wallpaper_data_without_mutating_the_live_database() {
+    let mut live = Database::new_in_memory().unwrap();
+    let assigned = crate::models::WallpaperPreferenceValue {
+        wallpaper_ids: vec!["anime-night".into()],
+        overlay: 53,
+        cycle_daily: false,
+    };
+    assert!(live
+        .wallpapers()
+        .update_target("stats", &assigned, 0)
+        .unwrap());
+    live.articles()
+        .save(ArticleDraft {
+            date: "2026-08-01".into(),
+            title: "快照业务记录".into(),
+            content: "应保留".into(),
+            mood: "平静".into(),
+            tags: vec![],
+            spaces: vec![],
+        })
+        .unwrap();
+    let path = std::env::temp_dir().join(format!(
+        "daily-summary-business-{}.db",
+        uuid::Uuid::new_v4()
+    ));
+    live.snapshot_without_wallpapers_to(&path).unwrap();
+
+    let snapshot = Connection::open(&path).unwrap();
+    let asset_count: i64 = snapshot
+        .query_row("SELECT COUNT(*) FROM wallpaper_assets", [], |row| {
+            row.get(0)
+        })
+        .unwrap();
+    let (revision, preferences_json, presets_json): (i64, String, String) = snapshot
+        .query_row(
+            "SELECT revision, preferences_json, presets_json FROM wallpaper_state WHERE id=1",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .unwrap();
+    assert_eq!(asset_count, 0);
+    assert_eq!(revision, 0);
+    assert_eq!(presets_json, "[]");
+    assert_eq!(
+        serde_json::from_str::<crate::models::WallpaperPreferences>(&preferences_json).unwrap(),
+        crate::models::default_wallpaper_preferences()
+    );
+    let article_count: i64 = snapshot
+        .query_row("SELECT COUNT(*) FROM articles", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(article_count, 1);
+    drop(snapshot);
+
+    let live_wallpapers = live.wallpapers().snapshot().unwrap();
+    assert_eq!(live_wallpapers.assets.len(), 13);
+    assert_eq!(
+        live_wallpapers.preferences["stats"].value.wallpaper_ids,
+        vec!["anime-night"]
+    );
+    assert!(live
+        .articles()
+        .find_by_date("2026-08-01")
+        .unwrap()
+        .is_some());
+    std::fs::remove_file(path).unwrap();
+}
+
+#[test]
+fn restoring_a_business_snapshot_preserves_target_wallpapers() {
+    let mut target = Database::new_in_memory().unwrap();
+    let assigned = crate::models::WallpaperPreferenceValue {
+        wallpaper_ids: vec!["anime-night".into()],
+        overlay: 47,
+        cycle_daily: false,
+    };
+    assert!(target
+        .wallpapers()
+        .update_target("stats", &assigned, 0)
+        .unwrap());
+    let wallpaper_state_path = std::env::temp_dir().join(format!(
+        "daily-summary-wall-state-{}.db",
+        uuid::Uuid::new_v4()
+    ));
+    target
+        .snapshot_to(wallpaper_state_path.to_str().unwrap())
+        .unwrap();
+
+    let mut incoming = Database::new_in_memory().unwrap();
+    incoming
+        .articles()
+        .save(ArticleDraft {
+            date: "2026-08-02".into(),
+            title: "恢复的记录".into(),
+            content: "业务数据".into(),
+            mood: "专注".into(),
+            tags: vec![],
+            spaces: vec![],
+        })
+        .unwrap();
+    let business_path = std::env::temp_dir().join(format!(
+        "daily-summary-business-restore-{}.db",
+        uuid::Uuid::new_v4()
+    ));
+    incoming
+        .snapshot_without_wallpapers_to(&business_path)
+        .unwrap();
+    target.restore_from_snapshot(&business_path).unwrap();
+    target.initialize().unwrap();
+    target
+        .restore_wallpaper_state_from_snapshot(&wallpaper_state_path)
+        .unwrap();
+
+    let restored = target.wallpapers().snapshot().unwrap();
+    assert_eq!(restored.assets.len(), 13);
+    assert_eq!(
+        restored.preferences["stats"].value.wallpaper_ids,
+        vec!["anime-night"]
+    );
+    assert!(target
+        .articles()
+        .find_by_date("2026-08-02")
+        .unwrap()
+        .is_some());
+    std::fs::remove_file(wallpaper_state_path).unwrap();
+    std::fs::remove_file(business_path).unwrap();
+}
+
+#[test]
+fn operational_restore_preserves_wallpapers_in_the_database_file() {
+    let mut target = Database::new_in_memory().unwrap();
+    let assigned = crate::models::WallpaperPreferenceValue {
+        wallpaper_ids: vec!["anime-night".into()],
+        overlay: 47,
+        cycle_daily: false,
+    };
+    assert!(target
+        .wallpapers()
+        .update_target("stats", &assigned, 0)
+        .unwrap());
+    let wallpaper_state = std::env::temp_dir().join(format!(
+        "daily-summary-wall-state-{}.db",
+        uuid::Uuid::new_v4()
+    ));
+    target
+        .snapshot_to(wallpaper_state.to_str().unwrap())
+        .unwrap();
+
+    let mut incoming = Database::new_in_memory().unwrap();
+    let business = std::env::temp_dir().join(format!(
+        "daily-summary-business-restore-{}.db",
+        uuid::Uuid::new_v4()
+    ));
+    incoming.snapshot_without_wallpapers_to(&business).unwrap();
+    Database::preserve_wallpaper_state(&wallpaper_state, &business).unwrap();
+    Database::verify_file(&business).unwrap();
+    let merged = Connection::open(&business).unwrap();
+    let count: i64 = merged
+        .query_row("SELECT COUNT(*) FROM wallpaper_assets", [], |row| {
+            row.get(0)
+        })
+        .unwrap();
+    let preferences_json: String = merged
+        .query_row(
+            "SELECT preferences_json FROM wallpaper_state WHERE id=1",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    let preferences: crate::models::WallpaperPreferences =
+        serde_json::from_str(&preferences_json).unwrap();
+    assert_eq!(count, 13);
+    assert_eq!(
+        preferences["stats"].value.wallpaper_ids,
+        vec!["anime-night"]
+    );
+    drop(merged);
+    std::fs::remove_file(wallpaper_state).unwrap();
+    std::fs::remove_file(business).unwrap();
 }
 
 #[test]
@@ -2914,6 +3096,10 @@ fn wallpaper_snapshot_starts_with_plain_defaults_and_an_ordinary_sample_asset() 
         Vec::<String>::new()
     );
     assert_eq!(snapshot.assets.len(), 13);
+    assert!(snapshot
+        .assets
+        .iter()
+        .all(|asset| !asset.cache_version.is_empty()));
     let night = snapshot
         .assets
         .iter()
@@ -3026,6 +3212,7 @@ fn wallpaper_upload_stores_both_responsive_variants_and_counts_them_toward_quota
     let upload = crate::models::WallpaperAssetUpload {
         metadata: crate::models::WallpaperAssetMetadata {
             id: "wallpaper-test-pair".into(),
+            cache_version: String::new(),
             name: "桌面与移动配套图".into(),
             created_at: 1,
             original_bytes: 14,
@@ -3057,6 +3244,13 @@ fn wallpaper_upload_stores_both_responsive_variants_and_counts_them_toward_quota
     let after = db.wallpapers().snapshot().expect("read uploaded asset");
     assert_eq!(after.revision, before.revision + 1);
     assert_eq!(after.storage_used_bytes, before.storage_used_bytes + 7);
+    assert!(!after
+        .assets
+        .iter()
+        .find(|asset| asset.id == "wallpaper-test-pair")
+        .unwrap()
+        .cache_version
+        .is_empty());
     let desktop = db
         .wallpapers()
         .asset_variant(
@@ -3342,6 +3536,13 @@ fn full_package_preserves_changed_shipped_art_as_a_remapped_ordinary_asset() {
     let imported_id = &after.preferences["stats"].value.wallpaper_ids[0];
     assert_ne!(imported_id, "qiguang-river-tide");
     assert!(imported_id.starts_with("package-qiguang-river-tide-"));
+    assert!(!after
+        .assets
+        .iter()
+        .find(|asset| asset.id == *imported_id)
+        .unwrap()
+        .cache_version
+        .is_empty());
     assert!(
         !after
             .assets

@@ -223,6 +223,8 @@ VITE_API_BASE_URL=https://your.example.com/api npm run desktop:build
 
 ### 本地快照
 
+新生成的自动、手动、升级前和恢复前 SQLite 快照，以及运维包和 Restic 备份，只包含业务数据库，不包含壁纸库、图片、分配或方案。恢复服务器快照会保留目标服务器当前的壁纸；要把壁纸迁到另一台服务器，请使用设置页「导出与迁移」中的“完整迁移包 ZIP”。既有快照文件不会被改写。
+
 ```bash
 ./ops.sh local-backup
 ./ops.sh maintain-backups
@@ -234,7 +236,7 @@ VITE_API_BASE_URL=https://your.example.com/api npm run desktop:build
 ./ops.sh backup-bundle
 ```
 
-迁移包包含 SQLite 数据库，以及存在时的 `server/.env`。它可能包含访问令牌和 AI Key，文件权限虽然会限制为 `0600`，但不会额外加密，只能通过可信通道传输。
+运维迁移包包含业务 SQLite 快照，以及存在时的 `server/.env`；不包含壁纸数据。它可能包含访问令牌和 AI Key，文件权限虽然会限制为 `0600`，但不会额外加密，只能通过可信通道传输。需要迁移壁纸时，另外使用设置页的“完整迁移包 ZIP”。
 
 新服务器完成首次部署后恢复：
 

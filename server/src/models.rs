@@ -83,6 +83,8 @@ pub(crate) struct WallpaperPreset {
 #[serde(rename_all = "camelCase")]
 pub(crate) struct WallpaperAssetMetadata {
     pub(crate) id: String,
+    #[serde(default)]
+    pub(crate) cache_version: String,
     pub(crate) name: String,
     pub(crate) created_at: i64,
     pub(crate) original_bytes: u64,

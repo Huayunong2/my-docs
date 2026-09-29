@@ -84,6 +84,7 @@ export function wallpaperTargetLabel(target: WallpaperAssignmentTargetId): strin
 }
 export type WallpaperAssetMetadata = {
   id: string;
+  cacheVersion?: string;
   name: string;
   createdAt: number;
   originalBytes: number;
