@@ -1417,8 +1417,10 @@ export function migrateLocalWallpaperState(
 export function getWallpaperAssetFile(
   id: string,
   variant: "desktop" | "mobile" | "desktop-thumbnail" | "mobile-thumbnail",
+  cacheVersion?: string,
 ) {
-  return httpRequestBlob(`/wallpapers/assets/${encodeURIComponent(id)}/${variant}`);
+  const path = "/wallpapers/assets/" + encodeURIComponent(id) + "/" + variant;
+  return httpRequestBlob(cacheVersion ? path + "?v=" + encodeURIComponent(cacheVersion) : path);
 }
 
 export function deleteWallpaperAssets(ids: string[], expectedRevision: number) {

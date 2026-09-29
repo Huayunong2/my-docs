@@ -541,6 +541,7 @@ export default function WallpaperManagerPanel({
   const previewWallpaperId = view === "library"
     ? visiblePreviewAssetId ?? wallpaperIdForDate(previewTargetPreference)
     : wallpaperIdForDate(previewTargetPreference);
+  const previewCacheVersion = wallpaperAssets.find((asset) => asset.id === previewWallpaperId)?.cacheVersion;
   const previewItem = previewWallpaperId
     ? itemById.get(previewWallpaperId) ?? null
     : null;
@@ -640,7 +641,7 @@ export default function WallpaperManagerPanel({
     void Promise.all(wallpaperAssets.map(async (asset) => {
       const read = async (variant: "desktop-thumbnail" | "mobile-thumbnail") => {
         try {
-          return await api.getWallpaperAssetFile(asset.id, variant);
+          return await api.getWallpaperAssetFile(asset.id, variant, asset.cacheVersion);
         } catch {
           const [legacyThumbnails, files] = await Promise.all([
             loadWallpaperAssetThumbnails(),
@@ -697,7 +698,7 @@ export default function WallpaperManagerPanel({
     setPreviewLoading(true);
     const readPreview = async (variant: "desktop" | "mobile") => {
       try {
-        return await api.getWallpaperAssetFile(previewWallpaperId, variant);
+        return await api.getWallpaperAssetFile(previewWallpaperId, variant, previewCacheVersion);
       } catch {
         const local = await loadWallpaperAssetFiles(previewWallpaperId);
         if (!local) throw new Error("wallpaper image unavailable");
@@ -727,7 +728,7 @@ export default function WallpaperManagerPanel({
       current = false;
       urls.forEach((url) => URL.revokeObjectURL(url));
     };
-  }, [previewWallpaperId]);
+  }, [previewWallpaperId, previewCacheVersion]);
 
   const updatePreference = async (
     next: WallpaperPreferenceValue,

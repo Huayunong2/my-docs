@@ -469,7 +469,7 @@ create_pre_upgrade_backup() {
       $SUDO systemctl stop "$SERVICE_NAME"
       paused_service=1
     fi
-    if ! cp "$db_path" "$backup"; then
+    if ! "$STAGED_BIN" --snapshot "$backup" >/dev/null; then
       if [ "$paused_service" = "1" ]; then
         $SUDO systemctl start "$SERVICE_NAME" || true
       fi
@@ -478,7 +478,7 @@ create_pre_upgrade_backup() {
     if [ "$paused_service" = "1" ]; then
       $SUDO systemctl start "$SERVICE_NAME"
     elif ! has_cmd systemctl; then
-      info "Service state could not be managed; ensure no writes occur during this file copy"
+      info "Service state could not be managed; ensure no writes occur during this snapshot"
     fi
     chmod 600 "$backup" || true
     info "Created pre-upgrade database backup: $backup"

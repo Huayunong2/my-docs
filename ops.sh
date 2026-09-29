@@ -535,7 +535,7 @@ restore_bundle() {
       fail "Could not preserve the current database before restore"
     fi
     touch "$journal_next/had-db"
-    install -m 0600 "$DB_PATH" "$previous_db"
+    "$SERVER_BIN" --snapshot "$previous_db" >/dev/null
     "$SERVER_BIN" --maintain-backups >/dev/null
   fi
   if [ "$had_env" = "1" ]; then
@@ -549,6 +549,12 @@ restore_bundle() {
   chmod 600 "$journal_next"/*
   mv "$journal_next" "$RESTORE_JOURNAL"
   sync -f "$DATA_DIR" 2>/dev/null || true
+  if [ "$had_db" = "1" ] && ! "$SERVER_BIN" --preserve-wallpapers "$RESTORE_JOURNAL/database.db" "$next_db"; then
+    rollback_pending_restore || fail "Wallpaper preservation failed and automatic rollback failed; journal retained at $RESTORE_JOURNAL"
+    RESTORE_IN_PROGRESS=0
+    [ "$was_active" = "1" ] && $SUDO systemctl start "$SERVICE_NAME" >/dev/null 2>&1 || true
+    fail "Could not preserve current wallpapers in the restored database"
+  fi
   if ! mv -f "$next_db" "$DB_PATH"; then
     fail "Could not activate the restored database"
   fi

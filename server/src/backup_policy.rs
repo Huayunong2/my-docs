@@ -183,8 +183,8 @@ pub(crate) fn cleanup_stale_temp_files(
             || name.starts_with(".restore-rollback.next.")
     })?;
     remove_stale_matching(&app_dir.join("backups"), max_age, now, |name| {
-        (name.starts_with(".snapshot-") || name.starts_with(".daily-summary-latest-"))
-            && name.ends_with(".db")
+        name.starts_with(".snapshot-")
+            || (name.starts_with(".daily-summary-latest-") && name.ends_with(".db"))
     })?;
     remove_stale_matching(&app_dir.join("status"), max_age, now, |name| {
         name.starts_with(".database-integrity.")
@@ -396,6 +396,9 @@ mod tests {
         fs::create_dir(app_dir.join(".restore-rollback.next.dead")).unwrap();
         fs::create_dir(app_dir.join(".restore-rollback")).unwrap();
         fs::write(backups.join(".snapshot-dead.db"), b"temp").unwrap();
+        let abandoned_snapshot = backups.join(".snapshot-abandoned");
+        fs::create_dir(&abandoned_snapshot).unwrap();
+        fs::write(abandoned_snapshot.join("snapshot.db"), b"private temp").unwrap();
         fs::write(backups.join(".daily-summary-latest-dead.db"), b"temp").unwrap();
         fs::write(status.join(".database-integrity.dead"), b"temp").unwrap();
         fs::write(
@@ -415,6 +418,7 @@ mod tests {
         assert!(!app_dir.join(".data.db.restore-dead").exists());
         assert!(!app_dir.join(".restore-rollback.next.dead").exists());
         assert!(!backups.join(".snapshot-dead.db").exists());
+        assert!(!abandoned_snapshot.exists());
         assert!(!backups.join(".daily-summary-latest-dead.db").exists());
         assert!(!status.join(".database-integrity.dead").exists());
         assert!(app_dir.join(".restore-rollback").exists());

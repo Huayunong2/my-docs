@@ -722,6 +722,11 @@ impl Database {
         Ok(db)
     }
 
+    pub(crate) fn open_existing() -> Result<Self> {
+        let conn = Connection::open(Self::db_path())?;
+        Ok(Database { conn })
+    }
+
     #[cfg(test)]
     pub(crate) fn new_in_memory() -> Result<Self> {
         let conn = Connection::open_in_memory()?;
@@ -969,6 +974,94 @@ impl Database {
         Ok(())
     }
 
+    pub(crate) fn snapshot_without_wallpapers_to(&mut self, path: &Path) -> Result<()> {
+        if path.exists() {
+            return Err(rusqlite::Error::InvalidPath(path.to_path_buf()));
+        }
+        let parent = path
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+            .unwrap_or_else(|| Path::new("."));
+        std::fs::create_dir_all(parent)
+            .map_err(|error| rusqlite::Error::ToSqlConversionFailure(Box::new(error)))?;
+        let temp_dir = parent.join(format!(".snapshot-{}", Uuid::new_v4()));
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::DirBuilderExt;
+            let mut builder = std::fs::DirBuilder::new();
+            builder
+                .mode(0o700)
+                .create(&temp_dir)
+                .map_err(|error| rusqlite::Error::ToSqlConversionFailure(Box::new(error)))?;
+        }
+        #[cfg(not(unix))]
+        std::fs::create_dir(&temp_dir)
+            .map_err(|error| rusqlite::Error::ToSqlConversionFailure(Box::new(error)))?;
+        let temp = temp_dir.join("snapshot.db");
+        let result = (|| {
+            self.snapshot_to(temp.to_string_lossy().as_ref())?;
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                std::fs::set_permissions(&temp, std::fs::Permissions::from_mode(0o600))
+                    .map_err(|error| rusqlite::Error::ToSqlConversionFailure(Box::new(error)))?;
+            }
+            let conn = Connection::open(&temp)?;
+            let defaults = serde_json::to_string(&default_wallpaper_preferences())
+                .map_err(|error| rusqlite::Error::ToSqlConversionFailure(Box::new(error)))?;
+            let has_table = |name: &str| -> Result<bool> {
+                let count: i64 = conn.query_row(
+                    "SELECT COUNT(*) FROM sqlite_master WHERE type=?1 AND name=?2",
+                    params!["table", name],
+                    |row| row.get(0),
+                )?;
+                Ok(count > 0)
+            };
+            if has_table("wallpaper_assets")? {
+                conn.execute("DELETE FROM wallpaper_assets", [])?;
+            }
+            if has_table("wallpaper_migrations")? {
+                conn.execute("DELETE FROM wallpaper_migrations", [])?;
+            }
+            if has_table("wallpaper_state")? {
+                conn.execute(
+                    "UPDATE wallpaper_state SET revision=0, preferences_json=?1, presets_json=?2 WHERE id=1",
+                    params![defaults, "[]"],
+                )?;
+            }
+            conn.execute_batch("VACUUM;")?;
+            drop(conn);
+            Database::verify_file(&temp).map_err(|error| {
+                rusqlite::Error::ToSqlConversionFailure(Box::new(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    error,
+                )))
+            })?;
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                std::fs::set_permissions(&temp, std::fs::Permissions::from_mode(0o600))
+                    .map_err(|error| rusqlite::Error::ToSqlConversionFailure(Box::new(error)))?;
+            }
+            std::fs::rename(&temp, path)
+                .map_err(|error| rusqlite::Error::ToSqlConversionFailure(Box::new(error)))?;
+            Ok(())
+        })();
+        let _ = std::fs::remove_dir_all(&temp_dir);
+        result
+    }
+
+    pub(crate) fn restore_wallpaper_state_from_snapshot(&self, path: &Path) -> Result<()> {
+        copy_wallpaper_state(&self.conn, path)
+    }
+
+    pub(crate) fn preserve_wallpaper_state(source: &Path, target: &Path) -> Result<()> {
+        let conn = Connection::open(target)?;
+        let database = Database { conn };
+        database.initialize()?;
+        copy_wallpaper_state(&database.conn, source)
+    }
+
     pub(crate) fn restore_from_snapshot(&mut self, path: &Path) -> Result<()> {
         self.conn.restore(
             DatabaseName::Main,
@@ -1007,7 +1100,7 @@ impl Database {
         base.join(".daily-summary").join("data.db")
     }
 
-    fn initialize(&self) -> Result<()> {
+    pub(crate) fn initialize(&self) -> Result<()> {
         self.conn.execute_batch("PRAGMA foreign_keys = ON;")?;
         // ── schema version tracker ──
         self.conn.execute_batch(
@@ -1983,8 +2076,145 @@ impl Database {
             transaction.commit()?;
         }
 
+        if current < 26 {
+            let transaction = self.conn.unchecked_transaction()?;
+            transaction.execute("INSERT INTO schema_version (version) VALUES (26)", [])?;
+            transaction.commit()?;
+        }
+
+        self.ensure_builtin_wallpapers()?;
+        backfill_wallpaper_cache_versions(&self.conn)?;
         Ok(())
     }
+
+    fn ensure_builtin_wallpapers(&self) -> Result<()> {
+        let expected = WALLPAPER_SEEDS
+            .iter()
+            .filter(|seed| seed.is_builtin)
+            .count() as i64;
+        let actual: i64 = self.conn.query_row(
+            "SELECT COUNT(*) FROM wallpaper_assets WHERE is_builtin=1",
+            [],
+            |row| row.get(0),
+        )?;
+        if actual == expected {
+            return Ok(());
+        }
+        for seed in WALLPAPER_SEEDS.iter().filter(|seed| seed.is_builtin) {
+            let exists: bool = self.conn.query_row(
+                "SELECT EXISTS(SELECT 1 FROM wallpaper_assets WHERE id=?1)",
+                params![seed.id],
+                |row| row.get(0),
+            )?;
+            if exists {
+                continue;
+            }
+            let metadata = serde_json::json!({
+                "id": seed.id, "cacheVersion": Uuid::new_v4().to_string(), "name": seed.name,
+                "createdAt": 0, "originalBytes": seed.desktop.len() + seed.mobile.len(),
+                "optimizedBytes": seed.desktop.len() + seed.mobile.len(),
+                "desktopWidth": seed.desktop_width, "desktopHeight": seed.desktop_height,
+                "mobileWidth": seed.mobile_width, "mobileHeight": seed.mobile_height,
+                "desktopThumbnailBytes": seed.desktop_thumbnail.len(),
+                "mobileThumbnailBytes": seed.mobile_thumbnail.len(), "isBuiltIn": true,
+                "desktopName": format!("{}-PC.webp", seed.name),
+                "mobileName": format!("{}-移动端.webp", seed.name)
+            });
+            self.conn.execute(
+                "INSERT OR IGNORE INTO wallpaper_assets (
+                    id, is_builtin, is_sample, metadata_json, desktop_mime, desktop_blob,
+                    mobile_mime, mobile_blob, desktop_thumbnail_mime, desktop_thumbnail_blob,
+                    mobile_thumbnail_mime, mobile_thumbnail_blob
+                 ) VALUES (?1, 1, 0, ?2, 'image/webp', ?3, 'image/webp', ?4,
+                           'image/webp', ?5, 'image/webp', ?6)",
+                params![
+                    seed.id,
+                    metadata.to_string(),
+                    seed.desktop,
+                    seed.mobile,
+                    seed.desktop_thumbnail,
+                    seed.mobile_thumbnail
+                ],
+            )?;
+        }
+        Ok(())
+    }
+}
+
+fn copy_wallpaper_state(target: &Connection, source: &Path) -> Result<()> {
+    target.execute(
+        "ATTACH DATABASE ?1 AS wallpaper_restore",
+        params![source.to_string_lossy().as_ref()],
+    )?;
+    let has_wallpaper_state: bool = target.query_row(
+        "SELECT EXISTS(SELECT 1 FROM wallpaper_restore.sqlite_master WHERE type=?1 AND name=?2)",
+        params!["table", "wallpaper_state"],
+        |row| row.get(0),
+    )?;
+    if !has_wallpaper_state {
+        return target.execute_batch("DETACH DATABASE wallpaper_restore;");
+    }
+    let result = target.execute_batch(
+        "BEGIN IMMEDIATE;
+         DELETE FROM wallpaper_assets;
+         DELETE FROM wallpaper_migrations;
+         DELETE FROM wallpaper_state;
+         INSERT INTO wallpaper_state (id, revision, preferences_json, presets_json)
+           SELECT id, revision, preferences_json, presets_json FROM wallpaper_restore.wallpaper_state;
+         INSERT INTO wallpaper_assets (
+           id, is_builtin, is_sample, metadata_json, desktop_mime, desktop_blob,
+           mobile_mime, mobile_blob, desktop_thumbnail_mime, desktop_thumbnail_blob,
+           mobile_thumbnail_mime, mobile_thumbnail_blob
+         ) SELECT id, is_builtin, is_sample, metadata_json, desktop_mime, desktop_blob,
+           mobile_mime, mobile_blob, desktop_thumbnail_mime, desktop_thumbnail_blob,
+           mobile_thumbnail_mime, mobile_thumbnail_blob FROM wallpaper_restore.wallpaper_assets;
+         INSERT INTO wallpaper_migrations (migration_id, migrated_at)
+           SELECT migration_id, migrated_at FROM wallpaper_restore.wallpaper_migrations;
+         COMMIT;"
+    );
+    if result.is_err() {
+        let _ = target.execute_batch("ROLLBACK;");
+    }
+    let detach = target.execute_batch("DETACH DATABASE wallpaper_restore;");
+    result?;
+    detach?;
+    backfill_wallpaper_cache_versions(target)
+}
+
+fn backfill_wallpaper_cache_versions(conn: &Connection) -> Result<()> {
+    let has_table: bool = conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='wallpaper_assets')",
+        [],
+        |row| row.get(0),
+    )?;
+    if !has_table {
+        return Ok(());
+    }
+    let transaction = conn.unchecked_transaction()?;
+    let rows: Vec<(String, String)> = {
+        let mut statement =
+            transaction.prepare("SELECT id, metadata_json FROM wallpaper_assets")?;
+        let rows = statement
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
+            .collect::<Result<_>>()?;
+        rows
+    };
+    for (id, json) in rows {
+        let mut metadata: Value = serde_json::from_str(&json)
+            .map_err(|error| rusqlite::Error::ToSqlConversionFailure(Box::new(error)))?;
+        if metadata
+            .get("cacheVersion")
+            .and_then(Value::as_str)
+            .is_none_or(str::is_empty)
+        {
+            metadata["cacheVersion"] = Value::String(Uuid::new_v4().to_string());
+            transaction.execute(
+                "UPDATE wallpaper_assets SET metadata_json=?1 WHERE id=?2",
+                params![metadata.to_string(), id],
+            )?;
+        }
+    }
+    transaction.commit()
 }
 
 impl ArticlePersistence<'_> {
@@ -5318,7 +5548,7 @@ mod migration_tests {
                 row.get(0)
             })
             .unwrap();
-        assert_eq!(version, 25);
+        assert_eq!(version, 26);
     }
 
     #[test]
@@ -5455,7 +5685,7 @@ mod migration_tests {
                 row.get(0)
             })
             .expect("read schema version");
-        assert_eq!(version, 25);
+        assert_eq!(version, 26);
     }
 
     fn v3_knowledge_cards_table() -> &'static str {
@@ -5622,7 +5852,7 @@ mod migration_tests {
                 row.get(0)
             })
             .expect("read schema version");
-        assert_eq!(version, 25);
+        assert_eq!(version, 26);
 
         // 已迁移的库再次 initialize 必须幂等，不报重复列错误
         db.initialize().expect("re-initialize is idempotent");
@@ -5656,7 +5886,7 @@ mod migration_tests {
                 row.get(0)
             })
             .expect("read schema version");
-        assert_eq!(version, 25);
+        assert_eq!(version, 26);
 
         let settings = db.review_settings().expect("default review settings");
         assert_eq!(settings.new_cards_per_day, 20);
@@ -6081,7 +6311,7 @@ mod migration_v5_tests {
                 row.get(0)
             })
             .expect("read schema version");
-        assert_eq!(version, 25);
+        assert_eq!(version, 26);
         db.initialize()
             .expect("re-initialize after v5 is idempotent");
     }
@@ -6195,7 +6425,7 @@ mod wallpaper_migration_tests {
                 row.get(0)
             })
             .expect("read schema version");
-        assert_eq!(version, 25);
+        assert_eq!(version, 26);
     }
 }
 
@@ -6466,6 +6696,7 @@ impl WallpaperPersistence<'_> {
             }
 
             let mut metadata = upload.metadata.clone();
+            metadata.cache_version = Uuid::new_v4().to_string();
             metadata.optimized_bytes = (upload.desktop_blob.len()
                 + upload.mobile_blob.as_ref().map_or(0, Vec::len))
                 as u64;
@@ -6762,6 +6993,7 @@ impl WallpaperPersistence<'_> {
             return Err(WallpaperPersistenceError::QuotaExceeded);
         }
         upload.metadata.created_at = Local::now().timestamp_millis();
+        upload.metadata.cache_version = Uuid::new_v4().to_string();
         upload.metadata.optimized_bytes =
             (upload.desktop_blob.len() + upload.mobile_blob.as_ref().map_or(0, Vec::len)) as u64;
         upload.metadata.desktop_thumbnail_bytes = upload.desktop_thumbnail_blob.len() as u64;
@@ -6893,6 +7125,7 @@ impl WallpaperPersistence<'_> {
                 continue;
             }
             let mut metadata = upload.metadata.clone();
+            metadata.cache_version = Uuid::new_v4().to_string();
             metadata.is_built_in = false;
             metadata.optimized_bytes = (upload.desktop_blob.len()
                 + upload.mobile_blob.as_ref().map_or(0, Vec::len))
@@ -6989,6 +7222,24 @@ impl WallpaperPersistence<'_> {
         )?;
         transaction.commit()?;
         Ok(true)
+    }
+
+    pub(crate) fn asset_cache_version(&self, id: &str) -> Result<Option<String>> {
+        let metadata_json: Option<String> = self
+            .conn
+            .query_row(
+                "SELECT metadata_json FROM wallpaper_assets WHERE id=?1",
+                params![id],
+                |row| row.get(0),
+            )
+            .optional()?;
+        metadata_json
+            .map(|json| {
+                serde_json::from_str::<WallpaperAssetMetadata>(&json)
+                    .map(|metadata| metadata.cache_version)
+                    .map_err(|error| rusqlite::Error::ToSqlConversionFailure(Box::new(error)))
+            })
+            .transpose()
     }
 
     pub(crate) fn asset_variant_mime(

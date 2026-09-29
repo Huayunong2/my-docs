@@ -27,6 +27,7 @@ enum CliCommand {
     Serve,
     BuildId,
     Snapshot(PathBuf),
+    PreserveWallpapers(PathBuf, PathBuf),
     VerifyDb(PathBuf),
     CheckStartup,
     MaintainBackups,
@@ -51,11 +52,14 @@ where
         (Some(flag), Some(path), None) if flag.as_ref() == "--snapshot" => {
             Ok(CliCommand::Snapshot(PathBuf::from(path.as_ref())))
         }
+        (Some(flag), Some(source), Some(target)) if flag.as_ref() == "--preserve-wallpapers" => {
+            Ok(CliCommand::PreserveWallpapers(PathBuf::from(source.as_ref()), PathBuf::from(target.as_ref())))
+        }
         (Some(flag), Some(path), None) if flag.as_ref() == "--verify-db" => {
             Ok(CliCommand::VerifyDb(PathBuf::from(path.as_ref())))
         }
         _ => Err(
-            "Usage: daily-summary [--build-id | --check-startup | --maintain-backups | --snapshot PATH | --verify-db PATH]"
+            "Usage: daily-summary [--build-id | --check-startup | --maintain-backups | --snapshot PATH | --preserve-wallpapers SOURCE TARGET | --verify-db PATH]"
                 .into(),
         ),
     }
@@ -89,11 +93,21 @@ async fn main() {
             if let Some(parent) = path.parent() {
                 std::fs::create_dir_all(parent).unwrap_or_else(|error| fail_cli(error));
             }
-            let mut db = db::Database::new().unwrap_or_else(|error| fail_cli(error));
-            db.snapshot_to(path.to_string_lossy().as_ref())
+            let mut db = if db::Database::db_path().exists() {
+                db::Database::open_existing()
+            } else {
+                db::Database::new()
+            }
+            .unwrap_or_else(|error| fail_cli(error));
+            db.snapshot_without_wallpapers_to(&path)
                 .unwrap_or_else(|error| fail_cli(error));
             db::Database::verify_file(&path).unwrap_or_else(|error| fail_cli(error));
             println!("{}", path.display());
+        }
+        CliCommand::PreserveWallpapers(source, target) => {
+            db::Database::preserve_wallpaper_state(&source, &target)
+                .unwrap_or_else(|error| fail_cli(error));
+            db::Database::verify_file(&target).unwrap_or_else(|error| fail_cli(error));
         }
         CliCommand::VerifyDb(path) => {
             db::Database::verify_file(&path).unwrap_or_else(|error| fail_cli(error));
@@ -111,6 +125,18 @@ mod cli_tests {
         assert_eq!(
             parse_cli(["daily-summary", "--snapshot", "/tmp/backup.db"]),
             Ok(CliCommand::Snapshot("/tmp/backup.db".into()))
+        );
+        assert_eq!(
+            parse_cli([
+                "daily-summary",
+                "--preserve-wallpapers",
+                "current.db",
+                "restore.db"
+            ]),
+            Ok(CliCommand::PreserveWallpapers(
+                "current.db".into(),
+                "restore.db".into()
+            ))
         );
         assert_eq!(
             parse_cli(["daily-summary", "--check-startup"]),

@@ -5,7 +5,7 @@ use crate::models::{
     WallpaperPreferenceValue, WallpaperSnapshot, WALLPAPER_MAX_VARIANT_BYTES,
 };
 use axum::{
-    extract::{Multipart, Path, State},
+    extract::{Multipart, Path, Query, State},
     http::{header, HeaderMap, HeaderValue, StatusCode},
     response::{IntoResponse, Response},
     Json,
@@ -14,7 +14,6 @@ use image::{GenericImageView, ImageFormat, ImageReader, Limits};
 use serde::Deserialize;
 use std::{
     collections::HashMap,
-    hash::{Hash, Hasher},
     io::Cursor,
     sync::{Arc, Mutex},
 };
@@ -73,6 +72,11 @@ struct UploadMetadata {
     original_bytes: u64,
     desktop_name: Option<String>,
     mobile_name: Option<String>,
+}
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct AssetCacheQuery {
+    v: Option<String>,
 }
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -424,6 +428,7 @@ pub(crate) async fn upload_asset(
             .map_or(0, |(_, blob, ..)| blob.len() as u64);
     let metadata_record = WallpaperAssetMetadata {
         id: metadata.id,
+        cache_version: String::new(),
         name: metadata.name,
         created_at: chrono::Local::now().timestamp_millis(),
         original_bytes: metadata.original_bytes,
@@ -537,20 +542,46 @@ pub(crate) fn validate_image(
 pub(crate) async fn asset_variant(
     State(db): State<AppState>,
     Path((id, variant)): Path<(String, String)>,
+    Query(cache): Query<AssetCacheQuery>,
     headers: HeaderMap,
 ) -> Result<Response, HttpError> {
     let variant = parse_variant(&variant)?;
-    let etag_id = id.clone();
-    let asset = run_blocking(move || {
+    let variant_name = match variant {
+        WallpaperAssetVariant::Desktop => "desktop",
+        WallpaperAssetVariant::Mobile => "mobile",
+        WallpaperAssetVariant::DesktopThumbnail => "desktop-thumbnail",
+        WallpaperAssetVariant::MobileThumbnail => "mobile-thumbnail",
+    };
+    let requested_version = cache.v.clone();
+    let is_versioned = requested_version.is_some();
+    let if_none_match = headers
+        .get(header::IF_NONE_MATCH)
+        .and_then(|value| value.to_str().ok())
+        .map(str::to_owned);
+    let (cache_version, asset) = run_blocking(move || {
         let mut db = db.lock().map_err(internal_error)?;
         let wallpapers = db.wallpapers();
+        let cache_version = wallpapers
+            .asset_cache_version(&id)
+            .map_err(internal_error)?
+            .ok_or_else(|| (StatusCode::NOT_FOUND, "壁纸资源不存在。".into()))?;
+        if requested_version
+            .as_deref()
+            .is_some_and(|requested| requested != cache_version.as_str())
+        {
+            return Err((StatusCode::NOT_FOUND, "壁纸资源版本已更新。".into()));
+        }
+        let etag = format!("\"{}-{}\"", cache_version, variant_name);
+        if if_none_match.as_deref().is_some_and(|value| value == etag) {
+            return Ok((cache_version, None));
+        }
         let primary = wallpapers
             .asset_variant(&id, variant)
             .map_err(internal_error)?;
         let asset = if primary.is_some() {
             primary
         } else {
-            let fallback_variants: &[WallpaperAssetVariant] = match variant {
+            let fallbacks: &[WallpaperAssetVariant] = match variant {
                 WallpaperAssetVariant::Mobile => &[WallpaperAssetVariant::Desktop],
                 WallpaperAssetVariant::DesktopThumbnail => &[WallpaperAssetVariant::Desktop],
                 WallpaperAssetVariant::MobileThumbnail => &[
@@ -560,7 +591,7 @@ pub(crate) async fn asset_variant(
                 WallpaperAssetVariant::Desktop => &[],
             };
             let mut found = None;
-            for fallback in fallback_variants {
+            for fallback in fallbacks {
                 found = wallpapers
                     .asset_variant(&id, *fallback)
                     .map_err(internal_error)?;
@@ -569,43 +600,49 @@ pub(crate) async fn asset_variant(
                 }
             }
             found
-        };
-        Ok::<_, HttpError>(asset)
+        }
+        .ok_or_else(|| (StatusCode::NOT_FOUND, "壁纸资源不存在。".into()))?;
+        Ok::<_, HttpError>((cache_version, Some(asset)))
     })
     .await?;
-    let Some((mime, bytes)) = asset else {
-        return Err((StatusCode::NOT_FOUND, "壁纸资源不存在。".into()));
+    let etag = format!("\"{}-{}\"", cache_version, variant_name);
+    let cache_control = if is_versioned {
+        "private, max-age=31536000, immutable"
+    } else {
+        "private, max-age=0, must-revalidate"
     };
-    let mut content_hasher = std::collections::hash_map::DefaultHasher::new();
-    bytes.hash(&mut content_hasher);
-    let etag = format!("\"{etag_id}-{variant:?}-{:016x}\"", content_hasher.finish());
-    if headers
-        .get(header::IF_NONE_MATCH)
-        .and_then(|value| value.to_str().ok())
-        .is_some_and(|value| value == etag)
-    {
-        return Ok(StatusCode::NOT_MODIFIED.into_response());
+    if let Some((mime, bytes)) = asset {
+        let mut response_headers = HeaderMap::new();
+        response_headers.insert(
+            header::CONTENT_TYPE,
+            HeaderValue::from_str(&mime).map_err(internal_error)?,
+        );
+        response_headers.insert(
+            header::CACHE_CONTROL,
+            HeaderValue::from_static(cache_control),
+        );
+        response_headers.insert(
+            header::ETAG,
+            HeaderValue::from_str(&etag).map_err(internal_error)?,
+        );
+        response_headers.insert(
+            header::CONTENT_LENGTH,
+            HeaderValue::from_str(&bytes.len().to_string()).map_err(internal_error)?,
+        );
+        Ok((response_headers, bytes).into_response())
+    } else {
+        let mut response = StatusCode::NOT_MODIFIED.into_response();
+        response.headers_mut().insert(
+            header::ETAG,
+            HeaderValue::from_str(&etag).map_err(internal_error)?,
+        );
+        response.headers_mut().insert(
+            header::CACHE_CONTROL,
+            HeaderValue::from_static(cache_control),
+        );
+        Ok(response)
     }
-    let mut response_headers = HeaderMap::new();
-    response_headers.insert(
-        header::CONTENT_TYPE,
-        HeaderValue::from_str(&mime).map_err(internal_error)?,
-    );
-    response_headers.insert(
-        header::CACHE_CONTROL,
-        HeaderValue::from_static("private, max-age=0, must-revalidate"),
-    );
-    response_headers.insert(
-        header::ETAG,
-        HeaderValue::from_str(&etag).map_err(internal_error)?,
-    );
-    response_headers.insert(
-        header::CONTENT_LENGTH,
-        HeaderValue::from_str(&bytes.len().to_string()).map_err(internal_error)?,
-    );
-    Ok((response_headers, bytes).into_response())
 }
-
 pub(crate) async fn delete_assets(
     State(db): State<AppState>,
     Json(payload): Json<BatchDelete>,
@@ -800,5 +837,107 @@ mod image_validation_tests {
         let mut bytes = Cursor::new(Vec::new());
         wide.write_to(&mut bytes, ImageFormat::WebP).unwrap();
         assert!(validate_image(bytes.get_ref(), "image/webp", MAX_IMAGE_EDGE, false).is_err());
+    }
+}
+
+#[cfg(test)]
+mod cache_tests {
+    use super::*;
+
+    async fn asset_version(db: &AppState, id: &str) -> String {
+        db.lock()
+            .unwrap()
+            .wallpapers()
+            .snapshot()
+            .unwrap()
+            .assets
+            .into_iter()
+            .find(|asset| asset.id == id)
+            .unwrap()
+            .cache_version
+    }
+
+    #[tokio::test]
+    async fn versioned_asset_uses_private_immutable_cache_and_fast_etag_validation() {
+        let db = Arc::new(Mutex::new(Database::new_in_memory().unwrap()));
+        let version = asset_version(&db, "anime-night").await;
+        let response = asset_variant(
+            State(db.clone()),
+            Path(("anime-night".to_string(), "mobile".to_string())),
+            Query(AssetCacheQuery {
+                v: Some(version.clone()),
+            }),
+            HeaderMap::new(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response.headers()[header::CACHE_CONTROL],
+            "private, max-age=31536000, immutable"
+        );
+        let etag = response.headers()[header::ETAG].clone();
+
+        let mut headers = HeaderMap::new();
+        headers.insert(header::IF_NONE_MATCH, etag);
+        let unchanged = asset_variant(
+            State(db.clone()),
+            Path(("anime-night".to_string(), "mobile".to_string())),
+            Query(AssetCacheQuery {
+                v: Some(version.clone()),
+            }),
+            headers,
+        )
+        .await
+        .unwrap();
+        assert_eq!(unchanged.status(), StatusCode::NOT_MODIFIED);
+        assert_eq!(
+            unchanged.headers()[header::CACHE_CONTROL],
+            "private, max-age=31536000, immutable"
+        );
+
+        let stale = asset_variant(
+            State(db),
+            Path(("anime-night".to_string(), "mobile".to_string())),
+            Query(AssetCacheQuery {
+                v: Some("stale-version".into()),
+            }),
+            HeaderMap::new(),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(stale.0, StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn legacy_asset_url_keeps_revalidation_semantics() {
+        let db = Arc::new(Mutex::new(Database::new_in_memory().unwrap()));
+        let response = asset_variant(
+            State(db.clone()),
+            Path(("anime-night".into(), "desktop".into())),
+            Query(AssetCacheQuery { v: None }),
+            HeaderMap::new(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response.headers()[header::CACHE_CONTROL],
+            "private, max-age=0, must-revalidate"
+        );
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            header::IF_NONE_MATCH,
+            response.headers()[header::ETAG].clone(),
+        );
+        let unchanged = asset_variant(
+            State(db),
+            Path(("anime-night".into(), "desktop".into())),
+            Query(AssetCacheQuery { v: None }),
+            headers,
+        )
+        .await
+        .unwrap();
+        assert_eq!(unchanged.status(), StatusCode::NOT_MODIFIED);
     }
 }
