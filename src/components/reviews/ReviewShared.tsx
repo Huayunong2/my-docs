@@ -1,3 +1,4 @@
+import ReadingActions from "../workspace/ReadingActions";
 import { useEffect, useRef, useState, type MouseEvent } from "react";
 import * as Dialog from "@radix-ui/react-dialog";
 import {
@@ -348,7 +349,7 @@ export function ReviewViewerModal({
                 </DropdownMenuContent>
               </DropdownMenu>
             )}
-            <div className="flex w-full flex-wrap justify-end gap-2 sm:w-auto">
+            <ReadingActions label="周期回顾阅读操作" reading={!editing && !readOnly}>
               {readOnly ? (
                 <button
                   type="button"
@@ -431,7 +432,7 @@ export function ReviewViewerModal({
                   )}
                 </>
               )}
-            </div>
+            </ReadingActions>
           </div>
         </Dialog.Content>
       </Dialog.Portal>

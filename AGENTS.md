@@ -124,9 +124,9 @@ server/src/server.rs 的 build_router 是 HTTP API 路由的唯一索引。前�
 | --- | --- |
 | /articles、/archive、/day-exemptions | server/src/articles.rs、server/src/archive.rs、server/src/day_exemptions.rs |
 | /stats | server/src/stats.rs |
-| /knowledge-cards、/spaces、/review-items | server/src/knowledge.rs |
+| /knowledge-cards、/knowledge-reuse、/spaces、/review-items | server/src/knowledge.rs、server/src/knowledge/organize.rs |
 | /review | server/src/review.rs |
-| /reviews、/ai | server/src/ai.rs，外部请求由 server/src/ai_client.rs 承担 |
+| /reviews、/ai | server/src/ai.rs、server/src/ai_tasks.rs，外部请求由 server/src/ai_client.rs 承担 |
 | /export | server/src/exports.rs、server/src/server.rs；完整 JSON 与版本化 ZIP 迁移包均保持兼容 |
 | /wallpapers | server/src/wallpapers.rs、server/src/wallpaper_package.rs；SQLite 持久化和迁移位于 server/src/db.rs |
 | /backups | server/src/backups.rs、server/src/backup_policy.rs |
@@ -271,3 +271,18 @@ curl http://127.0.0.1:8080/health
 - 同步 API：`src/lib/api.ts`；服务端认证路由在 `server/src/server.rs`，壁纸业务处理在 `server/src/wallpapers.rs`，版本化 ZIP 包在 `server/src/wallpaper_package.rs`。
 - 持久化：`server/src/db.rs` 的 v25/v26 迁移、SQLite BLOB 资产、`cacheVersion` 版本化缓存、revision 冲突、一次性本机迁移与包导入事务；普通数据库快照不含壁纸数据，恢复时保留目标端壁纸。
 - 迁移包预览：`src/lib/fullPackage.ts` 使用 fflate 按流读取清单；旧完整 JSON 导入仍通过 `/articles/import-full` 兼容。
+
+## 知识整理与 AI 任务索引（2026-10-09）
+
+- 候选整理与人工合并：`src/components/knowledge/CandidateOrganizer.tsx`，由今日 AI、知识导入、既有条目整理和任务面板复用；服务端为 `server/src/knowledge/organize.rs`。
+- 实际复用：`ReusePanel.tsx`、`WeeklyReuse.tsx`；`/knowledge-reuse` 保存独立事件，原 `/touch` 与 `usage_count` 仍表示打开次数。
+- 多来源与复用持久化：`server/src/db/workspace.rs`；迁移及派生正文长度、trigram 索引在 `server/src/db.rs` v27，完整迁移包继续复用可选字段扩展。
+- AI 用量悬浮入口：`src/components/workspace/AiTaskLauncher.tsx` 与 `src/components/workspace/AiTaskTray.tsx`；`server/src/ai_tasks.rs` 的 `/ai/tasks` 是有容量和过期限制的内存任务，列表与状态轮询不携带结果全文。PC 按钮位置为本机辅助偏好，键盘可用 Alt+方向键微调；手机入口位于更多菜单，运行任务使用预留状态条，打开模态底部面板；费用按任务发起时的人民币单价快照估算，未知用量不能计为零。
+- 简洁显示与资源共享：`src/lib/simpleDisplay.ts`、`src/lib/useResponsiveWallpaperImage.ts`；运行概览为 `src/components/settings/RuntimeOverview.tsx`。今日标签聚合入口为 `/articles/tag-suggestions`。
+- 修改以上流程、性能或布局时，读取 `WORKSPACE_OPTIMIZATION.md`，执行 `scripts/workspace-optimization-regression.mjs` 和相关生产回归；这些检查拦截全部业务 API，不允许写真实知识库。
+
+## 移动端工作台索引（2026-10-10）
+
+- `src/components/workspace/mobile-workbench.css` 从 `src/main.tsx` 挂载，负责阅读视口与底部导航／任务状态条的空间分配、知识详情单栏导航和全站移动排版。仅作用于 <768px，沿用原主题和壁纸配置。
+- 知识详情操作位于 `KnowledgePage.tsx` 的移动菜单；AI 用量位于 `Sidebar.tsx` 的更多菜单，由 `App.tsx` 响应界面事件打开 `AiTaskTray.tsx`。移动端为模态底部面板，PC 仍为可拖动入口与非模态浮窗。
+- 修改移动滚动、浮层或导航时必须运行两个生产浏览器脚本，检查 `#main-content` 下边界不超过导航／任务状态条上边界，以及长内容、短屏表单、关闭焦点和所有功能入口；说明及截图见 `WORKSPACE_OPTIMIZATION.md` 的移动重设计章节。

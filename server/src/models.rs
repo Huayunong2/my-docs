@@ -527,6 +527,10 @@ impl AiTask {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct AiModelProfile {
+    #[serde(default)]
+    pub(crate) input_price_cny: Option<f64>,
+    #[serde(default)]
+    pub(crate) output_price_cny: Option<f64>,
     pub(crate) id: String,
     pub(crate) name: String,
     pub(crate) model: String,
@@ -547,6 +551,8 @@ pub(crate) struct AiRoutingConfig {
 impl AiRoutingConfig {
     pub(crate) fn from_global(config: &AiConfig) -> Self {
         let profile = |id: &str, name: &str| AiModelProfile {
+            input_price_cny: None,
+            output_price_cny: None,
             id: id.into(),
             name: name.into(),
             model: config.model.clone(),
@@ -789,6 +795,7 @@ pub(crate) struct ReviewListQuery {
 
 #[derive(Debug, Deserialize)]
 pub(crate) struct KnowledgeListQuery {
+    pub(crate) summary: Option<bool>,
     pub(crate) card_type: Option<String>,
     pub(crate) status: Option<String>,
     pub(crate) q: Option<String>,
@@ -907,6 +914,8 @@ pub(crate) struct ExtractKnowledgeCardsPayload {
 
 #[derive(Debug, Deserialize)]
 pub(crate) struct AnalyzeKnowledgeCardsPayload {
+    #[serde(default)]
+    pub(crate) preserve_duplicates: bool,
     pub(crate) content: String,
     #[serde(default)]
     pub(crate) source_name: String,
@@ -1029,6 +1038,8 @@ pub(crate) struct AiSummaryResponse {
 
 #[derive(Debug, Deserialize)]
 pub(crate) struct ChatCompletionResponse {
+    #[serde(default, deserialize_with = "deserialize_ai_usage")]
+    pub(crate) usage: Option<AiUsage>,
     pub(crate) choices: Vec<ChatChoice>,
 }
 
@@ -1041,4 +1052,68 @@ pub(crate) struct ChatChoice {
 pub(crate) struct ChatMessage {
     pub(crate) role: String,
     pub(crate) content: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub(crate) struct KnowledgeSource {
+    #[serde(default)]
+    pub article_id: String,
+    #[serde(default)]
+    pub review_id: String,
+    #[serde(default)]
+    pub date: String,
+    pub excerpt: String,
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct ReuseEvent {
+    pub id: String,
+    pub card_id: String,
+    #[serde(default)]
+    pub title: String,
+    pub used_at: String,
+    pub project: String,
+    pub problem: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct AiUsage {
+    pub prompt_tokens: u64,
+    pub completion_tokens: u64,
+    #[serde(default)]
+    pub total_tokens: u64,
+}
+
+fn deserialize_ai_usage<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<AiUsage>, D::Error> {
+    let value = Option::<serde_json::Value>::deserialize(deserializer)?;
+    Ok(value
+        .and_then(|value| serde_json::from_value::<AiUsage>(value).ok())
+        .map(|mut usage| {
+            if usage.total_tokens == 0 {
+                usage.total_tokens = usage.prompt_tokens.saturating_add(usage.completion_tokens);
+            }
+            usage
+        }))
+}
+#[cfg(test)]
+mod usage_compatibility_tests {
+    use super::*;
+    #[test]
+    fn optional_or_incomplete_usage_does_not_discard_valid_content() {
+        for usage in [
+            serde_json::Value::Null,
+            serde_json::json!({"completion_tokens":20}),
+            serde_json::json!({"prompt_tokens":"unknown","completion_tokens":20}),
+        ] {
+            let response:ChatCompletionResponse=serde_json::from_value(serde_json::json!({"choices":[{"message":{"role":"assistant","content":"有效结果"}}],"usage":usage})).unwrap();
+            assert!(response.usage.is_none());
+            assert_eq!(response.choices[0].message.content, "有效结果");
+        }
+        let response: ChatCompletionResponse = serde_json::from_value(
+            serde_json::json!({"choices":[],"usage":{"prompt_tokens":10,"completion_tokens":20}}),
+        )
+        .unwrap();
+        assert_eq!(response.usage.unwrap().total_tokens, 30);
+    }
 }

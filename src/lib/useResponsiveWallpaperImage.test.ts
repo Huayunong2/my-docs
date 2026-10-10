@@ -29,3 +29,15 @@ describe("responsive wallpaper loading", () => {
     expect(fetchMock.mock.calls[0][0]).toBe("https://summary.test/api/wallpapers/assets/river/mobile?v=version-4");
   });
 });
+
+it("shares one image and URL until the last surface releases it", async()=>{
+  const {acquireWallpaperImage}=await import("./useResponsiveWallpaperImage");
+  const create=vi.fn(()=>"blob:shared"),revoke=vi.fn();
+  vi.stubGlobal("URL",{createObjectURL:create,revokeObjectURL:revoke});
+  const loader=vi.fn(async()=>new Blob(["synthetic"]));
+  const a=acquireWallpaperImage("server:test:desktop:v1",loader);
+  const b=acquireWallpaperImage("server:test:desktop:v1",loader);
+  expect(await a.promise).toBe(await b.promise);expect(loader).toHaveBeenCalledTimes(1);expect(create).toHaveBeenCalledTimes(1);
+  a.release();await Promise.resolve();expect(revoke).not.toHaveBeenCalled();
+  b.release();await Promise.resolve();expect(revoke).toHaveBeenCalledTimes(1);
+});

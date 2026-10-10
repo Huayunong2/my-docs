@@ -550,7 +550,8 @@ export default function SearchPage({
                     <Link
                       to="/knowledge/$cardId"
                       params={{ cardId: card.id }}
-                      search={{ view: "detail" }}
+                      data-card-id={card.id}
+                      search={{ view: "detail", returnTo: `${window.location.pathname}${window.location.search}` }}
                       onClick={(event) => {
                         if (
                           event.ctrlKey ||

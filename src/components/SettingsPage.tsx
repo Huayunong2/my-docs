@@ -1,3 +1,4 @@
+import { useMobileLayout } from "../lib/useMobileLayout";
 import {
   useCallback,
   useEffect,
@@ -132,8 +133,15 @@ export default function SettingsPage({
   onResetWallpaper,
   onConnectionSaved,
 }: SettingsPageProps) {
+  const mobile = useMobileLayout();
   const [search, setSearch] = useState("");
   const [tab, setTab] = useState<Tab>(() => initialSettingsTab());
+  useEffect(() => {
+    if (!mobile) return;
+    const item = document.getElementById(`settings-tab-${tab}`);
+    const strip = item?.closest<HTMLElement>(".st-nav-tabs");
+    if (item && strip) strip.scrollTo({ left: item.offsetLeft - strip.offsetLeft - 8, behavior: "auto" });
+  }, [mobile, tab]);
   const [mountedTabs, setMountedTabs] = useState<Set<Tab>>(
     () => new Set([tab]),
   );

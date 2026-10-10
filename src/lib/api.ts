@@ -361,6 +361,7 @@ export interface KnowledgeCardLabel {
 }
 
 export interface KnowledgeCard {
+  content_is_summary?: boolean;
   id: string;
   card_type: KnowledgeCardType;
   status: KnowledgeCardStatus;
@@ -390,6 +391,7 @@ export interface KnowledgeCard {
 
 /** 外部 AI 批量导入使用的最小卡片格式；服务端会统一按草稿保存。 */
 export interface KnowledgeCardImportInput {
+  related_ids?:string[];
   card_type: KnowledgeCardType;
   title: string;
   content: string;
@@ -402,6 +404,7 @@ export interface KnowledgeCardImportInput {
 }
 
 export interface KnowledgeCardCandidate {
+  candidate_key?:string;
   card_type: KnowledgeCardType;
   title: string;
   content: string;
@@ -652,8 +655,10 @@ export function queryKnowledgeCards(filters: {
   sort?: "updated" | "created" | "usage" | "review";
   page?: number;
   page_size?: number;
+  summary?: boolean;
 } = {}, options?: ReadRequestOptions) {
   const params = new URLSearchParams();
+  if(filters.summary) params.set("summary","true");
   if (filters.card_type) params.set("card_type", filters.card_type);
   if (filters.status) params.set("status", filters.status);
   if (filters.q) params.set("q", filters.q);
@@ -667,7 +672,7 @@ export function queryKnowledgeCards(filters: {
   const query = params.toString();
   return httpRequest<KnowledgeCardsPage>(`/knowledge-cards/query${query ? `?${query}` : ""}`, options).then((result) => ({
     ...result,
-    cards: result.cards.map(mapKnowledgeCard),
+    cards: result.cards.map(card => ({...mapKnowledgeCard(card), content_is_summary: filters.summary === true})),
   }));
 }
 
@@ -784,26 +789,16 @@ export function importKnowledgeCards(cards: KnowledgeCardImportInput[]) {
   }).then((result) => ({ ...result, cards: result.cards.map(mapKnowledgeCard) }));
 }
 
-export function analyzeKnowledgeCards(payload: { content: string; source_name?: string; max_cards?: number }) {
-  return httpRequest<{ cards: KnowledgeCardCandidate[]; skipped: number; model: string }>("/knowledge-cards/analyze", {
-    method: "POST",
-    body: JSON.stringify(payload),
-  }).then((result) => ({
-    ...result,
-    cards: result.cards.map((card) => ({
-      ...card,
-      tags: readTagList(card.tags),
-      projects: readStringList(card.projects),
-      source_excerpt: typeof card.source_excerpt === "string" ? card.source_excerpt : "",
-    })),
-  }));
+export async function analyzeKnowledgeCards(payload: { content: string; source_name?: string; max_cards?: number; force?:boolean }) {
+  const task=await waitAiTask(await createAiTask({task:"knowledge_extract",...payload}));
+  return {cards:((task.result?.cards||[]) as KnowledgeCardCandidate[]).map((c,i)=>({...c,candidate_key:`${task.id}:${i}`})),skipped:task.result?.skipped_cards||0,model:task.result?.model||""};
 }
 
-export function createKnowledgeAnalyzeJob(payload: { content: string; source_name?: string; max_cards?: number }) {
-  return httpRequest<KnowledgeAnalyzeJobCreated>("/knowledge-cards/analyze-jobs", {
-    method: "POST",
-    body: JSON.stringify(payload),
-  });
+export async function createKnowledgeAnalyzeJob(payload: { content: string; source_name?: string; max_cards?: number; force?:boolean }) {
+  let task=await createAiTask({task:"knowledge_extract",...payload});
+  while(!task.analysis_job_id&&task.status==="running"){await new Promise(r=>setTimeout(r,300));task=await getAiTask(task.id);}
+  if(!task.analysis_job_id)throw new Error(task.error||"无法启动知识提取任务");
+  return {job_id:task.analysis_job_id,status:task.status,total_chars:payload.content.length,total_chunks:0,max_cards:payload.max_cards??16};
 }
 
 export function getKnowledgeAnalyzeJob(jobId: string, options?: ReadRequestOptions) {
@@ -1156,11 +1151,9 @@ export function getReview(id: string) {
   return httpRequest<Review>(`/reviews/${encodeURIComponent(id)}`).then(mapReview);
 }
 
-export function generateReview(payload: { kind: ReviewKind; date: string }) {
-  return httpRequest<Review>("/reviews/generate", {
-    method: "POST",
-    body: JSON.stringify(payload),
-  }).then(mapReview);
+export async function generateReview(payload: { kind: ReviewKind; date: string; force?:boolean }) {
+  const task=await waitAiTask(await createAiTask({task:payload.kind==="weekly"?"weekly_review":"monthly_review",date:payload.date,force:payload.force}));
+  return mapReview(task.result as Review);
 }
 
 export function updateReview(id: string, payload: { title?: string; content?: string; status?: ReviewStatus }) {
@@ -1213,6 +1206,8 @@ export function updateAiConfig(payload: UpdateAiConfigPayload) {
 export type AiTaskId = "daily_summary" | "knowledge_extract" | "weekly_review" | "monthly_review";
 
 export interface AiModelProfile {
+  input_price_cny?: number | null;
+  output_price_cny?: number | null;
   id: string;
   name: string;
   model: string;
@@ -1594,9 +1589,54 @@ export async function downloadBackup(name: string) {
 
 // ── AI ──────────────────────────────────────────────
 
-export function summarizeWithAI(payload: { content: string }) {
-  return httpRequest<{ summary: string }>("/ai/summary", {
-    method: "POST",
-    body: JSON.stringify(payload),
-  });
+export async function summarizeWithAI(payload: { content: string; date?:string; source_name?:string; force?:boolean }) {
+  const task=await waitAiTask(await createAiTask({task:"daily_summary",...payload,source_name:payload.source_name?Array.from(payload.source_name).slice(0,120).join(""):undefined}));
+  return task.result as {summary:string};
+}
+
+// Knowledge organization and actual reuse are separate from opening a reader.
+export interface KnowledgeSource { article_id: string; review_id: string; date: string; excerpt: string }
+export interface ReuseEvent { id: string; card_id: string; title: string; used_at: string; project: string; problem: string }
+export interface ReusePage { events: ReuseEvent[]; total: number; page: number; has_more: boolean; from: string; to: string }
+export function getKnowledgeSources(id: string) { return httpRequest<KnowledgeSource[]>(`/knowledge-cards/${encodeURIComponent(id)}/sources`); }
+export function similarKnowledge(card: {title:string;content:string}, signal?: AbortSignal) { return httpRequest<{card:KnowledgeCard;reason:string}[]>("/knowledge-cards/similar", {method:"POST",body:JSON.stringify(card),signal}); }
+export function organizeKnowledge(payload: {request_id:string;target_id?:string;expected_updated_at?:string;card:KnowledgeCardImportInput & {status?:KnowledgeCardStatus;related_ids?:string[]};sources?:KnowledgeSource[];source_job_id?:string}) {return httpRequest<KnowledgeCard>("/knowledge-cards/organize",{method:"POST",body:JSON.stringify(payload)}).then(mapKnowledgeCard);}
+export function recordKnowledgeReuse(id:string,request_id:string){return httpRequest<ReuseEvent>(`/knowledge-cards/${encodeURIComponent(id)}/reuse`,{method:"POST",body:JSON.stringify({request_id})});}
+export function queryKnowledgeReuse(filters:{card_id?:string;date?:string;page?:number}={}){const p=new URLSearchParams();if(filters.card_id)p.set("card_id",filters.card_id);if(filters.date)p.set("date",filters.date);if(filters.page)p.set("page",String(filters.page));return httpRequest<ReusePage>(`/knowledge-reuse?${p}`);}
+export function updateKnowledgeReuse(id:string,project:string,problem:string){return httpRequest<void>(`/knowledge-reuse/${encodeURIComponent(id)}`,{method:"PATCH",body:JSON.stringify({project,problem})});}
+export function deleteKnowledgeReuse(id:string){return httpRequest<void>(`/knowledge-reuse/${encodeURIComponent(id)}`,{method:"DELETE"});}
+export function getArticleTagSuggestions(options?:ReadRequestOptions){return httpRequest<string[]>("/articles/tag-suggestions",options);}
+export interface AiTaskView {id:string;task:AiTaskId;source_name?:string;date?:string;created_at_unix?:number;status:string;progress_percent:number;result: any | null;error:string|null;analysis_job_id:string|null;usage:{prompt_tokens:number;completion_tokens:number;total_tokens:number}|null;usage_complete:boolean;estimated_cost_cny:number|null;}
+export interface AiTaskRequest {task:AiTaskId;content?:string;source_name?:string;date?:string;max_cards?:number;force?:boolean;}
+export function createAiTask(p:AiTaskRequest){return httpRequest<AiTaskView>("/ai/tasks",{method:"POST",body:JSON.stringify({...p,source_name:p.source_name?Array.from(p.source_name).slice(0,120).join(""):undefined})}).then(task=>{rememberAiTask(task.id);return task;});}
+export function getAiTask(id:string,summary=false){return httpRequest<AiTaskView>(`/ai/tasks/${encodeURIComponent(id)}${summary?"?summary=true":""}`);}
+export function listAiTasks(){return httpRequest<AiTaskView[]>("/ai/tasks");}
+export function retryAiTask(id:string){return httpRequest<AiTaskView>(`/ai/tasks/${encodeURIComponent(id)}/retry`,{method:"POST",body:"{}"});}
+export function cancelAiTask(id:string){return httpRequest<AiTaskView>(`/ai/tasks/${encodeURIComponent(id)}`,{method:"DELETE"});}
+function aiTaskSessionKey(){return "daily-summary-ai-tasks:"+encodeURIComponent(getServerUrl());}
+export function rememberedAiTasks():string[]{try{return JSON.parse(sessionStorage.getItem(aiTaskSessionKey())||"[]");}catch{return [];}}
+export function rememberAiTask(id:string){try{sessionStorage.setItem(aiTaskSessionKey(),JSON.stringify([...new Set([id,...rememberedAiTasks()])].slice(0,32)));}catch{/* Session persistence unavailable. */}window.dispatchEvent(new Event("ai-tasks-changed"));}
+export async function waitAiTask(task: AiTaskView): Promise<AiTaskView> {
+  while (task.status === "running" || task.status === "queued") {
+    await new Promise((resolve) => setTimeout(resolve, 800));
+    task = await getAiTask(task.id, true);
+  }
+  if (task.status === "failed" || task.status === "cancelled") {
+    throw new Error(task.error || "任务已取消，已完成结果可在 AI 任务中查看。");
+  }
+  return task.result == null ? getAiTask(task.id) : task;
+}
+
+export async function knowledgeCandidateRequestId(key?:string):Promise<string>{
+  if(!key)return crypto.randomUUID();
+  const hash=new Uint8Array(await crypto.subtle.digest("SHA-256",new TextEncoder().encode(getServerUrl()+":"+key)));
+  hash[6]=(hash[6]&15)|64;hash[8]=(hash[8]&63)|128;
+  const hex=[...hash.slice(0,16)].map(v=>v.toString(16).padStart(2,"0")).join("");
+  return `${hex.slice(0,8)}-${hex.slice(8,12)}-${hex.slice(12,16)}-${hex.slice(16,20)}-${hex.slice(20)}`;
+}
+export async function saveKnowledgeCandidateDrafts(candidates:(KnowledgeCardImportInput&{candidate_key?:string})[]){
+  const cards:KnowledgeCard[]=[];
+  try{for(const candidate of candidates){const request_id=await knowledgeCandidateRequestId(candidate.candidate_key?`${candidate.candidate_key}:draft:new`:undefined);cards.push(await organizeKnowledge({request_id,card:{...candidate,status:"draft"}}));}}
+  catch(error){throw new Error(`${cards.length?`已保存 ${cards.length} 个草稿，可重试剩余操作。`:""}${getErrorMessage(error)}`);}
+  return {cards,imported:cards.length,skipped:0};
 }
