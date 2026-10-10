@@ -1065,6 +1065,17 @@ try {
     }
   }
   await page.setViewportSize({ width: 390, height: 844 });
+  await check("mobile knowledge bulk selection is explicit and reversible", async () => {
+    await go("/knowledge"); await healthy(".kl-card");
+    assert(await page.locator(".kl-card-check").first().isHidden());
+    await page.locator(".kl-card-menu").first().click();
+    await page.getByRole("menuitem", {name:"批量选择", exact:true}).click();
+    assert(await page.locator(".kl-card-check").first().isVisible());
+    assert(await page.locator(".kl-batchbar").isVisible());
+    await page.getByRole("button", {name:"结束选择", exact:true}).click();
+    assert(await page.locator(".kl-card-check").first().isHidden());
+    assert.equal(await page.locator(".kl-batchbar").count(), 0);
+  });
   await check("mobile Today starts with the document and exposes editing on demand", async () => {
     await go(`/today?date=${anchorDate}`);
     await page.locator(".today-reading-title").waitFor();

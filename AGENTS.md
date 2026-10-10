@@ -286,3 +286,8 @@ curl http://127.0.0.1:8080/health
 - `src/components/workspace/mobile-workbench.css` 从 `src/main.tsx` 挂载，负责阅读视口与底部导航／任务状态条的空间分配、知识详情单栏导航和全站移动排版。仅作用于 <768px，沿用原主题和壁纸配置。
 - 知识详情操作位于 `KnowledgePage.tsx` 的移动菜单；AI 用量位于 `Sidebar.tsx` 的更多菜单，由 `App.tsx` 响应界面事件打开 `AiTaskTray.tsx`。移动端为模态底部面板，PC 仍为可拖动入口与非模态浮窗。
 - 修改移动滚动、浮层或导航时必须运行两个生产浏览器脚本，检查 `#main-content` 下边界不超过导航／任务状态条上边界，以及长内容、短屏表单、关闭焦点和所有功能入口；说明及截图见 `WORKSPACE_OPTIMIZATION.md` 的移动重设计章节。
+
+## 阅读优先入口
+
+- 移动阅读操作：`src/components/workspace/ReadingActions.tsx`；移动断点订阅：`src/lib/useMobileLayout.ts`。
+- 修改记录读写入口或返回行为时检查 `tab=edit`、`returnTo` 及内部滚动恢复，并执行生产 UI 回归中的移动阅读场景。
