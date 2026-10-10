@@ -1,3 +1,5 @@
+import ReadingActions from "./workspace/ReadingActions";
+import WeeklyReuse from "./knowledge/WeeklyReuse";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Bar, BarChart, ResponsiveContainer, Tooltip, XAxis } from "recharts";
 import type { MouseEvent } from "react";
@@ -605,6 +607,7 @@ export default function StatsPage({
       <WorkspaceHeader
         icon={BarChart3}
         title="统计"
+        description={formatMonthLabel(year, month)}
         actions={
           <div className="ft-month-nav">
             <button
@@ -672,7 +675,7 @@ export default function StatsPage({
               <WallpaperSurface target="stats.monthlyOverview" className="ft-monthly-story">
                 <div className="ft-monthly-story-copy">
                   <h2>本月概览</h2>
-                  <div className="ft-monthly-story-actions">
+                  <div className="ft-monthly-story-actions"><ReadingActions label="月度回顾操作">
                     <button
                       className="ui-button-primary"
                       onClick={() => setStatsTab("generate")}
@@ -687,7 +690,7 @@ export default function StatsPage({
                       浏览复盘库
                       <ChevronRight size={15} />
                     </button>
-                  </div>
+                  </ReadingActions></div>
                 </div>
                 <div className="ft-monthly-story-progress">
                   <div
@@ -1063,6 +1066,7 @@ export default function StatsPage({
                   <ChevronRight size={14} />
                 </button>
               </div>
+              <WeeklyReuse/>
               {knowledgeSummaryQuery.isError ? (
                 <div className="ui-alert-warn" role="alert">
                   知识统计读取失败

@@ -1,3 +1,4 @@
+import ReadingActions from "./ReadingActions";
 import type { ReactNode } from "react";
 import type { LucideIcon } from "lucide-react";
 import "./workspace.css";
@@ -24,7 +25,7 @@ export default function WorkspaceHeader({
           {description && <p>{description}</p>}
         </div>
       </div>
-      {actions && <div className="wb-header-actions">{actions}</div>}
+      {actions && <div className="wb-header-actions"><ReadingActions label={`${title}操作`}>{actions}</ReadingActions></div>}
     </header>
   );
 }

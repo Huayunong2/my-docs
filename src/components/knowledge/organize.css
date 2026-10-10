@@ -1,0 +1,370 @@
+.ko-editor,.ko-editor label,.ko-reuse-form label{display:grid;gap:8px;font-size:13px;font-weight:600}.ko-heading{display:flex;align-items:center;justify-content:space-between;gap:12px;padding-bottom:12px;border-bottom:1px solid var(--ui-border);font-weight:600}.ko-editor small,.ko-muted,.ko-reuse p,.ko-task-dialog [id$="description"]{color:var(--ui-text-subtle);font-size:12px;line-height:1.8}.ko-fields{display:grid;grid-template-columns:1fr 1fr;gap:12px}.ko-evidence-grid{display:grid;grid-template-columns:1fr;gap:16px}.ko-evidence-grid details{min-width:0;padding:14px;border:1px solid var(--ui-border);border-radius:12px;background:var(--ui-surface-subtle)}.ko-editor textarea{min-height:180px;resize:vertical;font-size:14px;line-height:1.8}.ko-editor details textarea{min-height:100px;margin-top:12px}.ko-actions{display:flex;flex-wrap:wrap;gap:8px;align-items:center;padding-top:6px}.ko-actions button,.ko-match,.ko-task-dialog button{min-height:44px}.ko-similar,.ko-merge{display:grid;gap:10px;background:var(--ui-surface-subtle);padding:16px;border:1px solid var(--ui-border);border-radius:14px}.ko-similar h3,.ko-reuse h3,.ko-merge h3{font-size:14px;font-weight:600;margin:0}.ko-match{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:12px;text-align:left;border:1px solid var(--ui-border);border-radius:10px;background:var(--ui-surface);width:100%}.ko-match span{display:grid;gap:4px;min-width:0}.ko-match strong{font-size:13px;font-weight:600;overflow-wrap:anywhere}.ko-match:hover,.ko-match[aria-current="true"]{border-color:var(--ui-accent-solid);background:var(--ui-surface-hover)}.ko-merge .markdown-content{font-size:13px;max-height:260px;overflow:auto;padding:10px;background:var(--ui-surface);border-radius:8px}.ko-reuse p{margin:6px 0 0}.ko-reuse-form>p{display:flex;gap:8px;align-items:center;color:var(--ui-success-text)}.ko-reuse-form textarea{min-height:100px}.ko-event-list{list-style:none!important;padding:0!important;margin:12px 0!important}.ko-event-list li{padding:14px 0;border-bottom:1px solid var(--ui-border)}.ko-event-list li>div{display:flex;justify-content:space-between;gap:12px}.ko-event-list time{font-size:12px;color:var(--ui-text-subtle)}.ko-event-list p{font-size:13px;line-height:1.8;overflow-wrap:anywhere;margin:6px 0}.ko-event-list a{font-size:14px;font-weight:600;color:var(--ui-accent-text)}.ko-weekly{margin-bottom:20px}.ko-task-grid .markdown-content{max-width:72ch;margin-inline:auto}.ko-runtime{display:grid;gap:16px}.ko-runtime dl{display:grid;grid-template-columns:1fr 1fr;gap:14px}.ko-runtime dl>div{padding:14px;background:var(--ui-surface-subtle);border-radius:10px}.ko-runtime dt{font-size:12px;color:var(--ui-text-subtle)}.ko-runtime dd{font-size:14px;margin:6px 0 0}.kl-reading-content{max-width:72ch;margin-inline:auto}.ko-simple-option{display:flex;justify-content:space-between;gap:20px;align-items:center;padding:18px;border:1px solid var(--ui-border);border-radius:14px}.ko-simple-option strong{font-size:14px}.ko-simple-option p{font-size:12px;color:var(--ui-text-subtle);margin-top:6px;line-height:1.8}.ko-simple-option input{width:20px;height:20px;accent-color:var(--ui-accent-solid)}
+
+@media(min-width:1280px){.ko-evidence-grid{grid-template-columns:minmax(0,1.2fr) minmax(0,1fr)}}
+@media(max-width:767px){.ko-fields{grid-template-columns:1fr}.ko-actions>button{flex:1 1 auto}.ko-task-dialog>header,.ko-runtime dl{grid-template-columns:1fr}.ko-editor textarea{font-size:16px}.ko-editor input,.ko-editor select{font-size:16px;min-height:44px}.kl-reading-content .markdown-content{font-size:16px;line-height:1.85}}
+@media(prefers-reduced-motion:reduce){*,*::before,*::after{animation-duration:.01ms!important;transition-duration:.01ms!important;scroll-behavior:auto!important}}
+
+.ko-organize-existing{padding:16px;margin-block:24px;border:1px solid var(--ui-border);border-radius:14px}.ko-organize-existing>summary{font-weight:600;font-size:14px}.ko-organize-existing .ko-editor{margin-top:20px}
+
+
+.ko-reuse-toolbar{display:flex;align-items:center;justify-content:space-between;gap:16px}
+.ko-reuse-copy{display:grid;gap:4px;min-width:0}
+.ko-reuse-copy strong{font-size:13px;font-weight:650}
+.ko-reuse-copy span{color:var(--ui-text-subtle);font-size:11px;line-height:1.6}
+.ko-reuse-controls{display:flex;align-items:center;gap:7px;flex:0 0 auto}
+.ko-reuse-controls button{min-height:40px;padding-inline:11px;font-size:12px}
+
+.ko-reuse-history{margin-top:12px;padding:10px 14px;border:1px solid var(--ui-border);border-radius:12px;background:var(--ui-surface-subtle)}
+.ko-event-actions{display:flex;gap:8px}
+.ko-task-launcher{display:none}
+.ko-usage-overview{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px;padding:12px 16px;border-bottom:1px solid var(--ui-border);background:var(--ui-surface-subtle)}
+.ko-usage-overview>div{display:grid;gap:4px;min-width:0}
+.ko-usage-overview span{color:var(--ui-text-subtle);font-size:10px}
+.ko-usage-overview strong{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:14px;font-variant-numeric:tabular-nums}
+.ko-usage-overview>p{grid-column:1/-1;margin:0;color:var(--ui-text-subtle);font-size:10px;line-height:1.5}
+
+
+
+
+
+
+
+.ko-task-item{display:grid;min-width:148px;max-width:210px;min-height:64px;align-content:center;gap:3px;padding:8px 10px;border:1px solid var(--ui-border);border-radius:11px;background:var(--ui-surface-subtle);text-align:left}
+.ko-task-item[aria-current=true]{border-color:var(--ui-selected-border);background:var(--ui-surface-selected)}
+.ko-task-item strong{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11px;font-weight:650}
+.ko-task-item span,.ko-task-item small{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--ui-text-subtle);font-size:10px;line-height:1.5}
+.ko-task-detail{min-width:0;overflow:auto;overscroll-behavior:contain;scrollbar-width:thin}
+.ko-task-title{display:flex;align-items:flex-start;justify-content:space-between;gap:10px;margin:2px 0 10px}
+.ko-task-title h3{font-size:14px;font-weight:650}
+.ko-task-title p,.ko-task-usage{margin:4px 0 0;color:var(--ui-text-subtle);font-size:10px;line-height:1.6;overflow-wrap:anywhere}
+.ko-task-status{flex:0 0 auto;padding:4px 8px;border:1px solid var(--ui-border);border-radius:999px;background:var(--ui-surface-subtle);font-size:10px;color:var(--ui-text-subtle)}
+.ko-task-status[data-status=running]{border-color:var(--ui-selected-border);color:var(--ui-accent-text)}
+.ko-task-progress{height:3px;margin:8px 0;border-radius:99px;background:var(--ui-border);overflow:hidden}
+.ko-task-progress i{display:block;height:100%;border-radius:inherit;background:var(--ui-accent-solid);transition:width 180ms}
+.ko-task-detail>.ko-editor{gap:11px;margin-top:12px}
+.ko-task-detail .ko-evidence-grid{grid-template-columns:1fr}
+.ko-task-detail .ko-editor textarea{min-height:88px;font-size:12px}
+.ko-task-detail .ko-editor input,.ko-task-detail .ko-editor select{min-height:38px;font-size:12px}
+.ko-task-detail .ko-merge .markdown-content{max-height:120px}
+.ko-task-empty{display:flex;align-items:center;justify-content:space-between;gap:8px;color:var(--ui-text-subtle);font-size:11px}
+@media(max-width:767px){.ko-task-launcher{right:16px;bottom:calc(var(--ui-mobile-nav-total-height,76px) + 12px)}.ko-usage-overview{gap:6px;padding:10px 12px}.ko-usage-overview strong{font-size:12px}.ko-task-item{min-width:132px}.ko-reuse-toolbar{align-items:flex-start;flex-direction:column;gap:9px}.ko-reuse-controls{width:100%}.ko-reuse-controls button{flex:1}}
+
+/* A single compact reuse bar keeps provenance and reading content in the lead. */
+.ko-task-launcher {
+  display: flex;
+}
+.ko-reuse {
+  display: block;
+  margin-block: 18px;
+  padding: 12px 0 0;
+  border: 0;
+  border-top: 1px solid var(--ui-border);
+  border-radius: 0;
+  background: transparent;
+}
+.ko-reuse-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+.ko-reuse-copy {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+.ko-reuse-copy strong {
+  font-size: 13px;
+  font-weight: 650;
+}
+.ko-reuse-copy span {
+  color: var(--ui-text-subtle);
+  font-size: 11px;
+  line-height: 1.6;
+}
+.ko-reuse-controls {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 7px;
+}
+.ko-reuse-controls button {
+  min-height: 40px;
+  padding-inline: 11px;
+  font-size: 12px;
+}
+.ko-reuse-form {
+  display: grid;
+  gap: 12px;
+  margin-top: 14px;
+  padding: 14px;
+  border: 1px solid var(--ui-border);
+  border-radius: 12px;
+  background: var(--ui-surface-subtle);
+}
+.ko-reuse-history {
+  margin-top: 12px;
+  padding: 10px 14px;
+  border: 1px solid var(--ui-border);
+  border-radius: 12px;
+  background: var(--ui-surface-subtle);
+}
+.ko-event-actions {
+  display: flex;
+  gap: 8px;
+}
+.ko-usage-overview {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--ui-border);
+  background: var(--ui-surface-subtle);
+}
+.ko-usage-overview > div {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+.ko-usage-overview span {
+  color: var(--ui-text-subtle);
+  font-size: 10px;
+}
+.ko-usage-overview strong {
+  overflow: hidden;
+  font-size: 14px;
+  font-variant-numeric: tabular-nums;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ko-usage-overview > p {
+  grid-column: 1 / -1;
+  margin: 0;
+  color: var(--ui-text-subtle);
+  font-size: 10px;
+  line-height: 1.5;
+}
+.ko-task-dialog {
+  position: fixed;
+  inset: auto;
+  z-index: 81;
+  display: flex;
+  width: min(452px, calc(100vw - 24px));
+  height: min(660px, calc(100dvh - 24px));
+  max-height: calc(100dvh - 24px);
+  margin: 0;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid var(--ui-border);
+  border-radius: 18px;
+  background: var(--ui-surface-raised);
+  color: var(--ui-text);
+  box-shadow: 0 18px 56px rgb(12 18 32 / 0.24);
+  outline: none;
+}
+.ko-task-dialog > header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  flex: 0 0 auto;
+  padding: 16px 18px 12px;
+  border-bottom: 1px solid var(--ui-border);
+}
+.ko-task-dialog[data-expanded="false"] {
+  height: min(360px, calc(100dvh - 24px));
+}
+.ko-task-dialog > header > div {
+  min-width: 0;
+}
+.ko-task-dialog > header > button {
+  flex: 0 0 44px;
+  width: 44px;
+  height: 44px;
+}
+.ko-task-dialog > header h2 {
+  font-size: 17px;
+  font-weight: 650;
+  letter-spacing: -0.015em;
+}
+.ko-task-dialog > header p {
+  max-width: 36ch;
+  color: var(--ui-text-subtle);
+  margin-top: 5px;
+  font-size: 11px;
+  line-height: 1.6;
+}
+.ko-task-body {
+  overflow: auto;
+  flex: 1;
+  min-height: 0;
+  padding: 12px 14px 16px;
+}
+.ko-task-grid {
+  display: flex;
+  min-height: 100%;
+  flex-direction: column;
+  gap: 14px;
+}
+.ko-task-grid nav {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 7px;
+  max-width: 100%;
+  overflow-x: auto;
+  padding: 1px 1px 6px;
+  scrollbar-width: thin;
+}
+.ko-task-item {
+  display: grid;
+  min-width: 148px;
+  max-width: 210px;
+  min-height: 64px;
+  align-content: center;
+  gap: 3px;
+  padding: 8px 10px;
+  border: 1px solid var(--ui-border);
+  border-radius: 11px;
+  background: var(--ui-surface-subtle);
+  text-align: left;
+}
+.ko-task-item[aria-current="true"] {
+  border-color: var(--ui-selected-border);
+  background: var(--ui-surface-selected);
+}
+.ko-task-item strong {
+  overflow: hidden;
+  font-size: 11px;
+  font-weight: 650;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ko-task-item span,
+.ko-task-item small {
+  overflow: hidden;
+  color: var(--ui-text-subtle);
+  font-size: 10px;
+  line-height: 1.5;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ko-task-detail {
+  min-width: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+}
+.ko-task-title {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+  margin: 2px 0 10px;
+}
+.ko-task-title h3 {
+  font-size: 14px;
+  font-weight: 650;
+}
+.ko-task-title p,
+.ko-task-usage {
+  margin: 4px 0 0;
+  color: var(--ui-text-subtle);
+  font-size: 10px;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+.ko-task-status {
+  flex: 0 0 auto;
+  padding: 4px 8px;
+  border: 1px solid var(--ui-border);
+  border-radius: 999px;
+  background: var(--ui-surface-subtle);
+  color: var(--ui-text-subtle);
+  font-size: 10px;
+}
+.ko-task-status[data-status="running"] {
+  border-color: var(--ui-selected-border);
+  color: var(--ui-accent-text);
+}
+.ko-task-progress {
+  height: 3px;
+  margin: 8px 0;
+  overflow: hidden;
+  border-radius: 99px;
+  background: var(--ui-border);
+}
+.ko-task-progress i {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--ui-accent-solid);
+  transition: width 180ms;
+}
+.ko-task-detail > .ko-editor {
+  gap: 11px;
+  margin-top: 12px;
+}
+.ko-task-detail .ko-evidence-grid {
+  grid-template-columns: 1fr;
+}
+.ko-task-detail .ko-editor textarea {
+  min-height: 88px;
+  font-size: 12px;
+}
+.ko-task-detail .ko-editor input,
+.ko-task-detail .ko-editor select {
+  min-height: 38px;
+  font-size: 12px;
+}
+.ko-task-detail .ko-merge .markdown-content {
+  max-height: 120px;
+}
+.ko-task-empty {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  color: var(--ui-text-subtle);
+  font-size: 11px;
+}
+@media (max-width: 767px) {
+  .ko-task-launcher {
+    right: 16px;
+    bottom: calc(var(--ui-mobile-nav-total-height, 76px) + 12px);
+  }
+  .ko-task-dialog {
+    width: calc(100vw - 20px);
+    height: min(620px, calc(100dvh - 20px));
+    max-height: calc(100dvh - 20px);
+    border-radius: 16px;
+  }
+  .ko-usage-overview {
+    gap: 6px;
+    padding: 10px 12px;
+  }
+  .ko-usage-overview strong {
+    font-size: 12px;
+  }
+  .ko-task-body {
+    padding: 10px 10px calc(env(safe-area-inset-bottom) + 12px);
+  }
+  .ko-task-item {
+    min-width: 132px;
+  }
+  .ko-reuse-toolbar {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 9px;
+  }
+  .ko-reuse-controls {
+    width: 100%;
+  }
+  .ko-reuse-controls button {
+    flex: 1;
+  }
+}
+
+@media (max-width: 767px) {
+  .ko-task-detail .ko-editor :is(input, select, textarea) { font-size: 16px; min-height: 44px; }
+  .ko-reuse-controls button { min-height: 44px; }
+}

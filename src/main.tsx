@@ -6,6 +6,7 @@ import router from "./router";
 import "./index.css";
 import "./components/workspace/mobile-reading.css";
 import "./components/workspace/dialog-windows.css";
+import "./components/workspace/mobile-workbench.css";
 import { consumeLocalAiTokenFromUrl, LOCAL_AI_TOKEN_SESSION_KEY } from "./lib/localAiAccess";
 import { writeSessionStorage } from "./lib/storage";
 

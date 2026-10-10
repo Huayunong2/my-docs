@@ -1,3 +1,4 @@
+import CandidateOrganizer from "./knowledge/CandidateOrganizer";
 import { useEffect, useMemo, useRef, useState } from "react";
 import * as Dialog from "@radix-ui/react-dialog";
 import CodeMirror from "@uiw/react-codemirror";
@@ -8,7 +9,6 @@ import {
   AlertTriangle,
   ArrowLeft,
   ArrowRight,
-  CalendarDays,
   Check,
   CheckCircle2,
   Clipboard,
@@ -42,13 +42,6 @@ import {
   parseKnowledgeCardMarkdownImport,
   parseKnowledgeCardTextImport,
 } from "../lib/knowledgeImport";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "./ui/select";
 import { Tabs, TabsList, TabsTrigger } from "./ui/tabs";
 import SpaceAutocomplete from "./ui/space-autocomplete";
 import ImportDropzone from "./knowledge/ImportDropzone";
@@ -58,9 +51,7 @@ const importSourceReturnKey = "daily-summary-import-source-return";
 const MAX_SOURCE_CHARS = 1_000_000;
 const JOB_POLL_INTERVAL_MS = 900;
 const AI_JOB_STORAGE_KEY = "daily-summary-knowledge-import-job";
-const cardTypeOptions = Object.entries(cardTypeLabels) as Array<
-  [api.KnowledgeCardType, string]
->;
+
 const knowledgeCardJsonExample = JSON.stringify(
   {
     cards: [
@@ -88,7 +79,7 @@ type Candidate = api.KnowledgeCardImportInput & {
 
 function readStoredJobId() {
   try {
-    return window.sessionStorage.getItem(AI_JOB_STORAGE_KEY);
+    return window.sessionStorage.getItem(AI_JOB_STORAGE_KEY + ":" + encodeURIComponent(api.getServerUrl()));
   } catch {
     return null;
   }
@@ -96,7 +87,7 @@ function readStoredJobId() {
 
 function storeJobId(jobId: string) {
   try {
-    window.sessionStorage.setItem(AI_JOB_STORAGE_KEY, jobId);
+    window.sessionStorage.setItem(AI_JOB_STORAGE_KEY + ":" + encodeURIComponent(api.getServerUrl()), jobId);
   } catch {
     // 任务仍会在当前页面继续轮询；存储不可用时刷新后需要重新开始。
   }
@@ -104,7 +95,7 @@ function storeJobId(jobId: string) {
 
 function clearStoredJobId() {
   try {
-    window.sessionStorage.removeItem(AI_JOB_STORAGE_KEY);
+    window.sessionStorage.removeItem(AI_JOB_STORAGE_KEY + ":" + encodeURIComponent(api.getServerUrl()));
   } catch {
     // 隐私模式下 sessionStorage 可能不可用。
   }
@@ -142,13 +133,7 @@ function candidatesFromJob(job: api.KnowledgeAnalyzeJob): Candidate[] {
   }));
 }
 
-function readList(value: string) {
-  return value
-    .split(/[,，、]/)
-    .map((item) => item.trim())
-    .filter(Boolean)
-    .slice(0, 12);
-}
+
 
 function withDefaultSpace(
   card: api.KnowledgeCardImportInput,
@@ -651,8 +636,9 @@ export default function KnowledgeImportDialog({
       toast.error("请补全所选知识条目的标题和正文。");
       return;
     }
-    const cards = sourceCards.map((card) =>
-      withDefaultSpace(
+    const cards = sourceCards.map((card) => ({
+      candidate_key:mode==="ai"?(card as Candidate).id:undefined,
+      ...withDefaultSpace(
         {
           card_type: card.card_type,
           title: card.title,
@@ -666,10 +652,10 @@ export default function KnowledgeImportDialog({
         },
         defaultSpace,
       ),
-    );
+    }));
     setSaving(true);
     try {
-      const result = await api.importKnowledgeCards(cards);
+      const result = mode==="ai" ? await api.saveKnowledgeCandidateDrafts(cards) : await api.importKnowledgeCards(cards);
       await onImported?.(result);
       clearStoredJobId();
       toast.success(
@@ -1152,153 +1138,7 @@ export default function KnowledgeImportDialog({
 
                       <section className="ki-manual-preview ui-panel-muted min-w-0 p-3.5 sm:p-4">
                         {activeCandidate ? (
-                          <div className="space-y-3">
-                            <div className="flex items-center justify-between gap-3">
-                              <div className="ui-section-kicker flex items-center gap-1.5">
-                                <Sparkles size={12} /> 编辑候选知识条目
-                              </div>
-                              <span className="text-[11px] text-[var(--ui-text-subtle)]">
-                                {selectedCandidateIds.includes(
-                                  activeCandidate.id,
-                                )
-                                  ? "将导入"
-                                  : "已跳过"}
-                              </span>
-                            </div>
-                            <input
-                              value={activeCandidate.title}
-                              onChange={(event) =>
-                                updateCandidate(activeCandidate.id, {
-                                  title: event.target.value,
-                                })
-                              }
-                              className="ui-field h-11 min-h-11 text-sm font-semibold md:h-10 md:min-h-10"
-                              aria-label="候选知识条目标题"
-                            />
-                            <div className="grid gap-2 sm:grid-cols-[minmax(0,180px)_minmax(0,1fr)]">
-                              <label className="min-w-0">
-                                <span className="ui-section-kicker mb-1.5 block">
-                                  类型
-                                </span>
-                                <Select
-                                  value={activeCandidate.card_type}
-                                  onValueChange={(value) =>
-                                    updateCandidate(activeCandidate.id, {
-                                      card_type: value as api.KnowledgeCardType,
-                                    })
-                                  }
-                                >
-                                  <SelectTrigger
-                                    className="h-11 min-h-11 text-xs md:h-9 md:min-h-9"
-                                    aria-label="候选知识条目类型"
-                                  >
-                                    <SelectValue />
-                                  </SelectTrigger>
-                                  <SelectContent>
-                                    {cardTypeOptions.map(([value, label]) => (
-                                      <SelectItem key={value} value={value}>
-                                        {label}
-                                      </SelectItem>
-                                    ))}
-                                  </SelectContent>
-                                </Select>
-                              </label>
-                              <label className="min-w-0">
-                                <span className="ui-section-kicker mb-1.5 block">
-                                  标签
-                                </span>
-                                <input
-                                  value={(activeCandidate.tags || []).join(
-                                    ", ",
-                                  )}
-                                  onChange={(event) =>
-                                    updateCandidate(activeCandidate.id, {
-                                      tags: readList(event.target.value),
-                                    })
-                                  }
-                                  className="ui-field h-11 min-h-11 text-xs md:h-9 md:min-h-9"
-                                  placeholder="例如：C++、资源管理"
-                                  aria-label="候选知识条目标签"
-                                />
-                              </label>
-                            </div>
-                            <label className="block">
-                              <span className="ui-section-kicker mb-1.5 block">
-                                正文
-                              </span>
-                              <textarea
-                                value={activeCandidate.content}
-                                onChange={(event) =>
-                                  updateCandidate(activeCandidate.id, {
-                                    content: event.target.value,
-                                  })
-                                }
-                                className="ui-textarea min-h-[132px] resize-y text-xs leading-5"
-                                aria-label="候选知识条目正文"
-                              />
-                            </label>
-                            <label className="block">
-                              <span className="ui-section-kicker mb-1.5 flex items-center gap-1.5">
-                                <CheckCircle2
-                                  size={12}
-                                  className="text-[var(--ui-success-text)]"
-                                />{" "}
-                                原文依据
-                              </span>
-                              <textarea
-                                value={activeCandidate.source_excerpt || ""}
-                                onChange={(event) =>
-                                  updateCandidate(activeCandidate.id, {
-                                    source_excerpt: event.target.value,
-                                  })
-                                }
-                                className="ui-textarea min-h-[92px] resize-y text-xs leading-5"
-                                placeholder="AI 提取的原文片段；确认前建议保留。"
-                                aria-label="候选知识条目原文依据"
-                              />
-                            </label>
-                            <label className="block">
-                              <span className="ui-section-kicker mb-1.5 flex items-center gap-1.5">
-                                <CalendarDays
-                                  size={12}
-                                  className="text-[var(--ui-accent-text)]"
-                                />{" "}
-                                来源日期（可选）
-                              </span>
-                              <input
-                                type="date"
-                                value={activeCandidate.source_date || ""}
-                                onChange={(event) =>
-                                  updateCandidate(activeCandidate.id, {
-                                    source_date: event.target.value,
-                                  })
-                                }
-                                className="ui-field h-11 min-h-11 w-full text-xs md:h-9 md:min-h-9"
-                                aria-label="候选知识条目的来源日期"
-                              />
-                              <span className="mt-1.5 block text-[11px] leading-4 text-[var(--ui-text-subtle)]">
-                                如果原文来自某天的每日记录，可填写日期。外部文档还需要在知识条目中补充可读取的来源定位。
-                              </span>
-                            </label>
-                            <label className="block">
-                              <span className="ui-section-kicker mb-1.5 flex items-center gap-1.5">
-                                <FolderOpen size={12} /> 空间
-                              </span>
-                              <input
-                                value={(activeCandidate.projects || []).join(
-                                  ", ",
-                                )}
-                                onChange={(event) =>
-                                  updateCandidate(activeCandidate.id, {
-                                    projects: readList(event.target.value),
-                                  })
-                                }
-                                className="ui-field h-11 min-h-11 text-xs md:h-9 md:min-h-9"
-                                placeholder="可选，多个空间用逗号分隔"
-                                aria-label="候选知识条目空间"
-                              />
-                            </label>
-                          </div>
+                          <CandidateOrganizer key={activeCandidate.id} candidate={activeCandidate} sourceName={aiJob?.source_name||fileName||undefined} candidateKey={activeCandidate.id} sourceJobId={aiJobId || undefined} onChange={patch=>updateCandidate(activeCandidate.id,patch)} onProcessed={()=>{const next=aiCandidates.filter(c=>c.id!==activeCandidate.id);setAiCandidates(next);setSelectedCandidateIds(ids=>ids.filter(id=>id!==activeCandidate.id));setActiveCandidateId(next[0]?.id||null);void onImported?.({imported:1,skipped:0});}} onSkip={()=>{setSelectedCandidateIds(ids=>ids.filter(id=>id!==activeCandidate.id));const index=aiCandidates.findIndex(c=>c.id===activeCandidate.id);setActiveCandidateId(aiCandidates[(index+1)%aiCandidates.length]?.id||null);}} />
                         ) : (
                           <div className="flex min-h-[360px] items-center justify-center text-center text-xs leading-5 text-[var(--ui-text-subtle)]">
                             选择左侧知识条目查看和编辑。

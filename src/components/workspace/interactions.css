@@ -347,3 +347,9 @@
     min-height: 44px;
   }
 }
+
+.ko-task-launcher{position:fixed;z-index:82;right:22px;bottom:calc(var(--ui-mobile-nav-total-height,0px) + 22px);display:inline-flex;min-height:44px;align-items:center;gap:9px;padding:8px 13px;border:1px solid var(--ui-border);border-radius:999px;background:var(--ui-surface-raised);color:var(--ui-text);box-shadow:0 8px 28px rgb(12 18 32/.16);font-size:12px;font-weight:600;touch-action:none;cursor:grab;user-select:none}.ko-task-launcher:hover{border-color:var(--ui-selected-border);background:var(--ui-surface-hover)}.ko-task-launcher:focus-visible{outline:2px solid var(--ui-focus);outline-offset:3px}.ko-task-launcher.is-dragging{cursor:grabbing;transition:none}.ko-task-launcher-grip{display:flex;color:var(--ui-text-subtle)}.ko-task-launcher b{min-width:19px;border-radius:99px;background:var(--ui-accent-solid);color:white;text-align:center;padding:2px 5px;font-size:10px}
+
+.ko-offline{position:sticky;top:0;z-index:40;padding:8px 16px;background:var(--ui-warning-surface);color:var(--ui-warning-text);font-size:12px;text-align:center}
+html[data-simple-display="true"] :is(.app-wallpaper,.wallpaper-layer){display:none!important}html[data-simple-display="true"] [data-wallpaper-surface],html[data-simple-display="true"] #main-content{background-image:none!important;background-color:var(--ui-surface)!important}html[data-simple-display="true"] *,html[data-simple-display="true"] *::before,html[data-simple-display="true"] *::after{animation:none!important;transition:none!important;scroll-behavior:auto!important}
+@media(max-width:767px){.rs-answer-actions{position:sticky;bottom:calc(var(--ui-mobile-nav-total-height,76px) + env(safe-area-inset-bottom));background:var(--ui-surface-raised);padding-block:12px}}

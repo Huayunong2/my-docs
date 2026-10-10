@@ -97,6 +97,7 @@ interface Props {
   onDensity: (density: "comfortable" | "compact") => void;
   onSelect: (id: string) => void;
   onSelectAll: () => void;
+  onClearSelection: () => void;
   onInvert: () => void;
   onOpen: (card: KnowledgeCard) => void;
   onCardStatus: (card: KnowledgeCard) => void;
@@ -111,11 +112,13 @@ const statuses = ["all", "draft", "confirmed", "outdated"] as const;
 const sortLabels = {
   updated: "最近更新",
   created: "最近创建",
-  usage: "使用最多",
+  usage: "打开最多",
   review: "优先复习",
 } as const;
 
 export default function KnowledgeLibrary(p: Props) {
+  const [managing, setManaging] = useState(false);
+  const selecting = managing || p.selectedIds.length > 0;
   const searchRef = useRef<HTMLInputElement>(null);
   const composing = useRef(false);
   const selectAllRef = useRef<HTMLInputElement>(null);
@@ -160,6 +163,10 @@ export default function KnowledgeLibrary(p: Props) {
     window.addEventListener("keydown", handle);
     return () => window.removeEventListener("keydown", handle);
   }, [p.detailVisible, p.onNew]);
+  const scrollPosition=useRef(0);
+  useEffect(()=>{
+    if(!p.detailVisible && scrollRef.current) scrollRef.current.scrollTop=scrollPosition.current;
+  },[p.detailVisible]);
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: 0 });
   }, [p.page, p.project, p.status, p.tag, p.sort]);
@@ -294,7 +301,7 @@ export default function KnowledgeLibrary(p: Props) {
           <p>移除的条目仍可恢复</p>
         </div>
       </aside>
-      <WallpaperSurface as="section" target="knowledge.library" className="kl-library" aria-label="知识浏览">
+      <WallpaperSurface as="section" target="knowledge.library" className="kl-library" data-managing={selecting} aria-label="知识浏览">
         <div className="kl-library-top">
           <div className="kl-collection-heading">
             <div>
@@ -458,6 +465,7 @@ export default function KnowledgeLibrary(p: Props) {
                     : "选择本页"}
                 </span>
               </label>
+              {selecting && <button className="kl-end-selection" onClick={() => { p.onClearSelection(); setManaging(false); }}>结束选择</button>}
               <span className="kl-result-count" aria-live="polite">
                 {p.loading ? "更新中…" : `${p.total} 个条目`}
               </span>
@@ -471,7 +479,7 @@ export default function KnowledgeLibrary(p: Props) {
           {p.batchBar}
         </div>
         <div
-          ref={scrollRef}
+          ref={scrollRef} onScroll={e=>{scrollPosition.current=e.currentTarget.scrollTop;}}
           className="kl-library-scroll"
           aria-busy={p.loading}
         >
@@ -625,6 +633,7 @@ export default function KnowledgeLibrary(p: Props) {
                         <BookOpen size={14} />
                         打开阅读
                       </DropdownMenuItem>
+                      <DropdownMenuItem className="kl-mobile-manage-entry" onSelect={() => { setManaging(true); p.onSelect(card.id); }}>批量选择</DropdownMenuItem>
                       <DropdownMenuItem onSelect={() => p.onCardStatus(card)}>
                         <Check size={14} />
                         {card.status === "draft"

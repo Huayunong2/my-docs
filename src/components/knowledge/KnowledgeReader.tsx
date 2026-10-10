@@ -1,3 +1,8 @@
+import { useMobileLayout } from "../../lib/useMobileLayout";
+import {useState} from "react";
+import CandidateOrganizer from "./CandidateOrganizer";
+import ReusePanel from "./ReusePanel";
+import AdditionalSources from "./AdditionalSources";
 import {
   BookOpen,
   Copy,
@@ -24,11 +29,15 @@ interface Props {
   sourceLoading: boolean;
   onSource: () => void;
   onEdit: () => void;
+  onUpdated:(card:KnowledgeCard)=>void;
   onOpen: (card: KnowledgeCard) => void;
   onWikiLink?: (title: string) => void;
 }
 
 export default function KnowledgeReader(p: Props) {
+  const mobile = useMobileLayout();
+  const [organizing,setOrganizing]=useState(false);
+  const [candidate,setCandidate]=useState(p.card);
   const copy = async () => {
     try {
       await copyText(`# ${p.card.title}\n\n${p.card.content}`);
@@ -37,21 +46,7 @@ export default function KnowledgeReader(p: Props) {
       toast.error("复制失败，请在正文中选择文字后复制");
     }
   };
-  return (
-    <WallpaperSurface as="article" target="knowledge.reader" className="kl-reading" aria-labelledby="knowledge-reading-title">
-      <div className="kl-reader-meta">
-        <span className="kl-type">
-          <FileText size={15} />
-          {cardTypeLabels[p.card.card_type]}
-        </span>
-        <span className="kl-status" data-status={p.card.status}>
-          <i />
-          {cardStatusLabels[p.card.status]}
-        </span>
-      </div>
-      <h2 id="knowledge-reading-title" tabIndex={-1}>
-        {p.card.title}
-      </h2>
+  const entryInfo = <>
       <div className="kl-reading-byline">
         <span>更新于 {knowledgeDate(p.card.updated_at)}</span>
         {p.card.usage_count ? (
@@ -71,9 +66,27 @@ export default function KnowledgeReader(p: Props) {
           ))}
         </div>
       )}
+  </>;
+  return (
+    <WallpaperSurface as="article" target="knowledge.reader" className="kl-reading" aria-labelledby="knowledge-reading-title">
+      <div className="kl-reader-meta">
+        <span className="kl-type">
+          <FileText size={15} />
+          {cardTypeLabels[p.card.card_type]}
+        </span>
+        <span className="kl-status" data-status={p.card.status}>
+          <i />
+          {cardStatusLabels[p.card.status]}
+        </span>
+      </div>
+      <h2 id="knowledge-reading-title" tabIndex={-1}>
+        {p.card.title}
+      </h2>
+      {!mobile && entryInfo}
       <div className="kl-reading-content">
         <MarkdownContent content={p.card.content} onWikiLink={p.onWikiLink} />
       </div>
+      {mobile && <details className="kl-entry-info"><summary>条目信息</summary>{entryInfo}</details>}
       <div className="kl-reading-actions">
         <button className="ui-button-secondary" onClick={copy}>
           <Copy size={15} />
@@ -84,6 +97,9 @@ export default function KnowledgeReader(p: Props) {
           编辑内容
         </button>
       </div>
+      {(p.card.status==="draft"||p.card.status==="outdated"||!p.card.source_excerpt||!p.card.tags.length||!p.card.projects?.length||p.card.content.trim().length<24)&&<details className="ko-organize-existing" open={organizing} onToggle={e=>setOrganizing(e.currentTarget.open)}><summary>整理与完善知识</summary>{organizing&&<CandidateOrganizer key={p.card.updated_at} existing={p.card} candidate={candidate} onChange={patch=>setCandidate(c=>({...c,...patch}))} onUpdated={p.onUpdated} onProcessed={()=>setOrganizing(false)}/>}</details>}
+      <ReusePanel key={`reuse:${p.card.id}`} cardId={p.card.id}/>
+      <AdditionalSources key={`sources:${p.card.id}`} cardId={p.card.id}/>
       <details className="kl-reader-source" open={undefined}>
         <summary>
           <BookOpen size={16} />

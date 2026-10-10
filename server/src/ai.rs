@@ -30,6 +30,9 @@ pub(crate) fn load_ai_config_for_task(
     db: &Arc<Mutex<Database>>,
     task: AiTask,
 ) -> Result<AiConfig, (StatusCode, String)> {
+    if let Some(config) = crate::ai_tasks::current_config() {
+        return Ok(config);
+    }
     let db = db
         .lock()
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
@@ -56,6 +59,7 @@ pub(crate) async fn call_ai(
         let response = complete_with_retry(&adapter, &prompt, system, retries, true)
             .await
             .map_err(|failure| (failure.status, failure.message))?;
+        let _usage = response.usage;
         Ok((response.content, response.model))
     }
     .await;
@@ -193,6 +197,17 @@ fn validate_ai_routing(routing: &AiRoutingConfig) -> Result<(), (StatusCode, Str
     }
     let mut profile_ids = BTreeSet::new();
     for profile in &routing.profiles {
+        if [profile.input_price_cny, profile.output_price_cny]
+            .into_iter()
+            .flatten()
+            .any(|price| !price.is_finite() || !(0.0..=1_000_000.0).contains(&price))
+        {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                "模型单价必须是 0–1,000,000 之间的有限数字".into(),
+            ));
+        }
+
         if !valid_ai_profile_id(&profile.id) {
             return Err((
                 StatusCode::BAD_REQUEST,
@@ -757,19 +772,22 @@ pub(crate) async fn generate_review(
     let from = format_date(period_start);
     let to = format_date(period_end);
 
-    let (source, source_article_ids, source_review_ids) = {
-        let mut db = db
-            .lock()
-            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-        if kind == "weekly" {
-            let (source, ids) = load_weekly_review_source(&mut db, &from, &to)?;
-            (source, ids, Vec::new())
+    let (source, source_article_ids, source_review_ids) =
+        if let Some(snapshot) = crate::ai_tasks::current_review_source() {
+            snapshot
         } else {
-            let (source, article_ids, review_ids) =
-                load_monthly_review_source(&mut db, &from, &to)?;
-            (source, article_ids, review_ids)
-        }
-    };
+            let mut db = db
+                .lock()
+                .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+            if kind == "weekly" {
+                let (source, ids) = load_weekly_review_source(&mut db, &from, &to)?;
+                (source, ids, Vec::new())
+            } else {
+                let (source, article_ids, review_ids) =
+                    load_monthly_review_source(&mut db, &from, &to)?;
+                (source, article_ids, review_ids)
+            }
+        };
 
     let title = if kind == "weekly" {
         format!("{} 至 {} 周复盘", from, to)
@@ -873,6 +891,9 @@ pub(crate) async fn generate_review(
     )
     .await?;
     let content = render_review_response(kind, &title, &raw_content);
+    if crate::ai_tasks::current_cancelled() {
+        return Err((StatusCode::CONFLICT, "任务已取消，原始记录保留".into()));
+    }
 
     let mut db = db
         .lock()

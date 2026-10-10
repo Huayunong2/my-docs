@@ -1,3 +1,6 @@
+pub(crate) mod workspace;
+#[cfg(test)]
+mod workspace_benchmark;
 use crate::models::{
     default_wallpaper_preferences, AiConfig, AiRoutingConfig, AiTask, ArchiveMonth, Article,
     ArticleListResponse, ArticleSummary, DailyReviewCount, DayExemption, KnowledgeCard,
@@ -509,6 +512,24 @@ struct PortableArchiveInput {
     review_items: Vec<PortableReviewItem>,
     #[serde(default)]
     knowledge_projects: Vec<String>,
+    #[serde(default)]
+    knowledge_sources: Vec<PortableSource>,
+    #[serde(default)]
+    knowledge_reuse: Vec<PortableReuse>,
+}
+
+#[derive(Debug, serde::Serialize, Deserialize)]
+struct PortableSource {
+    card_id: String,
+    #[serde(flatten)]
+    source: crate::models::KnowledgeSource,
+}
+#[derive(Debug, serde::Serialize, Deserialize)]
+struct PortableReuse {
+    #[serde(flatten)]
+    event: crate::models::ReuseEvent,
+    #[serde(default)]
+    deleted_at: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -2082,6 +2103,30 @@ impl Database {
             transaction.commit()?;
         }
 
+        if current < 27 {
+            let tx = self.conn.unchecked_transaction()?;
+            tx.execute_batch("CREATE TABLE knowledge_sources(card_id TEXT NOT NULL REFERENCES knowledge_cards(id) ON DELETE CASCADE, article_id TEXT NOT NULL DEFAULT '', review_id TEXT NOT NULL DEFAULT '', date TEXT NOT NULL DEFAULT '', excerpt TEXT NOT NULL, UNIQUE(card_id,article_id,review_id,date,excerpt));
+                CREATE TABLE knowledge_reuse(id TEXT PRIMARY KEY,card_id TEXT NOT NULL REFERENCES knowledge_cards(id) ON DELETE CASCADE,used_at TEXT NOT NULL,project TEXT NOT NULL DEFAULT '',problem TEXT NOT NULL DEFAULT '',deleted_at TEXT NOT NULL DEFAULT '');
+                CREATE INDEX idx_knowledge_reuse_card_time ON knowledge_reuse(card_id,used_at);
+                CREATE INDEX idx_knowledge_reuse_time ON knowledge_reuse(used_at);
+                CREATE INDEX idx_knowledge_cards_active_order ON knowledge_cards(deleted_at,updated_at DESC,created_at DESC);
+                CREATE TABLE knowledge_operations(request_id TEXT PRIMARY KEY,card_id TEXT NOT NULL REFERENCES knowledge_cards(id) ON DELETE CASCADE);
+                INSERT OR IGNORE INTO knowledge_sources SELECT id,source_article_id,source_review_id,source_date,source_excerpt FROM knowledge_cards WHERE trim(source_excerpt)!='';
+                CREATE VIRTUAL TABLE knowledge_substrings USING fts5(title,content,tags,source_excerpt,content='knowledge_cards',content_rowid='rowid',tokenize='trigram',detail='none');
+                INSERT INTO knowledge_substrings(knowledge_substrings) VALUES('rebuild');
+                CREATE TRIGGER knowledge_substrings_insert AFTER INSERT ON knowledge_cards BEGIN INSERT INTO knowledge_substrings(rowid,title,content,tags,source_excerpt) VALUES(new.rowid,new.title,new.content,new.tags,new.source_excerpt); END;
+                CREATE TRIGGER knowledge_substrings_delete AFTER DELETE ON knowledge_cards BEGIN INSERT INTO knowledge_substrings(knowledge_substrings,rowid,title,content,tags,source_excerpt) VALUES('delete',old.rowid,old.title,old.content,old.tags,old.source_excerpt); END;
+                CREATE TRIGGER knowledge_substrings_update AFTER UPDATE OF title,content,tags,source_excerpt ON knowledge_cards BEGIN INSERT INTO knowledge_substrings(knowledge_substrings,rowid,title,content,tags,source_excerpt) VALUES('delete',old.rowid,old.title,old.content,old.tags,old.source_excerpt); INSERT INTO knowledge_substrings(rowid,title,content,tags,source_excerpt) VALUES(new.rowid,new.title,new.content,new.tags,new.source_excerpt); END;
+                DROP TRIGGER IF EXISTS knowledge_cards_au;
+                CREATE TRIGGER knowledge_cards_au AFTER UPDATE OF title,content,tags,source_excerpt ON knowledge_cards BEGIN INSERT INTO knowledge_cards_fts(knowledge_cards_fts,rowid,title,content,tags,source_excerpt) VALUES('delete',old.rowid,old.title,old.content,old.tags,old.source_excerpt); INSERT INTO knowledge_cards_fts(rowid,title,content,tags,source_excerpt) VALUES(new.rowid,new.title,new.content,new.tags,new.source_excerpt); END;
+                INSERT INTO schema_version(version) VALUES(27);")?;
+            tx.execute_batch("ALTER TABLE knowledge_cards ADD COLUMN content_chars INTEGER NOT NULL DEFAULT 0;
+                UPDATE knowledge_cards SET content_chars=length(trim(content));
+                CREATE TRIGGER knowledge_content_chars_insert AFTER INSERT ON knowledge_cards BEGIN UPDATE knowledge_cards SET content_chars=length(trim(new.content)) WHERE id=new.id; END;
+                CREATE TRIGGER knowledge_content_chars_update AFTER UPDATE OF content ON knowledge_cards BEGIN UPDATE knowledge_cards SET content_chars=length(trim(new.content)) WHERE id=new.id; END;")?;
+            tx.commit()?;
+        }
+
         self.ensure_builtin_wallpapers()?;
         backfill_wallpaper_cache_versions(&self.conn)?;
         Ok(())
@@ -2782,6 +2827,42 @@ impl PortableArchivePersistence<'_> {
                 .collect::<Result<Vec<_>>>()?;
             rows
         };
+        let knowledge_sources = {
+            let mut stmt=self.conn.prepare("SELECT card_id,article_id,review_id,date,excerpt FROM knowledge_sources ORDER BY card_id,rowid")?;
+            let rows = stmt
+                .query_map([], |r| {
+                    Ok(PortableSource {
+                        card_id: r.get(0)?,
+                        source: crate::models::KnowledgeSource {
+                            article_id: r.get(1)?,
+                            review_id: r.get(2)?,
+                            date: r.get(3)?,
+                            excerpt: r.get(4)?,
+                        },
+                    })
+                })?
+                .collect::<Result<Vec<_>>>()?;
+            rows
+        };
+        let knowledge_reuse = {
+            let mut stmt=self.conn.prepare("SELECT id,card_id,used_at,project,problem,deleted_at FROM knowledge_reuse ORDER BY used_at,id")?;
+            let rows = stmt
+                .query_map([], |r| {
+                    Ok(PortableReuse {
+                        event: crate::models::ReuseEvent {
+                            id: r.get(0)?,
+                            card_id: r.get(1)?,
+                            title: String::new(),
+                            used_at: r.get(2)?,
+                            project: r.get(3)?,
+                            problem: r.get(4)?,
+                        },
+                        deleted_at: r.get(5)?,
+                    })
+                })?
+                .collect::<Result<Vec<_>>>()?;
+            rows
+        };
         Ok(serde_json::json!({
             "version": 3,
             "articles": articles,
@@ -2789,6 +2870,8 @@ impl PortableArchivePersistence<'_> {
             "knowledge_cards": knowledge_cards,
             "review_items": review_items,
             "knowledge_projects": knowledge_projects,
+            "knowledge_sources": knowledge_sources,
+            "knowledge_reuse": knowledge_reuse,
         }))
     }
 
@@ -3101,6 +3184,18 @@ impl PortableArchivePersistence<'_> {
             [],
         )?;
 
+        // Supplemental sources and event IDs merge without inflating reuse counts.
+        tx.execute("INSERT OR IGNORE INTO knowledge_sources SELECT id,source_article_id,source_review_id,source_date,source_excerpt FROM knowledge_cards WHERE trim(source_excerpt)!=''",[])?;
+        for mut item in archive.knowledge_sources {
+            if let Some(id) = article_id_map.get(&item.source.article_id) {
+                item.source.article_id = id.clone();
+            }
+            tx.execute("INSERT OR IGNORE INTO knowledge_sources(card_id,article_id,review_id,date,excerpt) VALUES(?1,?2,?3,?4,?5)",params![item.card_id,item.source.article_id,item.source.review_id,item.source.date,item.source.excerpt])?;
+        }
+        for item in archive.knowledge_reuse {
+            let e = item.event;
+            tx.execute("INSERT INTO knowledge_reuse(id,card_id,used_at,project,problem,deleted_at) VALUES(?1,?2,?3,?4,?5,?6) ON CONFLICT(id) DO UPDATE SET project=excluded.project,problem=excluded.problem,deleted_at=CASE WHEN knowledge_reuse.deleted_at!='' THEN knowledge_reuse.deleted_at ELSE excluded.deleted_at END WHERE knowledge_reuse.card_id=excluded.card_id",params![e.id,e.card_id,e.used_at,e.project,e.problem,item.deleted_at])?;
+        }
         tx.commit()?;
         Ok(report)
     }
@@ -3651,14 +3746,14 @@ impl KnowledgePersistence<'_> {
         let mut summary = self.conn.query_row(
             &format!(
                 "SELECT COUNT(*),
-                        COALESCE(SUM(CASE WHEN trim(c.source_excerpt)='' OR (
+                        COALESCE(SUM(CASE WHEN (trim(c.source_excerpt)='' OR (
                                           trim(c.source_date)='' AND trim(c.source_article_id)=''
-                                          AND trim(c.source_review_id)='') THEN 1 ELSE 0 END), 0),
+                                          AND trim(c.source_review_id)='')) AND NOT EXISTS(SELECT 1 FROM knowledge_sources s WHERE s.card_id=c.id AND trim(s.excerpt)!='' AND (trim(s.article_id)!='' OR trim(s.review_id)!='' OR trim(s.date)!='')) THEN 1 ELSE 0 END), 0),
                         COALESCE(SUM(CASE WHEN NOT EXISTS (
                             SELECT 1 FROM knowledge_card_projects AS cp WHERE cp.card_id=c.id
                         ) THEN 1 ELSE 0 END), 0),
                         COALESCE(SUM(CASE WHEN trim(c.tags)='' OR c.tags='[]' OR c.tags='null' THEN 1 ELSE 0 END), 0),
-                        COALESCE(SUM(CASE WHEN length(trim(c.content)) < 24 THEN 1 ELSE 0 END), 0)
+                        COALESCE(SUM(CASE WHEN c.content_chars < 24 THEN 1 ELSE 0 END), 0)
                  FROM knowledge_cards AS c WHERE {where_clause}"
             ),
             params_from_iter(values.iter()),
@@ -3752,9 +3847,17 @@ impl KnowledgePersistence<'_> {
     }
 
     /// 服务端全文查询的分页入口。旧的 list() 保留给复习/关联等需要完整集合的内部流程。
+    #[cfg(test)]
     pub(crate) fn query_page(
         &mut self,
         request: KnowledgePageQuery<'_>,
+    ) -> Result<(Vec<KnowledgeCard>, i64)> {
+        self.query_page_mode(request, false)
+    }
+    pub(crate) fn query_page_mode(
+        &mut self,
+        request: KnowledgePageQuery<'_>,
+        summary: bool,
     ) -> Result<(Vec<KnowledgeCard>, i64)> {
         let KnowledgePageQuery {
             query,
@@ -3777,14 +3880,24 @@ impl KnowledgePersistence<'_> {
         if !query.is_empty() {
             let fts_query = format!("\"{}\"", query.replace('"', "\"\""));
             let like_query = format!("%{query}%");
-            conditions.push(
-                "(c.rowid IN (SELECT rowid FROM knowledge_cards_fts WHERE knowledge_cards_fts MATCH ?)
-                  OR c.title LIKE ? OR c.content LIKE ?
-                  OR c.tags LIKE ? OR c.source_excerpt LIKE ?)"
-                    .into(),
-            );
+            let substring_index = query.chars().count() >= 3 && !query.contains(['%', '_']);
+            conditions.push(if substring_index {
+                "(c.rowid IN (SELECT rowid FROM knowledge_cards_fts WHERE knowledge_cards_fts MATCH ?) OR (c.rowid IN (SELECT rowid FROM knowledge_substrings WHERE knowledge_substrings MATCH ?) AND (c.title LIKE ? OR c.content LIKE ? OR c.tags LIKE ? OR c.source_excerpt LIKE ?)))".into()
+            } else {
+                "(c.rowid IN (SELECT rowid FROM knowledge_cards_fts WHERE knowledge_cards_fts MATCH ?) OR c.title LIKE ? OR c.content LIKE ? OR c.tags LIKE ? OR c.source_excerpt LIKE ?)".into()
+            });
+            values.push(SqlValue::Text(fts_query));
+            if substring_index {
+                // Positional postings are unnecessary: a three-character candidate index,
+                // followed by the original LIKE predicate, preserves substring semantics.
+                let prefix = query
+                    .chars()
+                    .take(3)
+                    .collect::<String>()
+                    .replace('"', "\"\"");
+                values.push(SqlValue::Text(format!("\"{prefix}\"")));
+            }
             values.extend([
-                SqlValue::Text(fts_query),
                 SqlValue::Text(like_query.clone()),
                 SqlValue::Text(like_query.clone()),
                 SqlValue::Text(like_query.clone()),
@@ -3822,7 +3935,7 @@ impl KnowledgePersistence<'_> {
         }
         match quality.filter(|value| !value.is_empty()) {
             Some("missing_source") => conditions.push(
-                "(trim(c.source_excerpt)='' OR (trim(c.source_date)='' AND trim(c.source_article_id)='' AND trim(c.source_review_id)=''))".into(),
+                "((trim(c.source_excerpt)='' OR (trim(c.source_date)='' AND trim(c.source_article_id)='' AND trim(c.source_review_id)='')) AND NOT EXISTS (SELECT 1 FROM knowledge_sources s WHERE s.card_id=c.id AND trim(s.excerpt)!='' AND (trim(s.article_id)!='' OR trim(s.review_id)!='' OR trim(s.date)!='')))".into(),
             ),
             Some("missing_project") => conditions.push(
                 "NOT EXISTS (
@@ -3833,7 +3946,7 @@ impl KnowledgePersistence<'_> {
             Some("missing_tags") => {
                 conditions.push("(trim(c.tags)='' OR c.tags='[]' OR c.tags='null')".into())
             }
-            Some("short_content") => conditions.push("length(trim(c.content)) < 24".into()),
+            Some("short_content") => conditions.push("c.content_chars < 24".into()),
             _ => {}
         }
 
@@ -3862,7 +3975,12 @@ impl KnowledgePersistence<'_> {
             "SELECT {} FROM knowledge_cards AS c
              WHERE {where_clause}
              ORDER BY {order_by} LIMIT ? OFFSET ?",
-            Self::SELECT_COLUMNS_WITH_ALIAS
+            if summary {
+                Self::SELECT_COLUMNS_WITH_ALIAS
+                    .replace("c.content,", "substr(c.content,1,320) AS content,")
+            } else {
+                Self::SELECT_COLUMNS_WITH_ALIAS.to_string()
+            }
         );
         let mut statement = self.conn.prepare(&page_sql)?;
         let mut cards = statement
@@ -4597,6 +4715,14 @@ impl KnowledgePersistence<'_> {
         &mut self,
         drafts: Vec<KnowledgeCardDraft>,
     ) -> Result<Vec<KnowledgeCard>> {
+        self.save_many_organized(drafts, None)
+    }
+
+    pub(crate) fn save_many_organized(
+        &mut self,
+        drafts: Vec<KnowledgeCardDraft>,
+        write: Option<&workspace::OrganizedWrite>,
+    ) -> Result<Vec<KnowledgeCard>> {
         if drafts.iter().any(|draft| !valid_knowledge_draft(draft)) {
             return Err(rusqlite::Error::InvalidQuery);
         }
@@ -4629,6 +4755,9 @@ impl KnowledgePersistence<'_> {
                 )?;
             }
             sync_project_links(&transaction, &id, &projects, &now)?;
+            if let Some(write) = write {
+                workspace::finish_write(&transaction, &id, write)?;
+            }
             ids.push(id);
         }
         transaction.commit()?;
@@ -4641,6 +4770,15 @@ impl KnowledgePersistence<'_> {
         &mut self,
         id: &str,
         draft: KnowledgeCardDraft,
+    ) -> Result<Option<KnowledgeCard>> {
+        self.update_organized(id, draft, None)
+    }
+
+    pub(crate) fn update_organized(
+        &mut self,
+        id: &str,
+        draft: KnowledgeCardDraft,
+        write: Option<&workspace::OrganizedWrite>,
     ) -> Result<Option<KnowledgeCard>> {
         let Some((existing_content, existing_content_version)) = self
             .conn
@@ -4664,8 +4802,18 @@ impl KnowledgePersistence<'_> {
         let projects = normalize_space_names(draft.projects);
         let related_ids = normalize_related_ids(id, draft.related_ids);
         let projects_json = serialize_string_vec(&projects)?;
-        let now = Local::now().format("%Y-%m-%dT%H:%M:%S").to_string();
+        let now = Local::now().format("%Y-%m-%dT%H:%M:%S%.6f").to_string();
         let transaction = self.conn.transaction()?;
+        if let Some(write) = write {
+            let updated: String = transaction.query_row(
+                "SELECT updated_at FROM knowledge_cards WHERE id=?1 AND deleted_at=''",
+                [id],
+                |r| r.get(0),
+            )?;
+            if write.expected_updated_at.as_deref() != Some(&updated) {
+                return Err(rusqlite::Error::InvalidQuery);
+            }
+        }
         for project in &projects {
             ensure_project(&transaction, project, &now)?;
         }
@@ -4730,6 +4878,9 @@ impl KnowledgePersistence<'_> {
             )?;
         }
         sync_project_links(&transaction, id, &projects, &now)?;
+        if let Some(write) = write {
+            workspace::finish_write(&transaction, id, write)?;
+        }
         transaction.commit()?;
         self.find(id)
     }
@@ -5098,6 +5249,28 @@ pub(crate) fn valid_review_item_draft(draft: &ReviewItemDraft) -> bool {
 }
 
 fn validate_archive(archive: &PortableArchiveInput) -> std::result::Result<(), ArchiveImportError> {
+    let card_ids: std::collections::HashSet<&str> = archive
+        .knowledge_cards
+        .iter()
+        .map(|c| c.id.as_str())
+        .collect();
+    if archive.knowledge_sources.iter().any(|s| {
+        !card_ids.contains(s.card_id.as_str())
+            || s.source.excerpt.chars().count() > 20_000
+            || s.source.article_id.len() > 128
+            || s.source.review_id.len() > 128
+            || s.source.date.len() > 10
+    }) || archive.knowledge_reuse.iter().any(|r| {
+        !card_ids.contains(r.event.card_id.as_str())
+            || uuid::Uuid::parse_str(&r.event.id).is_err()
+            || r.event.project.chars().count() > 120
+            || r.event.problem.chars().count() > 2000
+            || chrono::NaiveDateTime::parse_from_str(&r.event.used_at, "%Y-%m-%dT%H:%M:%S%.f")
+                .is_err()
+    }) {
+        return Err(ArchiveImportError::Invalid("知识来源或复用记录无效".into()));
+    }
+
     if !(1..=3).contains(&archive.version) {
         return Err(ArchiveImportError::Invalid(format!(
             "Unsupported portable archive version: {}",
@@ -5527,6 +5700,7 @@ mod migration_tests {
         .unwrap();
 
         let db = Database { conn };
+        complete_workspace_fixture(&db.conn);
         db.initialize().unwrap();
 
         let table_exists: i64 = db
@@ -5548,7 +5722,7 @@ mod migration_tests {
                 row.get(0)
             })
             .unwrap();
-        assert_eq!(version, 26);
+        assert_eq!(version, 27);
     }
 
     #[test]
@@ -5574,6 +5748,7 @@ mod migration_tests {
         .expect("create v22 schema");
 
         let db = Database { conn };
+        complete_workspace_fixture(&db.conn);
         db.initialize().expect("migrate v22 article schema");
 
         let deleted_at: String = db
@@ -5628,6 +5803,7 @@ mod migration_tests {
         .expect("create v23 relationship data");
 
         let db = Database { conn };
+        complete_workspace_fixture(&db.conn);
         db.initialize().expect("migrate v23 relation index");
 
         let migrated: Vec<(String, String, i64)> = db
@@ -5685,7 +5861,7 @@ mod migration_tests {
                 row.get(0)
             })
             .expect("read schema version");
-        assert_eq!(version, 26);
+        assert_eq!(version, 27);
     }
 
     fn v3_knowledge_cards_table() -> &'static str {
@@ -5778,6 +5954,7 @@ mod migration_tests {
             .expect("create v15 schema with orphaned review log");
 
         let db = Database { conn };
+        complete_workspace_fixture(&db.conn);
         db.initialize()
             .expect("orphaned review history must not block migration");
 
@@ -5852,7 +6029,7 @@ mod migration_tests {
                 row.get(0)
             })
             .expect("read schema version");
-        assert_eq!(version, 26);
+        assert_eq!(version, 27);
 
         // 已迁移的库再次 initialize 必须幂等，不报重复列错误
         db.initialize().expect("re-initialize is idempotent");
@@ -5886,7 +6063,7 @@ mod migration_tests {
                 row.get(0)
             })
             .expect("read schema version");
-        assert_eq!(version, 26);
+        assert_eq!(version, 27);
 
         let settings = db.review_settings().expect("default review settings");
         assert_eq!(settings.new_cards_per_day, 20);
@@ -6009,6 +6186,8 @@ mod migration_tests {
         let routing = AiRoutingConfig {
             profiles: vec![
                 AiModelProfile {
+                    input_price_cny: None,
+                    output_price_cny: None,
                     id: "fast".into(),
                     name: "快速模型".into(),
                     model: "deepseek-flash".into(),
@@ -6019,6 +6198,8 @@ mod migration_tests {
                     min_interval_ms: 200,
                 },
                 AiModelProfile {
+                    input_price_cny: None,
+                    output_price_cny: None,
                     id: "pro".into(),
                     name: "高质量模型".into(),
                     model: "deepseek-pro".into(),
@@ -6311,7 +6492,7 @@ mod migration_v5_tests {
                 row.get(0)
             })
             .expect("read schema version");
-        assert_eq!(version, 26);
+        assert_eq!(version, 27);
         db.initialize()
             .expect("re-initialize after v5 is idempotent");
     }
@@ -6332,6 +6513,7 @@ mod wallpaper_migration_tests {
         .expect("create v24 schema marker");
         let db = Database { conn };
 
+        complete_workspace_fixture(&db.conn);
         db.initialize().expect("migrate v24 database");
 
         let (revision, preferences_json): (i64, String) = db
@@ -6425,7 +6607,7 @@ mod wallpaper_migration_tests {
                 row.get(0)
             })
             .expect("read schema version");
-        assert_eq!(version, 26);
+        assert_eq!(version, 27);
     }
 }
 
@@ -7801,4 +7983,37 @@ fn set_wallpaper_preference_for_target(
         page.surfaces.insert(target.to_string(), value);
     }
     Ok(())
+}
+
+#[cfg(test)]
+fn complete_workspace_fixture(conn: &Connection) {
+    conn.execute_batch("CREATE TABLE IF NOT EXISTS knowledge_cards(id TEXT PRIMARY KEY);")
+        .unwrap();
+    let columns = conn
+        .prepare("PRAGMA table_info(knowledge_cards)")
+        .unwrap()
+        .query_map([], |r| r.get::<_, String>(1))
+        .unwrap()
+        .collect::<Result<Vec<_>>>()
+        .unwrap();
+    for name in [
+        "title",
+        "content",
+        "tags",
+        "source_article_id",
+        "source_review_id",
+        "source_date",
+        "source_excerpt",
+        "created_at",
+        "updated_at",
+        "deleted_at",
+        "related_ids",
+    ] {
+        if !columns.iter().any(|c| c == name) {
+            conn.execute_batch(&format!(
+                "ALTER TABLE knowledge_cards ADD COLUMN {name} TEXT NOT NULL DEFAULT '';"
+            ))
+            .unwrap();
+        }
+    }
 }

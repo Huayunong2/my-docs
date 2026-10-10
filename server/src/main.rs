@@ -1,5 +1,6 @@
 mod ai;
 mod ai_client;
+mod ai_tasks;
 mod archive;
 mod articles;
 mod backup_policy;

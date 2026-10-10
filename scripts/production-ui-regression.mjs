@@ -9,6 +9,9 @@ import assert from "node:assert/strict";
 const out =
   process.env.KNOWLEDGE_UI_OUTPUT || "/tmp/daily-summary-stats-repair";
 await fs.mkdir(out, { recursive: true });
+const wallpaperSource=await fs.readFile(new URL("../src/lib/wallpapers.ts",import.meta.url),"utf8");
+const surfacePairs=[...wallpaperSource.matchAll(/id: "([^"]+)", module: "([^"]+)"/g)];
+const wallpaperPreferences=Object.fromEntries(["today","records","search","knowledge","review","stats","reviews","settings"].map(id=>[id,{wallpaperIds:[],overlay:80,cycleDaily:false,surfaces:Object.fromEntries(surfacePairs.filter(p=>p[2]===id).map(p=>[p[1],{wallpaperIds:[],overlay:80,cycleDaily:false}]))}]));
 const examples = [
   [
     "理解所有权：让资源生命周期变得清晰",
@@ -269,6 +272,11 @@ await context.route("**/*", async (route) => {
       });
     if (method !== "GET")
       writes.push({ path, method, body: request.postData() });
+    if(path === "/wallpapers") return send({revision:0,preferences:wallpaperPreferences,assets:[],presets:[],storageUsedBytes:0,storageQuotaBytes:268435456,hasUserData:false});
+    if(path === "/ai/tasks") return send([]);
+    if(path === "/articles/tag-suggestions") return send(["工作","Rust"]);
+    if(path === "/knowledge-reuse") return send({events:[],total:0,page:1,has_more:false,from:"",to:""});
+    if(path.endsWith("/sources")) return send([]);
     if (path === "/articles/search") {
       const query = url.searchParams.get("q") || "";
       return send(
@@ -713,6 +721,7 @@ await context.route("**/*", async (route) => {
 });
 const page = await context.newPage();
 const errors = [];
+page.on("console",message=>{if(message.type()==="error")console.error("Browser:",message.text());});
 page.on("pageerror", (error) => errors.push(error.message));
 const checks = [];
 async function check(name, run) {
@@ -1035,6 +1044,109 @@ try {
       );
     });
   }
+  for (const width of [360, 390]) {
+    await page.setViewportSize({ width, height: 844 });
+    await page.emulateMedia({ colorScheme: width === 360 ? "dark" : "light" });
+    for (const [path, selector] of [
+      ["/knowledge", ".knowledge-hub"], ["/review", ".rs-page"],
+      ["/reviews", ".rp-page"], ["/settings?tab=appearance", ".st-page"],
+      ["/today", ".page-surface-today"], ["/search", ".ft-search"],
+      ["/history", ".ft-history"],
+    ]) {
+      await check(`mobile route ${path} fits ${width}px and clears navigation`, async () => {
+        await go(path); await healthy(selector);
+        assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
+        const main = await page.locator("#main-content").boundingBox();
+        const nav = await page.locator(".shell-mobile-nav").boundingBox();
+        assert(main && nav && main.y + main.height <= nav.y + 1, "page viewport never extends behind navigation");
+        assert(await page.locator("#ai-task-launcher").isHidden(), "idle AI button never obscures mobile text");
+        await shot(`mobile-${width}-${path.split("?")[0].slice(1)}`);
+      });
+    }
+  }
+  await page.setViewportSize({ width: 390, height: 844 });
+  await check("mobile Today starts with the document and exposes editing on demand", async () => {
+    await go(`/today?date=${anchorDate}`);
+    await page.locator(".today-reading-title").waitFor();
+    assert(await page.locator(".today-actions").count() === 0);
+    assert.equal(await page.locator(".cm-editor").count(),0,"reading does not initialize a hidden editor");
+    assert(await page.getByLabel("今日记录标题", { exact: true }).count() === 0);
+    const originalTitle = records[0].title;
+    assert.equal(await page.locator(".today-reading-title").innerText(), originalTitle);
+    const body = await page.locator(".today-preview-surface .markdown-content").boundingBox();
+    assert(body && body.y < 320, "record text leads the first screen");
+    await shot("today-reading-first");
+    await page.getByRole("button", { name: "补记", exact: true }).click();
+    assert.equal(await page.getByLabel("今日记录标题", { exact: true }).inputValue(), originalTitle);
+    await page.getByRole("button", { name: "返回阅读", exact: true }).click();
+    assert.equal(await page.locator(".today-reading-title").innerText(), originalTitle);
+    await page.getByRole("button", { name: "今日记录操作", exact: true }).click();
+    for (const name of ["立即保存", "AI 总结", "提取知识", "心情与标签"]) assert.equal(await page.getByRole("menuitem", { name, exact: true }).count(), 1);
+    await page.keyboard.press("Escape");
+  });
+  await check("mobile empty Today opens writing only after an explicit action", async () => {
+    await go("/today?date=2026-10-01");
+    await page.getByRole("heading", { name: "这一天还没有记录", exact: true }).waitFor();
+    assert(await page.locator(".cm-editor").isHidden());
+    await page.getByRole("button", { name: "开始记录", exact: true }).click();
+    assert(await page.locator(".cm-editor").isVisible());
+    await page.getByRole("button", { name: "返回阅读", exact: true }).click();
+  });
+  await check("mobile history reads first and exposes management on demand", async () => {
+    await go("/history"); await healthy(".history-card");
+    assert(await page.locator(".history-card-edit").first().isHidden());
+    const card = page.locator(".history-card-main").nth(2); await card.scrollIntoViewIfNeeded();
+    const before = await page.locator("#main-content").evaluate(e => e.scrollTop);
+    await card.click(); await page.locator(".article-detail-body:visible .markdown-content").waitFor();assert.equal(await page.locator(".article-detail-body:visible").count(),1,"only one record reader is visible");
+    assert(await page.getByRole("button", { name: "编辑记录", exact: true }).isHidden());
+    await shot("history-reading-first");
+    await page.getByRole("button", { name: "记录阅读操作", exact: true }).click();
+    assert(await page.getByRole("button", { name: "编辑记录", exact: true }).isVisible());
+    await page.getByRole("button", { name: "关闭详情", exact: true }).click();
+    await page.locator(".article-detail-body:visible").waitFor({state:"hidden"});
+    assert(Math.abs(await page.locator("#main-content").evaluate(e => e.scrollTop) - before) <= 2);
+  });
+  await check("explicit mobile record editing opens the editor directly", async () => {
+    await go("/history"); await healthy(".history-card");
+    await page.getByRole("button",{name:`更多操作：${anchorDate}`,exact:true}).click();
+    await page.getByRole("menuitem",{name:"编辑记录",exact:true}).click();
+    await page.getByLabel("今日记录标题",{exact:true}).waitFor();
+    assert.equal(new URL(page.url()).searchParams.get("tab"),"edit");
+    assert(await page.locator(".cm-editor").isVisible());
+    await page.getByRole("button",{name:"返回阅读",exact:true}).click();
+    await page.locator(".today-reading-title").waitFor();
+    await page.waitForFunction(()=>!new URL(location.href).searchParams.has("tab"));
+    assert.equal(await page.locator(".cm-editor").count(),0);
+  });
+  await check("mobile review focuses one question and keeps the answer readable", async () => {
+    await go("/review"); await healthy(".rs-page");
+    await page.getByRole("button",{name:"开始复习",exact:true}).click();
+    await page.locator(".rs-prompt .markdown-content").waitFor();
+    assert(await page.locator(".rs-sidebar").isHidden());
+    await page.getByRole("button",{name:/^显示答案/}).click();
+    await page.locator(".rs-answer .markdown-content").waitFor();
+    const grade=page.locator(".rs-grade-grid button").first(); await grade.scrollIntoViewIfNeeded();
+    const bounds=await grade.boundingBox(),nav=await page.locator(".shell-mobile-nav").boundingBox();
+    assert(bounds&&bounds.y>=0&&bounds.y+bounds.height<=nav.y+1,"grading never enters the navigation area");
+    await shot("review-reading-first");
+  });
+  await check("mobile period review opens its document before management controls", async () => {
+    await go("/reviews"); await page.locator(".rp-period-copy h3 button").first().click();
+    await page.locator(".rp-viewer .review-viewer-body .markdown-content").waitFor();
+    const tools=page.getByRole("button",{name:"周期回顾阅读操作",exact:true});
+    assert.equal(await tools.getAttribute("aria-expanded"),"false");
+    await shot("period-reading-first");
+    await tools.click();
+    assert(await page.getByRole("button",{name:"编辑",exact:true}).isVisible());
+    await page.getByRole("button",{name:"关闭复盘详情",exact:true}).click();
+  });
+  await check("mobile settings shows the selected compact category", async () => {
+    await go("/settings?tab=appearance"); await healthy(".st-main");
+    const tab = await page.getByRole("tab", { name: "外观", exact: true }).boundingBox();
+    assert(tab && tab.x >= 0 && tab.x + tab.width <= 391, "selected category remains visible");
+    await shot("settings-reading-first");
+  });
+  await page.setViewportSize({ width: 1440, height: 960 });
   await check(
     "failed route module keeps the sidebar and a recovery action",
     async () => {

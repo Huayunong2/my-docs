@@ -1,3 +1,4 @@
+import ReadingActions from "./workspace/ReadingActions";
 import { useRef, useState, type RefObject } from "react";
 import * as Dialog from "@radix-ui/react-dialog";
 import { CalendarDays, Check, Copy, Edit3, Folder, Trash2, X } from "lucide-react";
@@ -98,6 +99,7 @@ export default function ArticleDetail({
             )}
           </div>
           <div className="article-detail-actions flex shrink-0 flex-wrap items-center gap-1 self-end" role="group" aria-label="记录操作">
+            <ReadingActions label="记录阅读操作">
             <button type="button" onClick={copyContent} className="article-detail-action-button ui-button-ghost justify-center" aria-label={copied ? "已复制记录内容" : "复制记录内容"} title={copied ? "已复制" : "复制记录内容"}>
               {copied ? <Check size={14} /> : <Copy size={14} />}
               <span className="article-detail-action-label">{copied ? "已复制" : "复制"}</span>
@@ -110,6 +112,7 @@ export default function ArticleDetail({
                 <Trash2 size={14} /> <span className="article-detail-action-label">移入回收站</span>
               </button>
             )}
+            </ReadingActions>
             <button type="button" onClick={onClose} className="article-detail-close-button ui-icon-button" title="关闭" aria-label="关闭详情">
               <X size={16} />
             </button>

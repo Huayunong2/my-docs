@@ -537,6 +537,47 @@ fn build_router(db: Database) -> Router {
             axum::routing::post(knowledge::analyze_cards),
         )
         .route(
+            "/ai/tasks",
+            axum::routing::get(crate::ai_tasks::list).post(crate::ai_tasks::create),
+        )
+        .route(
+            "/ai/tasks/:id",
+            axum::routing::get(crate::ai_tasks::read).delete(crate::ai_tasks::cancel),
+        )
+        .route(
+            "/ai/tasks/:id/retry",
+            axum::routing::post(crate::ai_tasks::retry),
+        )
+        .route(
+            "/articles/tag-suggestions",
+            axum::routing::get(articles::article_tags),
+        )
+        .route(
+            "/knowledge-cards/similar",
+            axum::routing::post(knowledge::organize::similar),
+        )
+        .route(
+            "/knowledge-cards/organize",
+            axum::routing::post(knowledge::organize::organize),
+        )
+        .route(
+            "/knowledge-cards/:id/sources",
+            axum::routing::get(knowledge::organize::sources),
+        )
+        .route(
+            "/knowledge-cards/:id/reuse",
+            axum::routing::post(knowledge::organize::reuse_create),
+        )
+        .route(
+            "/knowledge-reuse",
+            axum::routing::get(knowledge::organize::reuse_list),
+        )
+        .route(
+            "/knowledge-reuse/:id",
+            axum::routing::patch(knowledge::organize::reuse_update)
+                .delete(knowledge::organize::reuse_delete),
+        )
+        .route(
             "/knowledge-cards/analyze-jobs",
             axum::routing::post(knowledge::create_analyze_job),
         )
