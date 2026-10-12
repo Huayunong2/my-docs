@@ -1,3 +1,4 @@
+import { Input, Textarea } from "./ui/reading-surface";
 import { useEffect, useState, type FormEvent } from "react";
 import * as Dialog from "@radix-ui/react-dialog";
 import {
@@ -296,7 +297,7 @@ export default function SpaceManagerDialog({
             </section>
 
             <section className="order-1 flex min-w-0 sm:order-2">
-              <form onSubmit={(event) => void submit(event)} className="ui-panel-muted flex h-full w-full flex-col p-3.5 sm:p-4">
+              <form noValidate onSubmit={(event) => void submit(event)} className="ui-panel-muted flex h-full w-full flex-col p-3.5 sm:p-4">
                 <div className="flex items-center justify-between gap-2">
                   <div>
                     <h2 className="text-[13px] font-semibold leading-5 text-[var(--ui-text)]">{editingName ? "编辑空间" : "新建空间"}</h2>
@@ -306,7 +307,7 @@ export default function SpaceManagerDialog({
                 </div>
                 <label className="mt-4 block text-xs font-medium text-[var(--ui-text-muted)]">
                   名称
-                  <input
+                  <Input
                     value={form.name}
                     onChange={(event) => setForm((current) => ({ ...current, name: event.target.value }))}
                     placeholder="例如：C++ 或 FPGA-DIAG"
@@ -327,7 +328,7 @@ export default function SpaceManagerDialog({
                 </label>
                 <label className="mt-3 block text-xs font-medium text-[var(--ui-text-muted)]">
                   说明 <span className="font-normal text-[var(--ui-text-subtle)]">（可选）</span>
-                  <textarea
+                  <Textarea
                     value={form.description}
                     onChange={(event) => setForm((current) => ({ ...current, description: event.target.value }))}
                     placeholder="说明这个空间收纳什么内容"

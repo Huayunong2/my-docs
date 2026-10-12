@@ -19,6 +19,7 @@ PC端：集合所有内容，读、写一体。需要综合考虑。且需要考
 2. **MUST** 运行 git status --short，把已有修改视为用户内容；不得覆盖、回滚或清理这些修改。
 3. 如果目标文件已经有修改，**MUST** 先检查 git diff -- <path>；无法安全区分用户修改与当前任务时，必须停下请求确认。
 4. **MUST** 根据下方索引读取与任务相关的 source of truth，不要求无条件通读无关模块。
+   新增模块、页面、表单、筛选或弹层，或修改 UI/UX、排版与响应式时，**MUST** 先读取 `UI_UX_GUIDELINES.md`，并执行其控件与界面验收要求。
 5. **SHOULD** 使用 rg 或 rg --files 定位源码、配置和测试。
 
 依赖、构建产物、部署暂存目录和本地运行数据不属于源码或提交内容，除非任务明确针对它们：
@@ -115,6 +116,9 @@ package.json、vite.config.ts、server/src/server.rs、server/.env.example、部
 | /knowledge/trash | src/components/KnowledgeTrashPage.tsx | 查看和恢复知识回收站内容 |
 | /knowledge/$cardId | src/components/KnowledgePage.tsx | 查看或编辑单个知识条目 |
 | /settings | src/components/SettingsPage.tsx | 连接、AI、复习、备份和导出设置 |
+| /profile | src/components/ProfilePage.tsx | 真实个人档案、经历与成果、目标、背景说明、个人分析与简历资料 |
+
+修改个人档案时读取 `PERSONAL_PROFILE.md`。前端为 `src/components/ProfilePage.tsx`、`src/components/profile/ProfileEditors.tsx`、`personal-profile.css` 和 `src/lib/personalProfile.ts`；服务端为 `server/src/profile.rs`、`server/src/db/profile.rs`，通过 `server/src/db.rs` v28 迁移持久化。检查 `tab=timeline|goals|context|analyses`、`entry`、`profileKind`、`q`、版本冲突、来源重命名、背景许可与导出范围；执行 `scripts/personal-profile-regression.mjs` 的独立 SQLite / HTTP / 模拟 AI 浏览器检查，不能连接真实个人数据库。
 
 ### 服务端模块索引
 
@@ -126,6 +130,7 @@ server/src/server.rs 的 build_router 是 HTTP API 路由的唯一索引。前�
 | /stats | server/src/stats.rs |
 | /knowledge-cards、/knowledge-reuse、/spaces、/review-items | server/src/knowledge.rs、server/src/knowledge/organize.rs |
 | /review | server/src/review.rs |
+| /profile、/profile/entries、/profile/goals、/profile/sources、/profile/context、/profile/analyze、/profile/analyses | server/src/profile.rs、server/src/db/profile.rs；个人分析与档案事实独立保存，完整 JSON v4 与 ZIP v1 同步包含档案 |
 | /reviews、/ai | server/src/ai.rs、server/src/ai_tasks.rs，外部请求由 server/src/ai_client.rs 承担 |
 | /export | server/src/exports.rs、server/src/server.rs；完整 JSON 与版本化 ZIP 迁移包均保持兼容 |
 | /wallpapers | server/src/wallpapers.rs、server/src/wallpaper_package.rs；SQLite 持久化和迁移位于 server/src/db.rs |
@@ -299,3 +304,16 @@ curl http://127.0.0.1:8080/health
 - 图片阅读：`ReadingImage.tsx` 从清洗后的正文图像收集查看队列，按需加载 `ReadingImageViewer.tsx`；沿用 Radix 的嵌套焦点管理与 Panzoom，不能绕过 Markdown URL 清洗。
 - `ReadingActions.tsx` 的 `actions` 是一次性命令，关闭面板后执行并传递稳定入口；子内容是保留面板的连续控件。来源操作传递入口元素，不能保存即将卸载的菜单按钮作为返回焦点。
 - 设计与依赖变更的验证、性能口径和回退说明见 `WORKSPACE_OPTIMIZATION.md` 的清新阅读工作台章节；继续执行两套隔离浏览器回归。
+
+## 正式软件视觉索引（2026-10-12）
+
+- 全站颜色角色位于 `src/index.css`，浏览器表面同步在 `src/lib/theme.ts`；控件、页头、内容面与空状态在 `src/components/workspace/reading-workbench.css` 和 `src/components/ui/Feedback.tsx`。修改明暗颜色时同步检查 theme 单测与真实文字对比度。
+- 个人档案的页头、起步引导、下划线导航、分析空状态及分页位于 `ProfilePage.tsx` 与 `personal-profile.css`。`scripts/personal-profile-regression.mjs` 额外验证六宽度明暗布局、零/单页/多页分析与无写入空状态。
+- 设计依据与本轮验证见 `UI_MATURITY.md`。涉及共享视觉或移动布局时继续执行两套全站隔离生产回归；图片关闭焦点须等待 Radix 的异步关闭回调完成，仍须验证原入口焦点与阅读位置。
+
+## UI/UX 组件契约索引（2026-10-12）
+
+- 规范入口：`UI_UX_GUIDELINES.md`；实施与验收：`UI_UX_IMPLEMENTATION.md`。
+- 文本 / 多行字段：`ui/reading-surface.tsx` 的 Input、Textarea、Field；单选下拉：`ui/select.tsx` 的 SelectField / SelectItem；复选 / 单选项：`ui/checkbox.tsx`。日期使用 `ui/date-picker.tsx`，业务页面仅保留隐藏文件 input。
+- 自动门槛：`scripts/check-ui-contract.mjs`，由 `npm run check:ui` 与 `check:bundle` 执行；现有 CI 的 bundle 检查会覆盖该规则。控件变更须同步核对键盘、disabled、mixed、空值、业务值与错误反馈。
+- 移动记录统一由主区域滚动；知识排序 / 展示使用 ReadingActions，复盘、统计和设置的移动视图选择使用库 Select。共享留白与浮层约束在 `reading-workbench.css`；主区域不再重复预留底部导航。

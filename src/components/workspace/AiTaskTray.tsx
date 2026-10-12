@@ -30,6 +30,7 @@ const taskNames: Record<api.AiTaskId, string> = {
   knowledge_extract: "知识条目提取",
   weekly_review: "周回顾",
   monthly_review: "月回顾",
+  profile_analysis: "个人分析",
 };
 const statusNames: Record<string, string> = {
   running: "进行中",

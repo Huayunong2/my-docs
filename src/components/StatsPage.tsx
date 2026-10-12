@@ -1,3 +1,6 @@
+import { useMobileLayout } from "../lib/useMobileLayout";
+import { SelectField, SelectItem } from "./ui/select";
+import { Textarea } from "./ui/reading-surface";
 import ReadingActions from "./workspace/ReadingActions";
 import WeeklyReuse from "./knowledge/WeeklyReuse";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -231,6 +234,7 @@ export default function StatsPage({
   initialMonth?: string;
   onMonthChange?: (month: string) => void;
 }) {
+  const mobile=useMobileLayout();
   const [statsTab, setStatsTab] = useState("records");
   const now = new Date();
   const initialMonthParts = parseMonthParam(initialMonth);
@@ -607,6 +611,7 @@ export default function StatsPage({
       <WorkspaceHeader
         icon={BarChart3}
         title="统计"
+        actionsLabel="月份"
         description={formatMonthLabel(year, month)}
         actions={
           <div className="ft-month-nav">
@@ -632,7 +637,9 @@ export default function StatsPage({
         }
       />
       <div className="ft-stats-toolbar">
-        <Tabs value={statsTab} onValueChange={setStatsTab} className="ft-tabs">
+        {mobile?<SelectField aria-label="统计分类" value={statsTab} onValueChange={setStatsTab}>
+          <SelectItem value="records">记录概览</SelectItem><SelectItem value="memory">记忆复习</SelectItem><SelectItem value="knowledge">知识整理</SelectItem><SelectItem value="generate">生成复盘</SelectItem>
+        </SelectField>:<Tabs value={statsTab} onValueChange={setStatsTab} className="ft-tabs">
           <TabsList aria-label="统计分类">
             <TabsTrigger value="records">
               <CalendarRange size={15} aria-hidden="true" />记录概览
@@ -647,7 +654,7 @@ export default function StatsPage({
               <Sparkles size={15} aria-hidden="true" />生成复盘
             </TabsTrigger>
           </TabsList>
-        </Tabs>
+        </Tabs>}
       </div>
       {coreLoading ? (
         <StatsLoadingState monthLabel={formatMonthLabel(year, month)} />
@@ -672,10 +679,45 @@ export default function StatsPage({
           )}
           {statsTab === "records" && (
             <section className="ft-stats-view ft-stats-records">
+              <div className="ft-records-summary">
+              <WallpaperSurface target="stats.metrics" className="ft-metrics">
+                <Metric
+                  label="记录天数"
+                  icon={CalendarRange}
+                  value={writtenDays}
+                  unit="天"
+                  note="已保存的今日记录"
+                />
+                <Metric
+                  label="累计字数"
+                  icon={FileText}
+                  value={overview?.total_words || 0}
+                  unit="字"
+                  note="本月记录中的文字"
+                />
+                <Metric
+                  label="连续覆盖"
+                  icon={BarChart3}
+                  value={overview?.current_streak || 0}
+                  unit="天"
+                  note={
+                    overview?.streak_exempted_days
+                      ? "含 " + overview.streak_exempted_days + " 天日期状态"
+                      : "当前连续记录覆盖天数"
+                  }
+                />
+                <Metric
+                  label="日期状态"
+                  icon={ShieldCheck}
+                  value={exemptedDays}
+                  unit="天"
+                  note="不计为记录，也不会打断连续覆盖"
+                />
+              </WallpaperSurface>
               <WallpaperSurface target="stats.monthlyOverview" className="ft-monthly-story">
                 <div className="ft-monthly-story-copy">
                   <h2>本月概览</h2>
-                  <div className="ft-monthly-story-actions"><ReadingActions label="月度回顾操作">
+                  <div className="ft-monthly-story-actions"><ReadingActions label="月度回顾操作" triggerText="回顾">
                     <button
                       className="ui-button-primary"
                       onClick={() => setStatsTab("generate")}
@@ -721,40 +763,7 @@ export default function StatsPage({
                   </div>
                 </div>
               </WallpaperSurface>
-              <WallpaperSurface target="stats.metrics" className="ft-metrics">
-                <Metric
-                  label="记录天数"
-                  icon={CalendarRange}
-                  value={writtenDays}
-                  unit="天"
-                  note="已保存的今日记录"
-                />
-                <Metric
-                  label="累计字数"
-                  icon={FileText}
-                  value={overview?.total_words || 0}
-                  unit="字"
-                  note="本月记录中的文字"
-                />
-                <Metric
-                  label="连续覆盖"
-                  icon={BarChart3}
-                  value={overview?.current_streak || 0}
-                  unit="天"
-                  note={
-                    overview?.streak_exempted_days
-                      ? "含 " + overview.streak_exempted_days + " 天日期状态"
-                      : "当前连续记录覆盖天数"
-                  }
-                />
-                <Metric
-                  label="日期状态"
-                  icon={ShieldCheck}
-                  value={exemptedDays}
-                  unit="天"
-                  note="不计为记录，也不会打断连续覆盖"
-                />
-              </WallpaperSurface>
+              </div>
               <div className="ft-stats-overview">
                 <WallpaperSurface as="section" target="stats.calendar" className="ft-panel ft-calendar">
                   <header className="ft-panel-heading">
@@ -1352,7 +1361,7 @@ export default function StatsPage({
                   （可选）
                 </span>
               </label>
-              <textarea
+              <Textarea
                 id="exemption-note"
                 value={exemptionNote}
                 onChange={(e) => setExemptionNote(e.target.value)}

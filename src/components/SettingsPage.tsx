@@ -1,3 +1,5 @@
+import { SelectField, SelectItem } from "./ui/select";
+import { Input } from "./ui/reading-surface";
 import { useMobileLayout } from "../lib/useMobileLayout";
 import {
   useCallback,
@@ -296,7 +298,7 @@ export default function SettingsPage({
           <div className="st-overview-tools">
             <label className="wb-search st-search">
               <Search size={15} aria-hidden="true" />
-              <input
+              <Input
                 type="search"
                 value={search}
                 onChange={(event) => setSearch(event.target.value)}
@@ -354,7 +356,9 @@ export default function SettingsPage({
               )}
             </div>
           )}
-          <div
+          {mobile?<SelectField aria-label="设置分类" value={tab} onValueChange={value=>void switchTab(value as Tab)}>
+            {settingsTabs.map(id=><SelectItem key={id} value={id}>{labels[id]}{dirtyTabs.has(id)?" · 未保存":""}</SelectItem>)}
+          </SelectField>:<>          <div
             className="st-nav-tabs"
             role="tablist"
             aria-orientation="horizontal"
@@ -388,6 +392,7 @@ export default function SettingsPage({
               );
             })}
           </div>
+</>}
         </nav>
         <section className="st-main">
           <header className="st-category-heading">

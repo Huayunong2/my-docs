@@ -282,7 +282,7 @@ mod tests {
     fn v26_migration_backfills_sources_without_inventing_reuse() {
         let mut db = Database::new_in_memory().unwrap();
         let card = db.knowledge().save(draft()).unwrap();
-        db.conn.execute_batch("DROP TRIGGER knowledge_substrings_insert;DROP TRIGGER knowledge_substrings_update;DROP TRIGGER knowledge_substrings_delete;DROP TABLE knowledge_substrings;DROP TABLE knowledge_operations;DROP TABLE knowledge_sources;DROP TABLE knowledge_reuse;DROP INDEX idx_knowledge_cards_active_order;DROP TRIGGER knowledge_content_chars_insert;DROP TRIGGER knowledge_content_chars_update;ALTER TABLE knowledge_cards DROP COLUMN content_chars;DELETE FROM schema_version WHERE version=27;").unwrap();
+        db.conn.execute_batch("DROP TRIGGER knowledge_substrings_insert;DROP TRIGGER knowledge_substrings_update;DROP TRIGGER knowledge_substrings_delete;DROP TABLE knowledge_substrings;DROP TABLE knowledge_operations;DROP TABLE knowledge_sources;DROP TABLE knowledge_reuse;DROP INDEX idx_knowledge_cards_active_order;DROP TRIGGER knowledge_content_chars_insert;DROP TRIGGER knowledge_content_chars_update;ALTER TABLE knowledge_cards DROP COLUMN content_chars;DROP TABLE personal_analyses;DROP TABLE personal_goals;DROP TABLE personal_entries;DROP TABLE personal_profile;DELETE FROM schema_version WHERE version>=27;").unwrap();
         db.initialize().unwrap();
         db.initialize().unwrap();
         assert_eq!(db.sources(&card.id).unwrap().len(), 1);

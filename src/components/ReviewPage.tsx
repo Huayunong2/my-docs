@@ -1,3 +1,4 @@
+import { Input, Textarea } from "./ui/reading-surface";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { motion } from "framer-motion";
 import * as Dialog from "@radix-ui/react-dialog";
@@ -829,28 +830,28 @@ export default function ReviewPage({
                   </div>
                 )}
                 <div className="grid gap-3">
-                  <input
+                  <Input
                     value={editTitle}
                     onChange={(e) => setEditTitle(e.target.value)}
                     placeholder="知识标题"
                     aria-label="知识标题"
                     className="ui-field h-10"
                   />
-                  <textarea
+                  <Textarea
                     value={editContent}
                     onChange={(e) => setEditContent(e.target.value)}
                     placeholder="知识正文"
                     aria-label="知识正文"
                     className="ui-textarea min-h-[140px] text-sm leading-6"
                   />
-                  <input
+                  <Input
                     value={editTagsText}
                     onChange={(e) => setEditTagsText(e.target.value)}
                     placeholder="标签，用逗号分隔"
                     aria-label="标签"
                     className="ui-field h-10"
                   />
-                  <input
+                  <Input
                     value={editRelatedText}
                     onChange={(e) => setEditRelatedText(e.target.value)}
                     placeholder="关联知识条目（逗号分隔的标题）"

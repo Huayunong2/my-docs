@@ -69,6 +69,27 @@ bash scripts/test-setup-mode-guards.sh
 - `server/.env`、备份包、数据库文件、token 或 AI Key；
 - 个人数据、内部调研材料和 Agent 工作区元数据。
 
+## 上传到 GitHub 的文件边界
+
+保留 `src/`、`server/src/`、`src-tauri/src/`、`public/`、`src/assets/`、`scripts/`、`.github/`，以及构建配置、部署脚本、许可证、公开说明和测试。这些文件负责运行、复现构建、维护与回归，不应因为文件较多而删除。提交 `package-lock.json`、`server/Cargo.lock` 和 `src-tauri/Cargo.lock`，以保持依赖安装可复现。
+
+个人档案说明、UI/UX 规范和实施记录属于公开维护文档。`docs/` 中内部调研默认忽略；被项目索引与回归脚本引用的 `docs/knowledge-ui-redesign.md` 单独放行。新增公开文档时同步检查 `.gitignore` 和引用路径，避免克隆后出现缺失链接。
+
+构建产物、依赖、个人配置与数据留在本地。正在提供服务的 `dist/` 和 `server/target/` 即使被忽略，也不要在服务运行时随意删除。`server/.env.example` 与 `server/backup.env.example` 是可提交的配置模板；真实 `.env`、SQLite 文件及其 WAL/SHM 文件、密钥、备份包不可提交。个人数据导出的 JSON/ZIP 也不可提交，不能依靠扩展名判断它们是否安全。
+
+浏览器截图、报告、视频和日志写入 `/tmp/`，或仓库内被忽略的 `ui-artifacts/`、`test-results/`、`playwright-report/`；使用 `KNOWLEDGE_UI_OUTPUT` 配置浏览器回归的输出目录。不要将所有 PNG、JSON 或 ZIP 全局忽略，产品图片、配置和测试夹具可能使用这些格式。
+
+准备提交前检查：
+
+```bash
+git status --short
+git diff --check
+git diff --cached --stat
+git ls-files -ci --exclude-standard
+```
+
+最后一个命令列出已被 Git 跟踪、但命中新忽略规则的文件；理想情况下应为空。`.gitignore` 只影响未跟踪文件，不会删除已跟踪文件或清除 Git 历史。已跟踪的本地文件需要核实后单独移出索引；若真实凭据曾被提交，还需要作废凭据并处理历史，单改忽略规则无效。
+
 ## Commit 建议
 
 推荐使用简短的 Conventional Commits 前缀，例如：

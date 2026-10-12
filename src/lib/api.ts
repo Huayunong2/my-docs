@@ -299,8 +299,8 @@ export function exportFullBackup() {
   return httpRequest<{ version: number; articles: any[]; reviews: any[]; knowledge_cards?: any[]; knowledge_projects?: string[] }>("/export/full", { method: "POST", body: "{}" });
 }
 
-export function importFullBackup(data: any) {
-  return httpRequest<{ imported_articles: number; imported_reviews: number; imported_knowledge_cards?: number }>("/articles/import-full", { method: "POST", body: JSON.stringify(data) });
+export function importFullBackup(data: any, replaceProfile=false, profileRevision?:number) {
+  return httpRequest<{ imported_articles: number; imported_reviews: number; imported_knowledge_cards?: number }>("/articles/import-full"+(replaceProfile?"?replace_profile=true&profile_revision="+profileRevision:""), { method: "POST", body: JSON.stringify(data) });
 }
 
 export function deleteArticle(id: string) {
@@ -1203,7 +1203,7 @@ export function updateAiConfig(payload: UpdateAiConfigPayload) {
   });
 }
 
-export type AiTaskId = "daily_summary" | "knowledge_extract" | "weekly_review" | "monthly_review";
+export type AiTaskId = "daily_summary" | "knowledge_extract" | "weekly_review" | "monthly_review" | "profile_analysis";
 
 export interface AiModelProfile {
   input_price_cny?: number | null;
@@ -1293,13 +1293,13 @@ export function downloadFullPackage() {
   return httpRequestBlob("/export/full-package");
 }
 
-export async function importFullPackage(file: File, expectedWallpaperRevision: number) {
+export async function importFullPackage(file: File, expectedWallpaperRevision: number, replaceProfile=false, profileRevision?:number) {
   const baseUrl = getBaseUrl();
   if (!baseUrl) {
     throw new ApiError(0, "Desktop client server URL is not configured", "桌面端尚未配置服务器地址，请到「设置 -> 连接」填写服务器地址并保存。");
   }
   try {
-    const response = await fetch(`${baseUrl}/import/full-package?revision=${expectedWallpaperRevision}`, {
+    const response = await fetch(`${baseUrl}/import/full-package?revision=${expectedWallpaperRevision}${replaceProfile ? "&replace_profile=true&profile_revision="+profileRevision : ""}`, {
       method: "POST",
       headers: new Headers({
         ...Object.fromEntries(authHeaders(undefined, false, baseUrl).entries()),
@@ -1607,7 +1607,7 @@ export function updateKnowledgeReuse(id:string,project:string,problem:string){re
 export function deleteKnowledgeReuse(id:string){return httpRequest<void>(`/knowledge-reuse/${encodeURIComponent(id)}`,{method:"DELETE"});}
 export function getArticleTagSuggestions(options?:ReadRequestOptions){return httpRequest<string[]>("/articles/tag-suggestions",options);}
 export interface AiTaskView {id:string;task:AiTaskId;source_name?:string;date?:string;created_at_unix?:number;status:string;progress_percent:number;result: any | null;error:string|null;analysis_job_id:string|null;usage:{prompt_tokens:number;completion_tokens:number;total_tokens:number}|null;usage_complete:boolean;estimated_cost_cny:number|null;}
-export interface AiTaskRequest {task:AiTaskId;content?:string;source_name?:string;date?:string;max_cards?:number;force?:boolean;}
+export interface AiTaskRequest {task:Exclude<AiTaskId,"profile_analysis">;content?:string;source_name?:string;date?:string;max_cards?:number;force?:boolean;}
 export function createAiTask(p:AiTaskRequest){return httpRequest<AiTaskView>("/ai/tasks",{method:"POST",body:JSON.stringify({...p,source_name:p.source_name?Array.from(p.source_name).slice(0,120).join(""):undefined})}).then(task=>{rememberAiTask(task.id);return task;});}
 export function getAiTask(id:string,summary=false){return httpRequest<AiTaskView>(`/ai/tasks/${encodeURIComponent(id)}${summary?"?summary=true":""}`);}
 export function listAiTasks(){return httpRequest<AiTaskView[]>("/ai/tasks");}
@@ -1639,4 +1639,40 @@ export async function saveKnowledgeCandidateDrafts(candidates:(KnowledgeCardImpo
   try{for(const candidate of candidates){const request_id=await knowledgeCandidateRequestId(candidate.candidate_key?`${candidate.candidate_key}:draft:new`:undefined);cards.push(await organizeKnowledge({request_id,card:{...candidate,status:"draft"}}));}}
   catch(error){throw new Error(`${cards.length?`已保存 ${cards.length} 个草稿，可重试剩余操作。`:""}${getErrorMessage(error)}`);}
   return {cards,imported:cards.length,skipped:0};
+}
+
+// Personal facts, goals and derived reports are authoritative on the server.
+export const personalProfileQueryKey = () => ["personalProfile", getServerUrl()] as const;
+export function getPersonalProfile(options?: ReadRequestOptions) {
+  return httpRequest<import("./personalProfile").PersonalSnapshot>("/profile", options);
+}
+export function savePersonalProfile(expectedRevision:number,profile:import("./personalProfile").PersonalProfile){
+  return httpRequest<import("./personalProfile").PersonalSnapshot>("/profile",{method:"PATCH",body:JSON.stringify({expectedRevision,profile})});
+}
+export function savePersonalEntry(expectedRevision:number,entry:import("./personalProfile").PersonalEntry){
+  return httpRequest<import("./personalProfile").PersonalSnapshot>("/profile/entries/"+encodeURIComponent(entry.id),{method:"PUT",body:JSON.stringify({expectedRevision,entry})});
+}
+export function savePersonalGoal(expectedRevision:number,goal:import("./personalProfile").PersonalGoal){
+  return httpRequest<import("./personalProfile").PersonalSnapshot>("/profile/goals/"+encodeURIComponent(goal.id),{method:"PUT",body:JSON.stringify({expectedRevision,goal})});
+}
+export function setPersonalRemoved(expectedRevision:number,id:string,goal:boolean,removed:boolean){
+  return httpRequest<import("./personalProfile").PersonalSnapshot>("/profile/"+(goal?"goals":"entries")+"/"+encodeURIComponent(id)+"/state",{method:"PATCH",body:JSON.stringify({expectedRevision,removed})});
+}
+export function searchPersonalSources(kind:"article"|"knowledge"|"space",q:string,options?:ReadRequestOptions){
+  return httpRequest<import("./personalProfile").PersonalSource[]>("/profile/sources?"+new URLSearchParams({kind,q}),options);
+}
+export function buildPersonalContext(payload:import("./personalProfile").PersonalContextRequest,options?:ReadRequestOptions){
+  return httpRequest<import("./personalProfile").PersonalContext>("/profile/context",{...options,method:"POST",body:JSON.stringify(payload)});
+}
+export function analyzePersonalProfile(requestId:string,question:string,context:import("./personalProfile").PersonalContextRequest,contextFingerprint:string){
+  return httpRequest<import("./personalProfile").PersonalAnalysis>("/profile/analyze",{method:"POST",body:JSON.stringify({requestId,question,context,contextFingerprint})});
+}
+export function getPersonalAnalysis(id:string,options?:ReadRequestOptions){
+  return httpRequest<import("./personalProfile").PersonalAnalysis>("/profile/analyses/"+encodeURIComponent(id),options);
+}
+export function importPersonalResume(expectedRevision:number,profile:import("./personalProfile").PersonalProfile,entries:import("./personalProfile").PersonalEntry[],confirmedOwner=false){
+  return httpRequest<{snapshot:import("./personalProfile").PersonalSnapshot;imported:number;skipped:number}>("/profile/import-resume",{method:"POST",body:JSON.stringify({expectedRevision,profile,entries,confirmedOwner})});
+}
+export function listPersonalAnalyses(page=1,options?:ReadRequestOptions){
+  return httpRequest<{items:import("./personalProfile").PersonalAnalysis[];total:number;page:number;hasMore:boolean}>("/profile/analyses?page="+page,options);
 }

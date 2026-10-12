@@ -1,3 +1,4 @@
+import { Checkbox } from "../ui/checkbox";
 import {useSimpleDisplay,setSimpleDisplay} from "../../lib/simpleDisplay";
 import "../knowledge/organize.css";
 import { Check, Monitor, Moon, Sun } from "lucide-react";
@@ -85,7 +86,7 @@ export default function AppearancePanel({
   const simple=useSimpleDisplay();
   return (
     <div className="settings-appearance-workspace">
-      <label className="ko-simple-option"><span><strong>简洁显示</strong><p>在本机隐藏壁纸与装饰动画，让正文更清晰。关闭后恢复原有壁纸配置。</p></span><input type="checkbox" checked={simple} onChange={e=>setSimpleDisplay(e.target.checked)}/></label>
+      <label className="ko-simple-option"><span><strong>简洁显示</strong><p>在本机隐藏壁纸与装饰动画，让正文更清晰。关闭后恢复原有壁纸配置。</p></span><Checkbox type="checkbox" checked={simple} onChange={e=>setSimpleDisplay(e.target.checked)}/></label>
       <section className="wb-panel st-appearance-section">
         <div className="st-section-copy">
           <h3>显示模式</h3>

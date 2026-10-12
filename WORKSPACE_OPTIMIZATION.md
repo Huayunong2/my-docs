@@ -154,7 +154,7 @@ KNOWLEDGE_FRONTEND_ORIGIN=http://127.0.0.1:4173 node scripts/workspace-optimizat
 
 状态轮询只读取轻量状态；任务完成后追加一次完整结果读取，避免成功状态下正文为空。该缺陷先由新增回归复现，再修复。壁纸检查在切换视口前卸载旧页面，避免把旧页面响应设备变体变化的有效请求误计入新页面资源数量；仍保持每次新页面仅一次资产请求的断言。
 
-交付截图与浏览器报告保存于 `/home/conj-linux/.codex/visualizations/2026/10/09/01a11e48-a4ea-71c0-874a-e119dd918593/feedback-final`。浏览器及数据库基准均使用隔离合成数据；没有将实验室指标描述为真实用户性能达标。
+交付截图与浏览器报告保存在本地输出目录，通过 `KNOWLEDGE_UI_OUTPUT` 配置，不纳入源码提交。浏览器及数据库基准均使用隔离合成数据；没有将实验室指标描述为真实用户性能达标。
 
 
 ## 使用流程审查与修正（2026-10-10）
@@ -180,7 +180,7 @@ KNOWLEDGE_FRONTEND_ORIGIN=http://127.0.0.1:4173 node scripts/workspace-optimizat
 
 本轮验证：`npm test` 133 项通过；`npm run check:bundle` 内含生产构建与预算检查通过，首屏 gzip 178,884 / 180,000 字节；生产浏览器回归 30 项通过；场景回归 10 项及四宽度明暗主题验证通过。合并夹具现在严格验证 `expected_updated_at`，旧版本重试始终失败，必须读取最新版本后才能通过；测试不再以“只拒绝第一次”的方式掩盖版本恢复问题。场景中还模拟连续按键、任务切换、关闭再开、复制、历史详情反馈与导航避让。
 
-最终截图和报告：`/home/conj-linux/.codex/visualizations/2026/10/09/01a11e48-a4ea-71c0-874a-e119dd918593/usability-audit`。回退这些交互变更只需回退本轮前端修改；此前整轮 v27 数据迁移的回退约束保持不变。
+最终截图和报告保存在 `KNOWLEDGE_UI_OUTPUT` 指定的本地输出目录。回退这些交互变更只需回退本轮前端修改；此前整轮 v27 数据迁移的回退约束保持不变。
 
 
 ## 移动重设计（2026-10-10）
@@ -304,7 +304,7 @@ PC ≥1280px 的知识列表 260–420px、阅读区至少 480px，今日分栏�
 - 快捷搜索、AI 面板、嵌套图像关闭均恢复稳定焦点；图像缩放／复位／切换、PC 分栏键盘与刷新偏好、手机补记和保存均通过。
 - 两个脚本 `node --check`、`git diff --check`：通过。
 
-截图与原始报告在 `/home/conj-linux/.codex/visualizations/2026/10/09/01a11e48-a4ea-71c0-874a-e119dd918593/reading-workbench/`，包括 `production/`、`workspace/`、`baseline/` 和 `performance/`。性能报告保留每项 25 个原始样本及自动门槛比较。
+截图与原始报告在本地验收输出目录，包括 `production/`、`workspace/`、`baseline/` 和 `performance/`。性能报告保留每项 25 个原始样本及自动门槛比较。
 
 未进行实体 iPhone／Android 输入法测试；本轮为 Linux Chromium 与模拟可视视口验证。Tauri Rust 与部署脚本未修改，未运行这些专项检查；50,000 条数据库手动基准未重复运行，先前数据与边界说明保留。没有生产部署、真实数据恢复／删除、真实 AI 调用或业务数据离线同步。
 

@@ -92,7 +92,7 @@ function emptyWallpaperSnapshot(): WallpaperSnapshot {
   };
 }
 
-export type Page = "today" | "history" | "archive" | "search" | "stats" | "reviews" | "review" | "knowledge" | "settings";
+export type Page = "today" | "history" | "archive" | "search" | "stats" | "reviews" | "review" | "knowledge" | "settings" | "profile";
 export type { ThemeMode } from "./lib/theme";
 
 const AiTaskTray=lazy(()=>import("./components/workspace/AiTaskTray"));
@@ -107,6 +107,7 @@ const pageLoaders: Partial<Record<Page, () => Promise<unknown>>> = {
   review: () => import("./components/ReviewPage"),
   knowledge: () => import("./components/KnowledgePage"),
   settings: () => import("./components/SettingsPage"),
+  profile: () => import("./components/ProfilePage"),
 };
 
 export function preloadPage(page: Page) {
@@ -118,7 +119,7 @@ document.documentElement.dataset.simpleDisplay=String(simpleDisplay());
 function pageFromPath(pathname: string): Page {
   if (pathname.startsWith("/knowledge")) return "knowledge";
   const page = pathname.replace(/^\//, "") as Page;
-  return ["today", "history", "archive", "search", "stats", "reviews", "review", "settings"].includes(page)
+  return ["today", "history", "archive", "search", "stats", "reviews", "review", "settings", "profile"].includes(page)
     ? page
     : "today";
 }
@@ -144,6 +145,7 @@ function titleForPath(pathname: string) {
     "/archive": "记录",
     "/reviews": "复盘",
     "/settings": "设置",
+    "/profile": "个人档案",
   };
   return labels[pathname] || "每日总结";
 }

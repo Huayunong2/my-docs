@@ -1,3 +1,4 @@
+import { Input, Textarea } from "../ui/reading-surface";
 import ReadingActions from "../workspace/ReadingActions";
 import { useEffect, useRef, useState } from "react";
 import * as Dialog from "@radix-ui/react-dialog";
@@ -277,7 +278,7 @@ export function ReviewViewerModal({
                     可直接修改
                   </span>
                 </div>
-                <input
+                <Input
                   id="review-editor-title"
                   value={title}
                   onChange={(e) => onTitleChange(e.target.value)}
@@ -289,7 +290,7 @@ export function ReviewViewerModal({
                 >
                   正文
                 </label>
-                <textarea
+                <Textarea
                   id="review-editor-content"
                   value={content}
                   onChange={(e) => onContentChange(e.target.value)}

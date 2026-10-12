@@ -1,3 +1,4 @@
+import { Input, Textarea } from "./ui/reading-surface";
 import ReadingActions from "./workspace/ReadingActions";
 import { ReadingSurface } from "./ui/reading-surface";
 import { useWideLayout } from "../lib/useWideLayout";
@@ -1292,7 +1293,7 @@ export default function TodayPage({
                   #{tag} <X size={12} />
                 </button>
               ))}
-              <input
+              <Input
                 value={tagInput}
                 onChange={(e) => setTagInput(e.target.value)}
                 onKeyDown={(e) => {
@@ -1328,7 +1329,7 @@ export default function TodayPage({
       <div
         className={`today-title-block px-3 pb-2 md:px-8 ${zen ? "mx-auto w-full max-w-2xl" : ""}`}
       >
-        {isMobile && mobilePane === "preview" ? (title.trim() && <h2 className="today-reading-title">{title}</h2>) : <textarea
+        {isMobile && mobilePane === "preview" ? (title.trim() && <h2 className="today-reading-title">{title}</h2>) : <Textarea
           ref={titleFieldRef}
           rows={1}
           value={title}

@@ -1,3 +1,4 @@
+import { Checkbox } from "../ui/checkbox";
 import { type ReactNode, useEffect, useState } from "react";
 import {
   AlertTriangle,
@@ -313,7 +314,7 @@ export default function AIPanel({ onDirtyChange }: { onDirtyChange?: (dirty: boo
                 </div>
                 {config?.api_key_configured && config.api_key_source === "settings" && (
                   <label className="mt-2 flex min-h-10 items-center gap-2 text-xs text-[var(--ui-text-muted)]">
-                    <input
+                    <Checkbox
                       type="checkbox"
                       checked={clearApiKey}
                       onChange={(event) => {

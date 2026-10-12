@@ -194,16 +194,16 @@
 @media (max-width: 767px) {
   #main-content :is(.wb-page, .ft-page) { padding-top: 24px; }
   #main-content :is(.wb-panel, .ft-panel, .settings-card, .rp-period, .history-card, .kl-card) {
-    border-radius: 24px;
+    border-radius: var(--ui-radius-panel);
     border-color: var(--ui-border);
-    box-shadow: 0 5px 24px rgb(39 70 53 / .035);
+    box-shadow: var(--ui-shadow-panel);
   }
-  #main-content :is(.ui-field, .ui-textarea, .wb-search, .ft-search-input, .history-select-trigger) { border-radius: 18px; }
-  #main-content :is(.ui-button-primary, .ui-button-secondary, .ui-button-ghost, .ui-button-success, .ui-button-danger) { border-radius: 999px; min-height: 44px; }
+  #main-content :is(.ui-field, .ui-textarea, .wb-search, .ft-search-input, .history-select-trigger) { border-radius: var(--ui-radius-field); }
+  #main-content :is(.ui-button-primary, .ui-button-secondary, .ui-button-ghost, .ui-button-success, .ui-button-danger) { border-radius: var(--ui-radius-control); min-height: 44px; }
   #main-content .wb-header { flex-wrap: wrap; min-height: 44px; margin-bottom: 20px; }
   #main-content .wb-header .wb-heading { flex: 1; }
-  .mobile-reading-menu { min-width: 230px; border-radius: 22px; padding: 8px; }
-  .mobile-reading-menu [role="menuitem"] { min-height: 44px; border-radius: 14px; }
+  .mobile-reading-menu { min-width: 230px; border-radius: 12px; padding: 8px; }
+  .mobile-reading-menu [role="menuitem"] { min-height: 44px; border-radius: 8px; }
 
   /* Today opens a document. Writing is an explicit, reversible action. */
   #main-content .page-surface-today { height: auto; min-height: 100%; padding: 0 0 24px; }
@@ -222,10 +222,10 @@
   #main-content .page-surface-today .today-pane-heading { display: none; }
   #main-content .page-surface-today .today-preview-surface {
     height: auto; min-height: 0; padding: 20px 18px; overflow: visible;
-    border: 0; border-radius: 26px; background-color: var(--ui-surface);
-    box-shadow: 0 8px 32px rgb(39 70 53 / .035);
+    border: 0; border-radius: var(--ui-radius-panel); background-color: var(--ui-surface);
+    box-shadow: var(--ui-shadow-panel);
   }
-  #main-content .page-surface-today .today-writing-surface { height: 56dvh; border-radius: 24px; }
+  #main-content .page-surface-today .today-writing-surface { height: 56dvh; border-radius: var(--ui-radius-panel); }
   .today-reading-empty { display: flex; flex-direction: column; align-items: center; gap: 14px; padding: 40px 12px; text-align: center; }
   .today-reading-empty > svg { color: var(--ui-accent-text); }
   .today-reading-empty h2 { font-size: 19px; font-weight: 600; }
@@ -235,11 +235,11 @@
   /* Information is available after the document, without delaying the text. */
   #main-content .kl-reading { padding-top: 24px; }
   #main-content .kl-reading-content { margin-top: 20px; }
-  #main-content .kl-entry-info { margin-top: 28px; padding: 0 16px; border-radius: 20px; background: var(--ui-surface-subtle); }
+  #main-content .kl-entry-info { margin-top: 28px; padding: 0 16px; border-radius: 8px; background: var(--ui-surface-subtle); }
   #main-content .kl-entry-info > summary { min-height: 48px; display: flex; align-items: center; font-size: 13px; color: var(--ui-text-muted); }
   #main-content .kl-entry-info[open] { padding-bottom: 16px; }
   #main-content .kl-reading-actions { border: 0; padding-top: 0; gap: 10px; }
-  #main-content :is(.ko-organize-existing, .kl-reader-source, .ko-reuse-history) { border-radius: 22px; border-color: var(--ui-border); background: var(--ui-surface-subtle); }
+  #main-content :is(.ko-organize-existing, .kl-reader-source, .ko-reuse-history) { border-radius: var(--ui-radius-panel); border-color: var(--ui-border); background: var(--ui-surface-subtle); }
   #main-content .history-card-edit { display: none; }
   #main-content .history-card-main { padding: 18px 18px 10px; }
   #main-content .history-card-title { font-size: 18px; line-height: 1.55; }
@@ -254,7 +254,7 @@
 
   /* Settings becomes a compact category strip rather than a launchpad. */
   #main-content .st-navigation .st-nav-tabs { display: flex; gap: 8px; padding: 2px 0 8px; overflow-x: auto; scrollbar-width: none; }
-  #main-content .st-navigation .st-nav-item { flex: 0 0 auto; width: auto; min-height: 44px; padding: 10px 15px; border-radius: 999px; }
+  #main-content .st-navigation .st-nav-item { flex: 0 0 auto; width: auto; min-height: 44px; padding: 10px 15px; border-radius: 8px; }
   #main-content .st-navigation .st-nav-icon { display: none; }
   #main-content .st-navigation .st-nav-copy small { display: none; }
   #main-content .st-category-eyebrow { display: none; }
@@ -274,7 +274,7 @@
   #main-content .rp-period-footer { border-color: var(--ui-border); }
   #main-content .rs-layout[data-studying="true"] .rs-sidebar { display: none; }
   #main-content .rs-answer-actions { position: static; border-radius: 0 0 24px 24px; padding: 18px; }
-  #main-content .rs-grade-grid button { border-radius: 18px; }
+  #main-content .rs-grade-grid button { border-radius: var(--ui-radius-field); }
 
   .article-detail-surface.ui-modal-surface { width: 100%; max-height: calc(100dvh - 20px); border-radius: 26px 26px 0 0; }
   .article-detail-header { padding: 18px 20px; }

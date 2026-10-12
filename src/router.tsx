@@ -20,9 +20,12 @@ const ReviewPage = lazy(() => import("./components/ReviewPage"));
 const KnowledgePage = lazy(() => import("./components/KnowledgePage"));
 const KnowledgeTrashPage = lazy(() => import("./components/KnowledgeTrashPage"));
 const SettingsPage = lazy(() => import("./components/SettingsPage"));
+const ProfilePage = lazy(() => import("./components/ProfilePage"));
 
 export type AppSearch = {
   q?: string;
+  profileKind?: string;
+  entry?: string;
   date?: string;
   historyView?: "timeline" | "month" | "trash";
   historyMonth?: string;
@@ -55,6 +58,8 @@ function validateAppSearch(search: Record<string, unknown>): AppSearch {
   const view = stringValue(search.view);
   return {
     q: stringValue(search.q),
+    profileKind: stringValue(search.profileKind),
+    entry: stringValue(search.entry),
     date: stringValue(search.date),
     historyView: validHistoryView(stringValue(search.historyView)),
     historyMonth: validHistoryMonth(stringValue(search.historyMonth)),
@@ -222,10 +227,22 @@ const routeTree = rootRoute.addChildren([
   knowledgeTrashRoute,
   knowledgeDetailRoute,
   settingsRoute,
+  createRoute({ getParentRoute: () => rootRoute, path: "/profile", component: ProfileRoute }),
 ]);
 
 function useRootSearch() {
   return useSearch({ from: rootRoute.id }) as AppSearch;
+}
+
+function ProfileRoute() {
+  const search = useRootSearch();
+  const shell = useAppShell();
+  const tab = search.tab === "timeline" || search.tab === "context" || search.tab === "goals" || search.tab === "analyses" ? search.tab : "overview";
+  const kind = ["education","work","learning","project","achievement","milestone","certificate"].includes(search.profileKind || "") ? search.profileKind : "all";
+  return <ProfilePage tab={tab} entryId={search.entry} kind={kind} query={search.q}
+    onTabChange={value => shell.updateSearch({tab:value==="overview"?undefined:value,entry:undefined})}
+    onSelect={entry => shell.updateSearch({tab:"timeline",entry})}
+    onFilter={(profileKind,q) => shell.updateSearch({profileKind:profileKind==="all"?undefined:profileKind,q:q||undefined,entry:undefined},true)} />;
 }
 
 function TodayRoute() {

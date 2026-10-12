@@ -137,7 +137,7 @@ export default function HistoryPage({
         detailTriggerRef.current &&
         document.contains(detailTriggerRef.current)
       ) {
-        detailTriggerRef.current.focus();
+        detailTriggerRef.current.focus({preventScroll:true});
       }
       closeTimerRef.current = null;
     }, 140);
@@ -751,7 +751,7 @@ export default function HistoryPage({
                 onCloseAutoFocus={(event) => {
                   if (!detailTriggerRef.current) return;
                   event.preventDefault();
-                  detailTriggerRef.current.focus();
+                  detailTriggerRef.current.focus({preventScroll:true});
                 }}
               >
                 <motion.div

@@ -44,6 +44,7 @@ const TASKS: Array<{
   { id: "daily_summary", label: "每日总结", description: "整理当天记录，生成可复习的简短总结", icon: CalendarDays },
   { id: "knowledge_extract", label: "知识条目提取", description: "从文档、记录或周期回顾中提炼知识条目候选", icon: BookOpen },
   { id: "weekly_review", label: "周复盘", description: "归纳一周的主题、事实与可复用沉淀", icon: BarChart3 },
+  { id: "profile_analysis", label: "个人分析", description: "基于明确选择的个人档案与目标提供分析", icon: FileText },
   { id: "monthly_review", label: "月复盘", description: "梳理跨周脉络，提炼长期复习材料", icon: FileText },
 ];
 

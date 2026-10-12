@@ -2047,7 +2047,7 @@ fn portable_archive_preserves_spaces_and_multiple_review_items() {
         .portable_archive()
         .export_json()
         .expect("export archive");
-    assert_eq!(archive["version"], json!(3));
+    assert_eq!(archive["version"], json!(4));
     assert_eq!(archive["articles"][0]["spaces"], json!(["C++"]));
     assert_eq!(archive["review_items"].as_array().unwrap().len(), 2);
 

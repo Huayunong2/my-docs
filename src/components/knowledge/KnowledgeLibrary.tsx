@@ -1,3 +1,7 @@
+import { useMobileLayout } from "../../lib/useMobileLayout";
+import ReadingActions from "../workspace/ReadingActions";
+import { Checkbox } from "../ui/checkbox";
+import { Input } from "../ui/reading-surface";
 import { getServerUrl } from "../../lib/api";
 import { useReadingScroll } from "../../lib/useReadingScroll";
 import { useWideLayout } from "../../lib/useWideLayout";
@@ -51,6 +55,7 @@ import {
 } from "../ui/dropdown-menu";
 import {
   Select,
+  SelectField,
   SelectContent,
   SelectItem,
   SelectTrigger,
@@ -124,6 +129,7 @@ const sortLabels = {
 
 export default function KnowledgeLibrary(p: Props) {
   const wide=useWideLayout();
+  const mobile=useMobileLayout();
   const [managing, setManaging] = useState(false);
   const selecting = managing || p.selectedIds.length > 0;
   const searchRef = useRef<HTMLInputElement>(null);
@@ -182,7 +188,7 @@ export default function KnowledgeLibrary(p: Props) {
 
   const library = <WallpaperSurface as="section" target="knowledge.library" className="kl-library" data-managing={selecting} aria-label="知识浏览">
         <div className="kl-library-top">
-          <div className="kl-collection-heading">
+          <div className="kl-collection-heading" data-scoped={!!p.project}>
             <div>
               <div className="kl-eyebrow">
                 {p.project ? "空间" : "我的知识库"}
@@ -200,7 +206,7 @@ export default function KnowledgeLibrary(p: Props) {
               <Folder size={18} />
             </button>
           </div>
-          <form
+          <form noValidate
             className="kl-search-line"
             onSubmit={(event) => {
               event.preventDefault();
@@ -209,7 +215,7 @@ export default function KnowledgeLibrary(p: Props) {
           >
             <div className="kl-search">
               <Search size={17} />
-              <input
+              <Input
                 ref={searchRef}
                 type="search"
                 value={p.query}
@@ -262,7 +268,9 @@ export default function KnowledgeLibrary(p: Props) {
             </button>
           </form>
           <div className="kl-viewbar">
-            <Tabs
+            {mobile?<SelectField aria-label="知识状态" value={p.status} onValueChange={value=>p.onStatus(value as Props["status"])} className="kl-mobile-status">
+              {statuses.map(status=><SelectItem key={status} value={status}>{status==="all"?"全部知识":cardStatusLabels[status]} · {status==="all"?p.summary.total:p.summary[status]}</SelectItem>)}
+            </SelectField>:<>            <Tabs
               value={p.status}
               onValueChange={(value) => p.onStatus(value as Props["status"])}
               className="kl-status-tabs"
@@ -278,6 +286,8 @@ export default function KnowledgeLibrary(p: Props) {
                 ))}
               </TabsList>
             </Tabs>
+</>}
+            <ReadingActions label="知识排序与显示" triggerText="视图">
             <div className="kl-display-tools">
               <Select value={p.sort} onValueChange={p.onSort}>
                 <SelectTrigger aria-label="知识条目排序" className="kl-sort">
@@ -314,6 +324,7 @@ export default function KnowledgeLibrary(p: Props) {
                 </button>
               </div>
             </div>
+            </ReadingActions>
           </div>
           {p.filters.length > 0 && (
             <div className="kl-active-filters" aria-label="已应用的筛选条件">
@@ -331,7 +342,7 @@ export default function KnowledgeLibrary(p: Props) {
           {p.cards.length > 0 && (
             <div className="kl-selection-line">
               <label>
-                <input
+                <Checkbox
                   ref={selectAllRef}
                   type="checkbox"
                   checked={allSelected}
@@ -427,7 +438,7 @@ export default function KnowledgeLibrary(p: Props) {
                     </span>
                   </div>
                   <label className="kl-card-check">
-                    <input
+                    <Checkbox
                       type="checkbox"
                       checked={p.selectedIds.includes(card.id)}
                       onChange={() => p.onSelect(card.id)}
@@ -536,7 +547,7 @@ export default function KnowledgeLibrary(p: Props) {
             </div>
           )}
         </div>
-        <footer className="kl-pagination">
+        {p.total>0&&p.pageCount>1&&<footer className="kl-pagination">
           <span>
             {p.total > 0
               ? `第 ${p.page} / ${p.pageCount} 页`
@@ -561,7 +572,7 @@ export default function KnowledgeLibrary(p: Props) {
               <ChevronRight size={17} />
             </button>
           </div>
-        </footer>
+        </footer>}
       </WallpaperSurface>;
 
   return (
@@ -621,7 +632,7 @@ export default function KnowledgeLibrary(p: Props) {
           {p.spaces.length > 6 && (
             <label className="kl-space-search">
               <Search size={13} />
-              <input
+              <Input
                 aria-label="查找空间"
                 placeholder="查找空间"
                 value={spaceQuery}

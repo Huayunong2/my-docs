@@ -1,3 +1,5 @@
+import { Checkbox } from "../ui/checkbox";
+import { useQueryClient } from "@tanstack/react-query";
 import { useEffect, useRef, useState, type ChangeEvent } from "react";
 import { Download, FileArchive, FileJson, Upload } from "lucide-react";
 import * as api from "../../lib/api";
@@ -22,6 +24,9 @@ type ImportPreview = {
   articleCount: number;
   reviewCount: number;
   knowledgeCount: number;
+  profileEntryCount?: number;
+  profileGoalCount?: number;
+  hasPersonalProfile?: boolean;
   dateRange: string;
   data: unknown;
   articles?: ArticleImport[];
@@ -73,7 +78,8 @@ function buildImportPreview(data: unknown, file: File): ImportPreview {
     const articles = data.articles.map(normalizeArticle).filter((article): article is ArticleImport => article !== null);
     const reviewCount = data.reviews.length;
     const knowledgeCount = Array.isArray(data.knowledge_cards) ? data.knowledge_cards.length : 0;
-    if (!articles.length && reviewCount === 0 && knowledgeCount === 0) {
+    const personal=isRecord(data.personal_profile)?data.personal_profile:undefined;
+    if (!articles.length && reviewCount === 0 && knowledgeCount === 0 && !personal) {
       throw new Error("完整归档中没有可导入的数据");
     }
     return {
@@ -84,6 +90,9 @@ function buildImportPreview(data: unknown, file: File): ImportPreview {
       articleCount: Array.isArray(data.articles) ? data.articles.length : articles.length,
       reviewCount,
       knowledgeCount,
+      profileEntryCount: personal && Array.isArray(personal.entries)?personal.entries.length:0,
+      profileGoalCount: personal && Array.isArray(personal.goals)?personal.goals.length:0,
+      hasPersonalProfile: !!personal,
       dateRange: formatDateRange(articles),
       data,
     };
@@ -132,6 +141,8 @@ export default function ExportPanel({
   onDirtyChange?: (dirty: boolean) => void;
   onWallpaperImported?: () => Promise<boolean>;
 }) {
+  const queryClient=useQueryClient();
+  const [replaceProfile,setReplaceProfile]=useState(false);
   const [busy, setBusy] = useState<string | null>(null);
   const [msg, setMsg] = useState("");
   const [tone, setTone] = useState<Tone>("neutral");
@@ -186,7 +197,7 @@ export default function ExportPanel({
       anchor.download = `daily-summary-full-${new Date().toISOString().slice(0, 10)}.zip`;
       anchor.click();
       window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
-      setMsg("完整迁移包已开始下载，包含记录、复盘、知识数据、壁纸图片、分配和保存方案。");
+      setMsg("完整迁移包已开始下载，包含记录、复盘、知识、个人档案、壁纸图片、分配和保存方案。");
       setTone("good");
     } catch (e) {
       setMsg(`导出失败：${api.getErrorMessage(e)}`);
@@ -201,6 +212,7 @@ export default function ExportPanel({
     if (!file) return;
     setMessageScope("import");
     setBusy("read");
+    setReplaceProfile(false);
     setMsg("正在读取文件，尚未写入服务器…");
     setTone("neutral");
     try {
@@ -215,6 +227,9 @@ export default function ExportPanel({
           articleCount: manifest.summary.articleCount,
           reviewCount: manifest.summary.reviewCount,
           knowledgeCount: manifest.summary.knowledgeCount,
+          profileEntryCount: manifest.summary.profileEntryCount || 0,
+          profileGoalCount: manifest.summary.profileGoalCount || 0,
+          hasPersonalProfile: !!manifest.summary.hasPersonalProfile,
           dateRange: manifest.summary.dateRange,
           data: null,
           packageFile: file,
@@ -245,6 +260,9 @@ export default function ExportPanel({
     const packageSummary = pendingImport.kind === "package"
       ? `，以及 ${pendingImport.wallpaperAssetCount ?? 0} 张壁纸和 ${pendingImport.wallpaperPresetCount ?? 0} 组壁纸方案。完整迁移包会替换服务器壁纸图库、分配和方案；业务数据按现有导入规则处理。`
       : "。";
+    let profileRevision:number|undefined;
+    try {if(replaceProfile)profileRevision=(await api.getPersonalProfile()).revision;}
+    catch(error){setMsg("无法确认当前档案版本："+api.getErrorMessage(error));setTone("bad");return;}
     const ok = await confirm({
       title: "确认导入数据",
       message: `将导入 ${summary}${packageSummary}
@@ -264,6 +282,8 @@ export default function ExportPanel({
         const result = await api.importFullPackage(
           pendingImport.packageFile!,
           currentWallpaperState.revision,
+          replaceProfile,
+          profileRevision,
         );
         onBackupCreated?.();
         await onWallpaperImported?.();
@@ -273,13 +293,14 @@ export default function ExportPanel({
         onBackupCreated?.();
         setMsg(`已创建导入前快照：${snapshot.name}，正在导入…`);
         if (pendingImport.kind === "full") {
-          const result = await api.importFullBackup(pendingImport.data);
+          const result = await api.importFullBackup(pendingImport.data,replaceProfile,profileRevision);
           setMsg(`导入完成：${result.imported_articles} 条记录、${result.imported_reviews} 篇周期回顾、${result.imported_knowledge_cards || 0} 个知识条目。导入前快照：${snapshot.name}`);
         } else {
           const result = await api.importArticles(pendingImport.articles || []);
           setMsg(`导入完成：${result.imported} 条记录，跳过 ${result.skipped} 条空记录。导入前快照：${snapshot.name}`);
         }
       }
+      await queryClient.invalidateQueries({queryKey:["personalProfile"]});
       setPendingImport(null);
       setTone("good");
     } catch (e) {
@@ -360,8 +381,10 @@ export default function ExportPanel({
               <PreviewItem label="今日记录" value={`${pendingImport.articleCount} 条`} />
               <PreviewItem label="周期回顾" value={`${pendingImport.reviewCount} 篇`} />
               <PreviewItem label="知识条目" value={`${pendingImport.knowledgeCount} 个`} />
+              {pendingImport.hasPersonalProfile && <PreviewItem label="个人档案" value={(pendingImport.profileEntryCount||0)+" 条经历 · "+(pendingImport.profileGoalCount||0)+" 个目标"}/>}
               {pendingImport.kind === "package" && <PreviewItem label="壁纸与方案" value={`${pendingImport.wallpaperAssetCount ?? 0} 张 · ${pendingImport.wallpaperPresetCount ?? 0} 组`} />}
             </dl>
+            {pendingImport.hasPersonalProfile && <label className="mt-4 flex items-start gap-2 text-sm leading-6"><Checkbox type="checkbox" checked={replaceProfile} onChange={event=>setReplaceProfile(event.target.checked)} disabled={busy!==null}/><span>明确替换服务器已有个人档案（含经历、目标与分析）。未勾选时，不同档案会拒绝导入，旧文件缺少档案字段时会保留当前档案。</span></label>}
             <div className="mt-5 flex flex-col gap-2 sm:flex-row sm:justify-end">
               <SecondaryBtn onClick={() => setPendingImport(null)} disabled={busy !== null}>取消导入</SecondaryBtn>
               <PrimaryBtn onClick={() => void importPreview()} disabled={busy !== null}>

@@ -1,3 +1,4 @@
+import { Checkbox } from "./ui/checkbox";
 import CandidateOrganizer from "./knowledge/CandidateOrganizer";
 import { useEffect, useRef, useState } from "react";
 import * as Dialog from "@radix-ui/react-dialog";
@@ -345,7 +346,7 @@ export default function TodayAIPanel(p: Props) {
                       {candidates.map((candidate, index) => (
                         <div key={index} data-active={active === index}>
                           <label>
-                            <input
+                            <Checkbox
                               type="checkbox"
                               disabled={saving}
                               checked={candidate.selected}
