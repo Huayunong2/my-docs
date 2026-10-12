@@ -39,6 +39,12 @@ struct PackageSummary {
     review_count: usize,
     knowledge_count: usize,
     date_range: String,
+    #[serde(default)]
+    profile_entry_count: usize,
+    #[serde(default)]
+    profile_goal_count: usize,
+    #[serde(default)]
+    has_personal_profile: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -89,6 +95,15 @@ fn summarize_archive_data(data: &Value) -> PackageSummary {
             .and_then(Value::as_array)
             .map_or(0, Vec::len),
         date_range,
+        profile_entry_count: data
+            .pointer("/personal_profile/entries")
+            .and_then(Value::as_array)
+            .map_or(0, Vec::len),
+        profile_goal_count: data
+            .pointer("/personal_profile/goals")
+            .and_then(Value::as_array)
+            .map_or(0, Vec::len),
+        has_personal_profile: data.get("personal_profile").is_some_and(Value::is_object),
     }
 }
 
@@ -227,11 +242,30 @@ fn write_entry(
     zip.write_all(&bytes).map_err(|error| error.to_string())
 }
 
+#[cfg(test)]
 pub(crate) fn import_package(
     db: &mut Database,
     package_path: &Path,
     expected_revision: i64,
     snapshot_dir: &Path,
+) -> Result<Value, PackageImportError> {
+    import_package_with_profile_mode(
+        db,
+        package_path,
+        expected_revision,
+        snapshot_dir,
+        false,
+        None,
+    )
+}
+
+pub(crate) fn import_package_with_profile_mode(
+    db: &mut Database,
+    package_path: &Path,
+    expected_revision: i64,
+    snapshot_dir: &Path,
+    replace_profile: bool,
+    profile_revision: Option<i64>,
 ) -> Result<Value, PackageImportError> {
     let file =
         File::open(package_path).map_err(|error| PackageImportError::Storage(error.to_string()))?;
@@ -281,7 +315,11 @@ pub(crate) fn import_package(
         assets,
         ..
     } = manifest;
-    let report = match db.portable_archive().import_json(data) {
+    let report = match db.portable_archive().import_json_with_profile_revision(
+        data,
+        replace_profile,
+        profile_revision,
+    ) {
         Ok(report) => report,
         Err(error) => {
             let message = error.to_string();

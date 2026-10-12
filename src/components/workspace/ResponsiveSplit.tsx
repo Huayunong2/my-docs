@@ -1,5 +1,5 @@
 import { useEffect, useState, type ComponentType, type ReactNode } from "react";
-type Props = { workspace:"knowledge" | "today"; first:ReactNode; second:ReactNode };
+type Props = { workspace:"knowledge" | "today" | "profile"; first:ReactNode; second:ReactNode };
 let LoadedSplit: ComponentType<Props> | null = null;
 let pending: Promise<ComponentType<Props>> | null = null;
 // The bridge loads only when a wide split is mounted. Never initialize an editor in a Suspense fallback.

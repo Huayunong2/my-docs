@@ -777,12 +777,51 @@ async function imageReadingRegression() {
     await shot("image-viewer-mobile");
     await page.keyboard.press("Escape");
     await page.locator(".reading-image-viewer").waitFor({state:"hidden"});
+    // Radix restores focus in its asynchronous unmount callback, after the
+    // viewer stops painting. Wait for that lifecycle before asserting focus.
+    await page.waitForFunction(element=>document.activeElement===element,await image.elementHandle());
     assert(await image.evaluate(e=>e===document.activeElement));
     assert(Math.abs(await page.locator(".article-detail-body:visible").evaluate(e=>e.scrollTop)-before)<=1);
     await page.getByRole("button",{name:"关闭详情",exact:true}).click();
 }
 try {
-  if(process.env.KNOWLEDGE_IMAGE_ONLY === "1") {
+  if(process.env.KNOWLEDGE_UI_GUIDELINES_ONLY === "1") {
+    for(const width of [320,390,768,1024,1280,1440]) {
+      await page.setViewportSize({width,height:width===320?568:1000});
+      for(const [name,path,selector] of [["history","/history",".history-card-main"],["knowledge","/knowledge",".kl-card"],["reviews","/reviews",".rp-period"],["stats","/stats?date=2026-09",".ft-metric"]]) {
+        await go(path);await healthy(selector);
+        await check(`${name} readable content and shared controls fit ${width}px`,async()=>{
+          const main=await page.locator("#main-content").boundingBox(),content=await page.locator(selector).first().boundingBox();
+          assert(content.y<main.y+main.height-24,"first content appears within the reading viewport");
+          assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);
+          assert.equal(await page.locator("#main-content").evaluate(e=>getComputedStyle(e).paddingBottom),"0px");
+          const clipped=await page.locator("#main-content .ui-select-trigger").evaluateAll(es=>es.filter(e=>e.getClientRects().length).some(e=>{const r=e.getBoundingClientRect(),m=document.getElementById("main-content").getBoundingClientRect();return r.right>m.right+1||r.left<m.left-1;}));assert(!clipped);
+          if(name==="stats")assert(await page.locator(".ft-monthly-story").evaluate(panel=>{const p=panel.getBoundingClientRect();return [...panel.querySelectorAll(".ft-monthly-ring,.ft-monthly-legend")].every(e=>{const r=e.getBoundingClientRect();return r.left>=p.left&&r.right<=p.right+1;});}),"overview graphics and labels fit their panel without masked clipping");
+        });
+        if(width===320||width===1440)await shot(`guidelines-${name}-${width}`);
+      }
+    }
+    await page.setViewportSize({width:320,height:568});
+    await check("mobile browsing has one scroll and returns from the reader without jumping",async()=>{
+      await go("/history");const main=page.locator("#main-content");
+      assert.equal(await page.locator(".history-list-scroll").evaluate(e=>getComputedStyle(e).overflowY),"visible");
+      const row=page.locator(".history-card-main").nth(3);await row.scrollIntoViewIfNeeded();const before=await main.evaluate(e=>e.scrollTop);assert(before>100);
+      await row.click();await page.locator(".article-detail-body:visible").waitFor();await page.getByRole("button",{name:"关闭详情",exact:true}).click();await page.locator(".article-detail-body:visible").waitFor({state:"hidden"});
+      await page.waitForFunction(element=>document.activeElement===element,await row.elementHandle());assert(Math.abs(await main.evaluate(e=>e.scrollTop)-before)<=1);
+    });
+    await check("library selects support keyboard, collision limits and focus return inside the view sheet",async()=>{
+      await go("/knowledge");const status=page.getByRole("combobox",{name:"知识状态",exact:true});await status.click();
+      await page.waitForFunction(()=>document.activeElement?.getAttribute("role")==="option");
+      await page.keyboard.press("End");await page.waitForFunction(()=>document.activeElement?.textContent?.includes("已过时"));assert((await page.evaluate(()=>document.activeElement?.textContent)).includes("已过时"));await page.keyboard.press("Escape");await page.getByRole("listbox").waitFor({state:"hidden"});await page.waitForFunction(element=>document.activeElement===element,await status.elementHandle());
+      await page.getByRole("button",{name:"知识排序与显示",exact:true}).click();const sort=page.getByRole("combobox",{name:"知识条目排序",exact:true});await sort.click();
+      const box=await page.getByRole("listbox").boundingBox();assert(box.x>=0&&box.y>=0&&box.x+box.width<=321&&box.y+box.height<=569);
+      await shot("guidelines-sort-popup-320");await page.keyboard.press("Escape");await page.getByRole("listbox").waitFor({state:"hidden"});await page.getByRole("button",{name:"关闭操作面板",exact:true}).click();
+    });
+    await check("the library empty state has a reachable primary action and no disabled pagination",async()=>{
+      cards=[];await go("/knowledge");await page.locator(".kl-empty").waitFor();const action=await page.locator(".kl-empty button").first().boundingBox(),main=await page.locator("#main-content").boundingBox();
+      assert(action.y+action.height<=main.y+main.height+1,"the short-screen starting action is fully visible");assert.equal(await page.locator(".kl-pagination").count(),0);await shot("guidelines-knowledge-empty-320");
+    });
+  } else if(process.env.KNOWLEDGE_IMAGE_ONLY === "1") {
     await page.setViewportSize({width:390,height:844});
     await check("image fit, zoom, reset, gallery and focus",imageReadingRegression);
   } else {
@@ -1107,6 +1146,10 @@ try {
     await page.getByRole("menuitem", {name:"批量选择", exact:true}).click();
     assert(await page.locator(".kl-card-check").first().isVisible());
     assert(await page.locator(".kl-batchbar").isVisible());
+    const all=page.getByRole("checkbox",{name:"选择当前页全部知识条目",exact:true});
+    assert(await all.evaluate(e=>e.indeterminate),"one selected card displays the mixed checkbox state");
+    await all.focus();await page.keyboard.press("Space");assert(await all.isChecked());assert(!(await all.evaluate(e=>e.indeterminate)));
+    await page.keyboard.press("Space");assert(!(await all.isChecked()));
     await page.getByRole("button", {name:"结束选择", exact:true}).click();
     assert(await page.locator(".kl-card-check").first().isHidden());
     assert.equal(await page.locator(".kl-batchbar").count(), 0);
@@ -1204,10 +1247,16 @@ try {
     await page.getByRole("dialog",{name:"周期回顾阅读操作",exact:true}).waitFor({state:"hidden"});
     await page.getByRole("button",{name:"关闭复盘详情",exact:true}).click();
   });
-  await check("mobile settings shows the selected compact category", async () => {
+  await check("mobile settings uses a complete, visible library category selector", async () => {
     await go("/settings?tab=appearance"); await healthy(".st-main");
-    const tab = await page.getByRole("tab", { name: "外观", exact: true }).boundingBox();
+    const selector=page.getByRole("combobox",{name:"设置分类",exact:true});
+    const tab = await selector.boundingBox();
     assert(tab && tab.x >= 0 && tab.x + tab.width <= 391, "selected category remains visible");
+    assert((await selector.innerText()).includes("外观"));
+    await selector.click();assert.equal(await page.getByRole("option").count(),5,"all five categories remain discoverable");await page.keyboard.press("Escape");
+    await page.getByRole("listbox").waitFor({state:"hidden"});
+    await page.waitForFunction(element=>element===document.activeElement,await selector.elementHandle());
+    assert(await selector.evaluate(e=>e===document.activeElement),"selector restores focus after dismissing its menu");
     await shot("settings-reading-first");
   });
   await check("image viewer supports nested dialogs, zoom, gallery and focus return", imageReadingRegression);

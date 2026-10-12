@@ -113,23 +113,23 @@
   --ui-motion-standard: 180ms;
   --ui-motion-enter: 240ms;
   --ui-motion-ease: cubic-bezier(0.2, 0.7, 0.2, 1);
-  --ui-canvas: var(--sage-2);
-  --ui-surface: var(--sage-1);
-  --ui-surface-subtle: var(--sage-3);
-  --ui-surface-soft: var(--sage-2);
+  --ui-canvas: #f7f8fa;
+  --ui-surface: #ffffff;
+  --ui-surface-subtle: #f1f3f6;
+  --ui-surface-soft: #f7f8fa;
   --ui-surface-raised: #ffffff;
-  --ui-surface-inset: var(--sage-3);
-  --ui-surface-hover: var(--sage-4);
+  --ui-surface-inset: #f1f3f6;
+  --ui-surface-hover: #e9edf2;
   --ui-surface-selected: color-mix(in srgb, var(--color-accent) 10%, #ffffff);
-  --ui-border: var(--sage-6);
-  --ui-border-strong: var(--sage-8);
+  --ui-border: #e1e5eb;
+  --ui-border-strong: #b7bfcb;
   --ui-selected-border: color-mix(in srgb, var(--color-accent) 28%, transparent);
   --ui-accent-text: #4f46e5;
   --ui-accent-solid: #4f46e5;
   --ui-focus: var(--ui-accent-solid);
-  --ui-text: var(--sage-12);
-  --ui-text-muted: var(--sage-11);
-  --ui-text-subtle: var(--sage-11);
+  --ui-text: #20242c;
+  --ui-text-muted: #596372;
+  --ui-text-subtle: #596372;
   --ui-text-disabled: #a0adbb;
   --ui-code-surface: #f6f8fb;
   --ui-code-text: #1f2937;
@@ -170,26 +170,26 @@
   --ui-info-text: #175cd3;
   --ui-info-action: #175cd3;
   --ui-info-action-hover: #124eae;
-  --ui-radius-panel: 24px;
-  --ui-sidebar-surface: var(--sage-1);
+  --ui-radius-panel: 12px;
+  --ui-sidebar-surface: #f2f4f7;
 }
 
 .dark {
-  --ui-canvas: var(--sage-1);
-  --ui-surface: var(--sage-2);
-  --ui-surface-subtle: var(--sage-3);
-  --ui-surface-soft: var(--sage-2);
-  --ui-surface-raised: var(--sage-3);
-  --ui-surface-inset: var(--sage-1);
-  --ui-surface-hover: var(--sage-4);
+  --ui-canvas: #111318;
+  --ui-surface: #191c22;
+  --ui-surface-subtle: #22262e;
+  --ui-surface-soft: #171a20;
+  --ui-surface-raised: #22262e;
+  --ui-surface-inset: #14171c;
+  --ui-surface-hover: #2b303a;
   --ui-surface-selected: var(--color-accent-light);
-  --ui-border: var(--sage-6);
-  --ui-border-strong: var(--sage-8);
+  --ui-border: #303640;
+  --ui-border-strong: #535d6c;
   --ui-selected-border: color-mix(in srgb, var(--color-accent) 34%, transparent);
   --ui-focus: var(--ui-accent-solid);
-  --ui-text: var(--sage-12);
-  --ui-text-muted: var(--sage-11);
-  --ui-text-subtle: var(--sage-11);
+  --ui-text: #edf0f5;
+  --ui-text-muted: #abb4c2;
+  --ui-text-subtle: #abb4c2;
   --ui-text-disabled: #626c7a;
   --ui-code-surface: #121820;
   --ui-code-text: #e5edf7;
@@ -230,7 +230,7 @@
   --ui-info-text: #93c5fd;
   --ui-info-action: #1d4ed8;
   --ui-info-action-hover: #1e40af;
-  --ui-sidebar-surface: var(--sage-2);
+  --ui-sidebar-surface: #15181e;
 }
 
 @layer base {
@@ -1857,7 +1857,7 @@
   line-height: 1.25;
 }
 
-/* Mobile: main content gets bottom padding for tab bar */
+/* Mobile: the shell allocates the tab bar outside the reading viewport. */
 @media (max-width: 767px) {
   html { height: auto; min-height: 100%; }
   body { height: auto; min-height: 100svh; overflow-y: auto; overflow-x: hidden; }
@@ -1870,7 +1870,7 @@
     padding-right: env(safe-area-inset-right, 0px);
   }
   main {
-    padding-bottom: var(--ui-mobile-nav-total-height);
+    padding-bottom: 0;
     scroll-padding-bottom: calc(var(--ui-mobile-nav-total-height) + 1rem);
     min-width: 0;
   }

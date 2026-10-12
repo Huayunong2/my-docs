@@ -1,3 +1,4 @@
+import { Input } from "./ui/reading-surface";
 import ReadingImage from "./workspace/ReadingImage";
 import { memo, useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
 import ReactMarkdown from "react-markdown";
@@ -174,7 +175,7 @@ function MermaidControls({
         </span>
         <label className="flex h-10 min-h-10 items-center rounded-md px-1 md:h-8 md:min-h-8">
           <span className="sr-only">图表缩放比例</span>
-          <input
+          <Input
             type="range"
             min={MERMAID_MIN_SCALE}
             max={MERMAID_MAX_SCALE}

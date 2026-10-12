@@ -1,3 +1,5 @@
+import { Textarea } from "../ui/reading-surface";
+import { SelectField, SelectItem } from "../ui/select";
 import { motion, useReducedMotion } from "framer-motion";
 import { useSimpleDisplay } from "../../lib/simpleDisplay";
 import { Button } from "../ui/button";
@@ -90,19 +92,19 @@ export default function ReusePanel({ cardId }: { cardId: string }) {
           <p role="status"><Check size={15} />{justRecorded ? "已记录一次，可选填使用场景。" : "补充这次复用的使用场景。"}</p>
           <label>
             用于哪个项目
-            <select className="ui-field" value={project} onChange={(event) => setProject(event.target.value)}>
-              <option value="">暂不填写</option>
-              {project && !spaces.data?.some(space => space.kind === "project" && space.name === project) && <option value={project}>{project}</option>}
+            <SelectField aria-label="用于哪个项目" className="ui-field" value={project} onValueChange={(event) => setProject(event)}>
+              <SelectItem value="">暂不填写</SelectItem>
+              {project && !spaces.data?.some(space => space.kind === "project" && space.name === project) && <SelectItem value={project}>{project}</SelectItem>}
               {spaces.data?.filter((space) => space.kind === "project").map((space) => (
-                <option value={space.name} key={space.name}>
+                <SelectItem value={space.name} key={space.name}>
                   {space.name}{space.status === "archived" ? "（已归档）" : ""}
-                </option>
+                </SelectItem>
               ))}
-            </select>
+            </SelectField>
           </label>
           <label>
             解决了什么问题
-            <textarea
+            <Textarea
               className="ui-textarea"
               maxLength={2000}
               value={problem}

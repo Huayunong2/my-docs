@@ -505,14 +505,16 @@ pub(crate) enum AiTask {
     KnowledgeExtract,
     WeeklyReview,
     MonthlyReview,
+    ProfileAnalysis,
 }
 
 impl AiTask {
-    pub(crate) const ALL: [Self; 4] = [
+    pub(crate) const ALL: [Self; 5] = [
         Self::DailySummary,
         Self::KnowledgeExtract,
         Self::WeeklyReview,
         Self::MonthlyReview,
+        Self::ProfileAnalysis,
     ];
 
     pub(crate) const fn key(self) -> &'static str {
@@ -521,6 +523,7 @@ impl AiTask {
             Self::KnowledgeExtract => "knowledge_extract",
             Self::WeeklyReview => "weekly_review",
             Self::MonthlyReview => "monthly_review",
+            Self::ProfileAnalysis => "profile_analysis",
         }
     }
 }
@@ -567,6 +570,7 @@ impl AiRoutingConfig {
         routes.insert(AiTask::KnowledgeExtract.key().into(), "fast".into());
         routes.insert(AiTask::WeeklyReview.key().into(), "pro".into());
         routes.insert(AiTask::MonthlyReview.key().into(), "pro".into());
+        routes.insert(AiTask::ProfileAnalysis.key().into(), "pro".into());
         Self {
             profiles: vec![profile("fast", "快速模型"), profile("pro", "高质量模型")],
             routes,
@@ -1116,4 +1120,129 @@ mod usage_compatibility_tests {
         .unwrap();
         assert_eq!(response.usage.unwrap().total_tokens, 30);
     }
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields, rename_all = "camelCase")]
+pub(crate) struct PersonalProfile {
+    pub name: String,
+    pub direction: String,
+    pub city: String,
+    pub bio: String,
+    pub goal: String,
+    pub preference: String,
+    pub email: String,
+    pub phone: String,
+    pub website: String,
+    pub skills: Vec<String>,
+}
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields, rename_all = "camelCase")]
+pub(crate) struct PersonalSource {
+    pub kind: String,
+    pub target_id: String,
+    pub title: String,
+    pub url: String,
+    pub date: String,
+    pub available: bool,
+}
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields, rename_all = "camelCase")]
+pub(crate) struct PersonalEntry {
+    pub id: String,
+    pub kind: String,
+    pub title: String,
+    pub organization: String,
+    pub start: String,
+    pub end: String,
+    pub status: String,
+    pub degree: String,
+    pub major: String,
+    pub position: String,
+    pub role: String,
+    pub focus: String,
+    pub description: String,
+    pub result: String,
+    pub achievement_type: String,
+    pub source_note: String,
+    pub source_url: String,
+    pub sources: Vec<PersonalSource>,
+    pub parent_id: String,
+    pub tags: Vec<String>,
+    pub ai_allowed: bool,
+    pub removed: bool,
+    pub updated_at: String,
+}
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields, rename_all = "camelCase")]
+pub(crate) struct PersonalGoal {
+    pub id: String,
+    pub title: String,
+    pub description: String,
+    pub status: String,
+    pub target_date: String,
+    pub next_step: String,
+    pub space_id: String,
+    pub space_title: String,
+    pub space_available: bool,
+    pub ai_allowed: bool,
+    pub removed: bool,
+    pub updated_at: String,
+}
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields, rename_all = "camelCase")]
+pub(crate) struct PersonalAnalysis {
+    pub id: String,
+    pub status: String,
+    pub question: String,
+    pub content: String,
+    pub model: String,
+    pub created_at: String,
+    pub profile_revision: i64,
+    pub purpose: String,
+    pub include_profile: bool,
+    pub imported: bool,
+    pub context_text: String,
+    pub context_fingerprint: String,
+    pub outdated: bool,
+    pub entry_ids: Vec<String>,
+    pub goal_ids: Vec<String>,
+    pub error: String,
+}
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields, rename_all = "camelCase")]
+pub(crate) struct PersonalArchive {
+    pub profile: PersonalProfile,
+    pub entries: Vec<PersonalEntry>,
+    pub goals: Vec<PersonalGoal>,
+    pub analyses: Vec<PersonalAnalysis>,
+}
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct PersonalSnapshot {
+    pub revision: i64,
+    pub updated_at: String,
+    pub profile: PersonalProfile,
+    pub entries: Vec<PersonalEntry>,
+    pub goals: Vec<PersonalGoal>,
+    pub analyses: Vec<PersonalAnalysis>,
+}
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub(crate) struct PersonalContextRequest {
+    pub expected_revision: i64,
+    pub purpose: String,
+    pub include_profile: bool,
+    pub entry_ids: Vec<String>,
+    #[serde(default)]
+    pub goal_ids: Vec<String>,
+}
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct PersonalContext {
+    pub revision: i64,
+    pub text: String,
+    pub fingerprint: String,
+    pub entry_count: usize,
+    pub goal_count: usize,
 }

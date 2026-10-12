@@ -1,3 +1,5 @@
+import { Input, Textarea } from "./ui/reading-surface";
+import { Checkbox } from "./ui/checkbox";
 import CandidateOrganizer from "./knowledge/CandidateOrganizer";
 import { useEffect, useMemo, useRef, useState } from "react";
 import * as Dialog from "@radix-ui/react-dialog";
@@ -1099,7 +1101,7 @@ export default function KnowledgeImportDialog({
                               >
                                 <div className="flex items-start gap-2 px-2.5 py-2.5">
                                   <label className="flex h-11 w-11 shrink-0 cursor-pointer items-center justify-center rounded-lg hover:bg-[var(--ui-surface-hover)] md:h-9 md:w-9">
-                                    <input
+                                    <Checkbox
                                       type="checkbox"
                                       checked={selected}
                                       onChange={() =>
@@ -1258,7 +1260,7 @@ export default function KnowledgeImportDialog({
                       manual
                     />
                     {manualFormat === "text" && (
-                      <input
+                      <Input
                         value={singleTitle}
                         onChange={(event) => setSingleTitle(event.target.value)}
                         placeholder="这个知识条目的标题"
@@ -1285,7 +1287,7 @@ export default function KnowledgeImportDialog({
                         />
                       </div>
                     ) : (
-                      <textarea
+                      <Textarea
                         value={manualRaw}
                         onChange={(event) => setManualRaw(event.target.value)}
                         placeholder={

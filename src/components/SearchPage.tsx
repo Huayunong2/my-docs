@@ -1,3 +1,4 @@
+import { Input } from "./ui/reading-surface";
 import { useEffect, useState, useCallback, useRef } from "react";
 import { Link } from "@tanstack/react-router";
 import WorkspaceHeader from "./workspace/WorkspaceHeader";
@@ -348,7 +349,7 @@ export default function SearchPage({
     <div className="ft-page ft-search">
       <WorkspaceHeader icon={Search} title="搜索" description="" />
       <section className="ft-search-shell" aria-label="全文搜索">
-        <form
+        <form noValidate
           className="ft-search-input"
           onSubmit={(event) => {
             event.preventDefault();
@@ -356,7 +357,7 @@ export default function SearchPage({
           }}
         >
           <Search size={21} />
-          <input
+          <Input
             ref={inputRef}
             type="search"
             value={query}

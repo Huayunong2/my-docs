@@ -25,8 +25,8 @@ describe("theme state", () => {
   });
 
   it("uses a light browser surface color for light mode", () => {
-    expect(themeColorForMode(false)).toBe("#f7f9f8");
-    expect(themeColorForMode(true)).toBe("#101211");
+    expect(themeColorForMode(false)).toBe("#f7f8fa");
+    expect(themeColorForMode(true)).toBe("#111318");
   });
 
   it("turns the quick toggle into an explicit persisted mode", () => {

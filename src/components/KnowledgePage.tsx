@@ -1,3 +1,5 @@
+import DatePickerPopover from "./ui/date-picker";
+import { Input, Textarea } from "./ui/reading-surface";
 import { useReadingScroll } from "../lib/useReadingScroll";
 import { useEffect, useMemo, useRef, useState } from "react";
 import KnowledgeLibrary, { type LibraryFilter } from "./knowledge/KnowledgeLibrary";
@@ -2110,7 +2112,7 @@ export default function KnowledgePage({
                 className="absolute left-3 top-1/2 -translate-y-1/2 text-[var(--ui-text-subtle)]"
                 size={16}
               />
-              <input
+              <Input
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
                 onKeyDown={(e) => {
@@ -2173,7 +2175,7 @@ export default function KnowledgePage({
                       className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-[var(--ui-text-subtle)]"
                       size={15}
                     />
-                    <input
+                    <Input
                       value={spaceFilterQuery}
                       onChange={(event) =>
                         setSpaceFilterQuery(event.target.value)
@@ -2571,7 +2573,7 @@ export default function KnowledgePage({
                 </div>
                 <div className="flex items-center gap-2">
                   {batchMode === "tag" || batchMode === "remove_tag" ? (
-                    <input
+                    <Input
                       value={batchValue}
                       onChange={(e) => setBatchValue(e.target.value)}
                       onKeyDown={(e) => {
@@ -3013,7 +3015,7 @@ export default function KnowledgePage({
                           >
                             知识标题
                           </label>
-                          <input
+                          <Input
                             id="knowledge-card-title"
                             value={draft.title}
                             onChange={(e) =>
@@ -3194,7 +3196,7 @@ export default function KnowledgePage({
                                       #{tag} <X size={12} />
                                     </button>
                                   ))}
-                                  <input
+                                  <Input
                                     id="knowledge-card-tags"
                                     value={tagInput}
                                     onChange={(e) =>
@@ -3508,7 +3510,7 @@ export default function KnowledgePage({
                                 {sourceState === "error" &&
                                   "来源读取失败；可以修复连接后重试，也可以清空来源字段。"}
                               </p>
-                              <textarea
+                              <Textarea
                                 id="knowledge-source-excerpt"
                                 aria-label="支撑知识条目的来源片段"
                                 aria-invalid={!!fieldErrors.source}
@@ -3537,12 +3539,13 @@ export default function KnowledgePage({
                               >
                                 来源日期（可选）
                               </label>
-                              <input
+                              <DatePickerPopover
                                 id="knowledge-source-date"
-                                type="date"
+                                label="来源日期（可选）"
+                                hideLabel clearable
                                 value={draft.source_date}
                                 onChange={(e) =>
-                                  updateDraft({ source_date: e.target.value })
+                                  updateDraft({ source_date: e })
                                 }
                                 aria-invalid={!!fieldErrors.source}
                                 aria-describedby={[
@@ -3553,7 +3556,7 @@ export default function KnowledgePage({
                                 ]
                                   .filter(Boolean)
                                   .join(" ")}
-                                className="ui-field h-11 min-h-11 text-xs"
+                                className="w-full"
                               />
                               <p
                                 id="knowledge-source-date-help"
@@ -3573,7 +3576,7 @@ export default function KnowledgePage({
                               >
                                 有可读取来源时自动带入；手动来源片段可以留空。
                               </p>
-                              <input
+                              <Input
                                 id="knowledge-source-id"
                                 value={
                                   draft.source_article_id ||
@@ -3951,7 +3954,7 @@ function TagFilterPicker({
       {canSearch && (
         <label className="relative block">
           <Search className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-[var(--ui-text-subtle)]" size={compact ? 14 : 13} />
-          <input
+          <Input
             id={inputId}
             value={query}
             onChange={(event) => setQuery(event.target.value)}

@@ -7,6 +7,20 @@ const Select = SelectPrimitive.Root;
 const SelectGroup = SelectPrimitive.Group;
 const SelectValue = SelectPrimitive.Value;
 
+// Prefixing is injective and also gives an optional empty choice a valid
+// Radix item value. Domain values leave this component unchanged.
+export function SelectField({ value, onValueChange, children, className, placeholder, ...props }: {
+  value: string; onValueChange: (value: string) => void; children: React.ReactNode;
+  className?: string; placeholder?: string; disabled?: boolean; id?: string; "aria-label"?: string;
+}) {
+  const items = React.Children.map(children, child => React.isValidElement<{value: string}>(child)
+    ? React.cloneElement(child, { value: "choice:" + child.props.value }) : child);
+  return <Select value={"choice:" + value} onValueChange={next => onValueChange(next.slice(7))} disabled={props.disabled}>
+    <SelectTrigger {...props} className={className}><SelectValue placeholder={placeholder}/></SelectTrigger>
+    <SelectContent align="start">{items}</SelectContent>
+  </Select>;
+}
+
 const SelectTrigger = React.forwardRef<
   React.ElementRef<typeof SelectPrimitive.Trigger>,
   React.ComponentPropsWithoutRef<typeof SelectPrimitive.Trigger>
@@ -14,7 +28,7 @@ const SelectTrigger = React.forwardRef<
   <SelectPrimitive.Trigger
     ref={ref}
     className={cn(
-      "ui-field flex h-9 w-full items-center justify-between whitespace-nowrap rounded-lg px-3 py-2 text-sm leading-5 outline-hidden disabled:cursor-not-allowed disabled:opacity-50 [&>span]:line-clamp-1",
+      "ui-field ui-select-trigger flex min-h-10 w-full items-center justify-between gap-3 rounded-lg px-3 py-2 text-sm leading-5 outline-hidden disabled:cursor-not-allowed disabled:opacity-50 [&>span]:line-clamp-1",
       className
     )}
     {...props}
@@ -63,7 +77,7 @@ const SelectContent = React.forwardRef<
     <SelectPrimitive.Content
       ref={ref}
       className={cn(
-      "ui-floating-surface relative z-[90] max-h-96 min-w-[8rem] overflow-hidden rounded-xl",
+      "ui-floating-surface ui-select-content relative z-[110] min-w-[8rem] overflow-hidden rounded-xl",
         "data-[state=open]:animate-scale-in",
         position === "popper" && "data-[side=bottom]:translate-y-1 data-[side=left]:-translate-x-1 data-[side=right]:translate-x-1 data-[side=top]:-translate-y-1",
         className
@@ -73,7 +87,7 @@ const SelectContent = React.forwardRef<
     >
       <SelectScrollUpButton />
       <SelectPrimitive.Viewport
-        className={cn("p-1", position === "popper" && "h-[var(--radix-select-trigger-height)] w-full min-w-[var(--radix-select-trigger-width)]")}
+        className={cn("p-2", position === "popper" && "w-full min-w-[var(--radix-select-trigger-width)]")}
       >
         {children}
       </SelectPrimitive.Viewport>
@@ -102,7 +116,7 @@ const SelectItem = React.forwardRef<
   <SelectPrimitive.Item
     ref={ref}
     className={cn(
-      "relative flex w-full cursor-pointer select-none items-center rounded-lg py-1.5 pl-2 pr-8 text-sm leading-5 outline-hidden focus:bg-[var(--ui-surface-selected)] focus:text-[var(--ui-accent-text)] data-[disabled]:pointer-events-none data-[disabled]:opacity-50 dark:focus:bg-[var(--ui-surface-selected)]",
+      "ui-select-item relative flex w-full cursor-pointer select-none items-center rounded-lg py-2.5 pl-3 pr-9 text-sm leading-5 outline-hidden focus:bg-[var(--ui-surface-selected)] focus:text-[var(--ui-accent-text)] data-[disabled]:pointer-events-none data-[disabled]:opacity-50 dark:focus:bg-[var(--ui-surface-selected)]",
       className
     )}
     {...props}

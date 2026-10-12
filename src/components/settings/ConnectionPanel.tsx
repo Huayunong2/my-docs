@@ -1,3 +1,4 @@
+import { Checkbox } from "../ui/checkbox";
 import RuntimeOverview from "./RuntimeOverview";
 import { useEffect, useState } from "react";
 import { ChevronDown, ClipboardCopy, Link2, RefreshCw, Save, Trash2, Wifi } from "lucide-react";
@@ -192,7 +193,7 @@ export default function ConnectionPanel({
             {connectionStatusLabel}
           </span>
         </div>
-        <form onSubmit={(event) => { event.preventDefault(); void saveAndTest(); }} className="settings-connection-form grid gap-5">
+        <form noValidate onSubmit={(event) => { event.preventDefault(); void saveAndTest(); }} className="settings-connection-form grid gap-5">
           <div className="settings-connection-fields grid gap-5 md:grid-cols-[minmax(0,1.15fr)_minmax(17rem,0.85fr)]">
             <label htmlFor="server-url" className="block min-w-0">
               <span className="block text-sm font-semibold text-[var(--ui-text)]">服务器地址</span>
@@ -240,7 +241,7 @@ export default function ConnectionPanel({
           </div>
           <div className="settings-connection-controls flex flex-col gap-3 border-t border-[var(--ui-border)] pt-4 sm:flex-row sm:items-center sm:justify-between">
             <label className="flex min-h-10 items-center gap-2 text-sm text-[var(--ui-text-muted)]">
-              <input type="checkbox" checked={showToken} onChange={(event) => setShowToken(event.target.checked)} disabled={testing} className="accent-[var(--ui-accent-solid)]" />
+              <Checkbox type="checkbox" checked={showToken} onChange={(event) => setShowToken(event.target.checked)} disabled={testing} className="accent-[var(--ui-accent-solid)]" />
               显示令牌
             </label>
             <div className="flex flex-col gap-2 sm:flex-row sm:justify-end">

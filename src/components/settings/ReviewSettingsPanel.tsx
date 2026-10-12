@@ -118,7 +118,7 @@ export default function ReviewSettingsPanel({ onDirtyChange }: { onDirtyChange?:
             </SecondaryBtn>
           </div>
         ) : (
-          <form onSubmit={(event) => { event.preventDefault(); save(); }}>
+          <form noValidate onSubmit={(event) => { event.preventDefault(); save(); }}>
             <div className="grid gap-3 sm:grid-cols-2">
               <SettingField
                 id="review-new-cards"

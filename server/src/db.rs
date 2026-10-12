@@ -1,3 +1,4 @@
+pub(crate) mod profile;
 pub(crate) mod workspace;
 #[cfg(test)]
 mod workspace_benchmark;
@@ -466,6 +467,8 @@ pub(crate) struct ArchiveImportReport {
     pub(crate) imported_articles: usize,
     pub(crate) imported_reviews: usize,
     pub(crate) imported_knowledge_cards: usize,
+    pub(crate) imported_personal_entries: usize,
+    pub(crate) imported_personal_goals: usize,
 }
 
 #[derive(Debug)]
@@ -516,6 +519,8 @@ struct PortableArchiveInput {
     knowledge_sources: Vec<PortableSource>,
     #[serde(default)]
     knowledge_reuse: Vec<PortableReuse>,
+    #[serde(default)]
+    personal_profile: Option<crate::models::PersonalArchive>,
 }
 
 #[derive(Debug, serde::Serialize, Deserialize)]
@@ -2127,6 +2132,18 @@ impl Database {
             tx.commit()?;
         }
 
+        if current < 28 {
+            let tx = self.conn.unchecked_transaction()?;
+            tx.execute_batch("CREATE TABLE personal_profile (id INTEGER PRIMARY KEY CHECK(id=1), revision INTEGER NOT NULL DEFAULT 0, data TEXT NOT NULL, updated_at TEXT NOT NULL DEFAULT '');
+                INSERT INTO personal_profile(id,data) VALUES(1,'{}');
+                CREATE TABLE personal_entries(id TEXT PRIMARY KEY, kind TEXT NOT NULL, status TEXT NOT NULL, start_date TEXT NOT NULL DEFAULT '', removed INTEGER NOT NULL DEFAULT 0, data TEXT NOT NULL);
+                CREATE INDEX personal_entries_timeline ON personal_entries(removed,start_date DESC);
+                CREATE TABLE personal_goals(id TEXT PRIMARY KEY, removed INTEGER NOT NULL DEFAULT 0, data TEXT NOT NULL);
+                CREATE TABLE personal_analyses(id TEXT PRIMARY KEY,status TEXT NOT NULL,created_at TEXT NOT NULL,data TEXT NOT NULL);
+                INSERT INTO schema_version(version) VALUES(28);")?;
+            tx.commit()?;
+        }
+
         self.ensure_builtin_wallpapers()?;
         backfill_wallpaper_cache_versions(&self.conn)?;
         Ok(())
@@ -2864,7 +2881,8 @@ impl PortableArchivePersistence<'_> {
             rows
         };
         Ok(serde_json::json!({
-            "version": 3,
+            "version": 4,
+            "personal_profile": profile::archive(self.conn).map_err(|_| ArchiveImportError::Storage(rusqlite::Error::InvalidQuery))?,
             "articles": articles,
             "reviews": reviews,
             "knowledge_cards": knowledge_cards,
@@ -2875,9 +2893,28 @@ impl PortableArchivePersistence<'_> {
         }))
     }
 
+    #[cfg(test)]
     pub(crate) fn import_json(
         &mut self,
         value: Value,
+    ) -> std::result::Result<ArchiveImportReport, ArchiveImportError> {
+        self.import_json_with_profile_mode(value, false)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn import_json_with_profile_mode(
+        &mut self,
+        value: Value,
+        replace_profile: bool,
+    ) -> std::result::Result<ArchiveImportReport, ArchiveImportError> {
+        self.import_json_with_profile_revision(value, replace_profile, None)
+    }
+
+    pub(crate) fn import_json_with_profile_revision(
+        &mut self,
+        value: Value,
+        replace_profile: bool,
+        profile_revision: Option<i64>,
     ) -> std::result::Result<ArchiveImportReport, ArchiveImportError> {
         let archive: PortableArchiveInput = serde_json::from_value(value)?;
         validate_archive(&archive)?;
@@ -2885,6 +2922,14 @@ impl PortableArchivePersistence<'_> {
             imported_articles: archive.articles.len(),
             imported_reviews: archive.reviews.len(),
             imported_knowledge_cards: archive.knowledge_cards.len(),
+            imported_personal_entries: archive
+                .personal_profile
+                .as_ref()
+                .map_or(0, |p| p.entries.len()),
+            imported_personal_goals: archive
+                .personal_profile
+                .as_ref()
+                .map_or(0, |p| p.goals.len()),
         };
         let legacy_archive_without_review_items = archive.version < 3;
         let tx = self.conn.transaction()?;
@@ -3195,6 +3240,28 @@ impl PortableArchivePersistence<'_> {
         for item in archive.knowledge_reuse {
             let e = item.event;
             tx.execute("INSERT INTO knowledge_reuse(id,card_id,used_at,project,problem,deleted_at) VALUES(?1,?2,?3,?4,?5,?6) ON CONFLICT(id) DO UPDATE SET project=excluded.project,problem=excluded.problem,deleted_at=CASE WHEN knowledge_reuse.deleted_at!='' THEN knowledge_reuse.deleted_at ELSE excluded.deleted_at END WHERE knowledge_reuse.card_id=excluded.card_id",params![e.id,e.card_id,e.used_at,e.project,e.problem,item.deleted_at])?;
+        }
+        if let Some(personal) = archive.personal_profile {
+            if replace_profile {
+                if let Some(expected) = profile_revision {
+                    let current: i64 = tx.query_row(
+                        "SELECT revision FROM personal_profile WHERE id=1",
+                        [],
+                        |r| r.get(0),
+                    )?;
+                    if expected != current {
+                        return Err(ArchiveImportError::Invalid(
+                            "个人档案在导入期间已更新，未替换任何数据；请重新刷新并确认。".into(),
+                        ));
+                    }
+                }
+            }
+            profile::import_archive(&tx, personal, replace_profile, &article_id_map).map_err(
+                |error| match error {
+                    profile::ProfileError::Invalid(message) => ArchiveImportError::Invalid(message),
+                    _ => ArchiveImportError::Storage(rusqlite::Error::InvalidQuery),
+                },
+            )?;
         }
         tx.commit()?;
         Ok(report)
@@ -5271,7 +5338,16 @@ fn validate_archive(archive: &PortableArchiveInput) -> std::result::Result<(), A
         return Err(ArchiveImportError::Invalid("知识来源或复用记录无效".into()));
     }
 
-    if !(1..=3).contains(&archive.version) {
+    if let Some(personal) = &archive.personal_profile {
+        if archive.version < 4 {
+            return Err(ArchiveImportError::Invalid(
+                "个人档案需要完整归档 v4".into(),
+            ));
+        }
+        crate::profile::validate_archive(personal)
+            .map_err(|_| ArchiveImportError::Invalid("个人档案归档无效".into()))?;
+    }
+    if !(1..=4).contains(&archive.version) {
         return Err(ArchiveImportError::Invalid(format!(
             "Unsupported portable archive version: {}",
             archive.version
@@ -5722,7 +5798,7 @@ mod migration_tests {
                 row.get(0)
             })
             .unwrap();
-        assert_eq!(version, 27);
+        assert_eq!(version, 28);
     }
 
     #[test]
@@ -5861,7 +5937,7 @@ mod migration_tests {
                 row.get(0)
             })
             .expect("read schema version");
-        assert_eq!(version, 27);
+        assert_eq!(version, 28);
     }
 
     fn v3_knowledge_cards_table() -> &'static str {
@@ -6029,7 +6105,7 @@ mod migration_tests {
                 row.get(0)
             })
             .expect("read schema version");
-        assert_eq!(version, 27);
+        assert_eq!(version, 28);
 
         // 已迁移的库再次 initialize 必须幂等，不报重复列错误
         db.initialize().expect("re-initialize is idempotent");
@@ -6063,7 +6139,7 @@ mod migration_tests {
                 row.get(0)
             })
             .expect("read schema version");
-        assert_eq!(version, 27);
+        assert_eq!(version, 28);
 
         let settings = db.review_settings().expect("default review settings");
         assert_eq!(settings.new_cards_per_day, 20);
@@ -6492,7 +6568,7 @@ mod migration_v5_tests {
                 row.get(0)
             })
             .expect("read schema version");
-        assert_eq!(version, 27);
+        assert_eq!(version, 28);
         db.initialize()
             .expect("re-initialize after v5 is idempotent");
     }
@@ -6607,7 +6683,7 @@ mod wallpaper_migration_tests {
                 row.get(0)
             })
             .expect("read schema version");
-        assert_eq!(version, 27);
+        assert_eq!(version, 28);
     }
 }
 

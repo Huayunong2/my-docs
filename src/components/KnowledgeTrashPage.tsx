@@ -1,3 +1,4 @@
+import { Checkbox } from "./ui/checkbox";
 import { useEffect, useMemo, useState } from "react";
 import { Link } from "@tanstack/react-router";
 import { ArrowLeft, Check, RefreshCw, RotateCcw, Trash2 } from "lucide-react";
@@ -114,7 +115,7 @@ export default function KnowledgeTrashPage() {
         <div className="ui-soft-divider flex flex-wrap items-center justify-between gap-3 border-b px-4 py-3 sm:px-5">
           <div className="flex items-center gap-3">
             <label className="inline-flex min-h-11 min-w-11 items-center gap-2 rounded-lg px-1 text-xs font-medium text-[var(--ui-text-muted)] md:min-h-9 md:min-w-0">
-              <input
+              <Checkbox
                 type="checkbox"
                 checked={allSelected}
                 onChange={toggleAll}
@@ -162,7 +163,7 @@ export default function KnowledgeTrashPage() {
               return (
                 <div key={card.id} data-state={selected ? "selected" : "idle"} className={["knowledge-card-row relative flex items-center gap-3 px-4 py-3 sm:px-5", selected ? "" : "hover:bg-[var(--ui-surface-hover)]"].join(" ")}>
                   <label className="flex h-11 w-11 shrink-0 cursor-pointer items-center justify-center rounded-lg hover:bg-[var(--ui-surface-hover)] md:h-9 md:w-9">
-                    <input
+                    <Checkbox
                       type="checkbox"
                       checked={selected}
                       onChange={() => toggleSelected(card.id)}

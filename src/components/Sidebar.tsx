@@ -37,6 +37,7 @@ import {
   PanelLeftOpen,
   Search,
   Settings,
+  UserRound,
   Sun,
   X,
   type LucideIcon,
@@ -51,6 +52,7 @@ const primary: NavItem[] = [
   { id: "today", label: "今日", icon: NotebookPen },
   { id: "history", label: "记录", icon: CalendarDays },
   { id: "knowledge", label: "知识", icon: BookMarked },
+  { id: "profile", label: "个人档案", icon: UserRound },
 ];
 const learning: NavItem[] = [
   { id: "review", label: "复习", icon: Brain },
@@ -62,7 +64,7 @@ const utilities: NavItem[] = [
   { id: "settings", label: "设置", icon: Settings },
 ];
 const mobilePrimary = [primary[0], primary[2], learning[0], learning[1]];
-const mobileMore = [primary[1], learning[2], ...utilities];
+const mobileMore = [primary[1], primary[3], learning[2], ...utilities];
 const themeIcons = { system: Monitor, light: Sun, dark: Moon };
 interface SidebarProps {
   page: Page;
