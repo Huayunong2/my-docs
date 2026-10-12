@@ -10,10 +10,11 @@ const SheetContent = React.forwardRef<
   React.ElementRef<typeof DialogPrimitive.Content>,
   React.ComponentPropsWithoutRef<typeof DialogPrimitive.Content> & {
     side?: "top" | "right" | "bottom" | "left";
+    overlayClassName?: string;
   }
->(({ side = "bottom", className, children, ...props }, ref) => (
+>(({ side = "bottom", className, overlayClassName, children, ...props }, ref) => (
   <DialogPrimitive.Portal>
-    <DialogPrimitive.Overlay className="ui-overlay fixed inset-0 z-[70] backdrop-blur-[2px] data-[state=open]:animate-fade-in" />
+    <DialogPrimitive.Overlay className={cn("ui-overlay fixed inset-0 z-[70] backdrop-blur-[2px] data-[state=open]:animate-fade-in", overlayClassName)} />
     <DialogPrimitive.Content
       ref={ref}
       className={cn(

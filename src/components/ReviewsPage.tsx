@@ -522,9 +522,9 @@ export default function ReviewsPage({
 
   const openSources = async (
     review: Review,
-    event?: React.MouseEvent<HTMLButtonElement>,
+    event?: React.MouseEvent<HTMLButtonElement> | HTMLButtonElement | null,
   ) => {
-    if (event) sourceTriggerRef.current = event.currentTarget;
+    if (event) sourceTriggerRef.current = event instanceof HTMLButtonElement ? event : event.currentTarget;
     const requestId = ++sourceRequestRef.current;
     setSourceModal({
       review,

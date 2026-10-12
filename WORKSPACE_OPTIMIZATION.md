@@ -224,3 +224,92 @@ KNOWLEDGE_FRONTEND_ORIGIN=http://127.0.0.1:4173 node scripts/workspace-optimizat
 阅读改动还包含今日编辑器按需挂载、读取失败与空记录区分、明确编辑入口 `tab=edit`、搜索返回条件与滚动恢复、设置紧凑分类和单题复习。复用区域重复的根因是相邻组件使用相同 React key，已改为按组件职责加前缀；重复开关整理器的回归保持只出现一个复用区域。
 
 基线：生产 UI 52 项通过，首屏 gzip 179,455 / 180,000 字节；服务端 fmt、140 项测试（2 项手动基准 ignored）和 clippy 通过。初次沙箱测试因禁止 loopback 监听失败，允许隔离本机监听后原命令通过；没有访问真实供应商。
+
+## 清新阅读工作台（2026-10-10）
+
+### 设计和依赖
+
+实施前先提交当前源码检查点 `a0c99cb`，从它建立 `codex/reading-workbench-ui`；收尾提交 `0562c6b` 增加批量选择回归和上一轮说明。两次提交均仅本地保存。
+
+本轮新增 Radix Colors 3.0.0、Tailwind Typography 0.5.20、React Resizable Panels 4.14.3、CVA 0.7.1 和 Radix Slot 1.4.0，保留现有 Radix、Motion、Panzoom、Sonner、cmdk、Lucide、TanStack。移除没有源码调用的 AutoAnimate。参考 [Radix 颜色角色](https://www.radix-ui.com/colors/docs/palette-composition/understanding-the-scale)、[Typography 官方接入](https://github.com/tailwindlabs/tailwindcss-typography)、[分栏官方接口](https://github.com/bvaughn/react-resizable-panels) 和 [Motion 可访问性](https://motion.dev/docs/react-accessibility)。共享组件参考 shadcn 的本地源码组合方式，按本项目的样式与交互实现，没有引入第二套完整 UI 框架。
+
+Sage 中性色统一明暗表面，原强调色及用户选择继续有效。面板约 24px 圆角、字段约 16px、按钮为柔和胶囊，正文 16–17px、行高 1.9、最大 72ch。代码与 Mermaid 使用 `not-prose` 保留高亮、复制及图表工具，表格只在自身区域横向滚动。删除旧移动标题间距和重复中性色规则，避免 Typography 与旧覆盖规则竞争。
+
+手机的今日、知识和周期回顾管理命令统一收进 Radix 底部面板：先关闭，再执行，返回焦点使用稳定入口；日期及筛选等连续控件仍可保持面板。面板跟随可视视口；正文不进入底部导航或任务状态条。实际复用区域保留一次点击保存与明确撤销，详情进入时有克制 Motion 反馈。系统减少动态效果和本机简洁显示继续生效。
+
+PC ≥1280px 的知识列表 260–420px、阅读区至少 480px，今日分栏默认约 53:47、两侧至少 320px。比例以 `reading-layout:<server>:<workspace>` 保存，仅属于本机辅助偏好。768–1279px 为单主体；移动端仍默认阅读。分栏库在宽屏页面意图下预加载，编辑器不会先在 Suspense 备用区域初始化再重新挂载。内部滚动位置跨分栏重挂载保留；知识列表位置和上次选中 ID 在当前会话内按服务器保留，返回原筛选时恢复，切换筛选后重置。只保存界面状态，不保存正文，刷新不承诺恢复这份会话内状态。
+
+正文图片沿用清洗后的地址，打开嵌套 Radix 查看器，默认完整适配图片，放大后支持拖动，也可缩小、复位及前后切换；关闭恢复原图片焦点及文章滚动。查看器按需加载，加载模块失败时保留正文阅读和返回入口；图像加载失败可重试。Panzoom 的监听器和实例在关闭／切图时释放。壁纸仍在外围呈现，正文使用稳定表面；手机知识阅读底色显式覆盖旧壁纸 `!important` 规则。
+
+### 构建和性能证据
+
+首屏 JavaScript gzip 从检查点的 179,455 字节降到本轮 177,288 字节（约 177.3 KB），继续低于 180,000 字节。快捷导航改为打开时加载；图片查看与可调整分栏按需加载。仍存在图表／Markdown 按需大 chunk 提示，没有关闭压缩或调整预算。
+
+比较使用同一机器、两份保留的生产资源、同一合成 API、loopback、无网络节流，每个场景先预热两次，再采集 25 次。按动画帧判断阅读正文／编辑器可见，再等待两帧，报告包含浏览器驱动开销；不是 LCP、INP 或真实用户 p75 指标。定位器默认阶梯轮询曾放大 PC 今日页的差值，因此旧、新资源均改用相同逐帧检测重新采样，未降低 10% 回退门槛。
+
+| 视口 | 场景 | 基线 p95 ms | 本轮 p95 ms | 变化 |
+| --- | --- | ---: | ---: | ---: |
+| 390px | 知识阅读 | 450.35 | 448.67 | -0.37% |
+| 390px | 今日阅读 | 431.76 | 432.86 | +0.26% |
+| 1440px | 知识阅读 | 484.39 | 481.09 | -0.68% |
+| 1440px | 今日编辑就绪 | 448.41 | 448.71 | +0.07% |
+
+测量同时保留资源数量、传输字节、LCP／CLS 实验室观察与主线程长任务；知识页资源约从 61 个增到 63–64 个，今日页从 37 个增到 39–40 个。额外库带来页面载荷成本，上述四个场景均未超过 p95 +10% 的门槛。SQLite 大数据基线与单连接锁竞争边界沿用前文，本轮没有改变服务端执行路径或宣称解决所有竞争。
+
+性能模式：`KNOWLEDGE_PERFORMANCE_ONLY=1` 执行工作区脚本；可用 `KNOWLEDGE_PERFORMANCE_BASELINE=<baseline performance.json>` 自动比较并断言 p95 回退上限。两份构建必须采用相同机器／条件，顺序运行，避免与浏览器回归同时采样。
+
+### 安全、兼容及维护
+
+锁文件同步，标准 `npm ci` 已验证。针对本轮 Typography 的构建期解析器固定到 postcss-selector-parser 7.1.6，并固定 source-map-js 1.2.2；构建和生产排版回归验证这两个覆盖兼容。兼容审计修复更新了锁文件中的 Vite 8.0.16。审计仍报告 5 项既有问题：Vitest／mocker 2 项 moderate，Mermaid／DOMPurify／KaTeX 3 项 low，无 high／critical；没有为消除报告执行不兼容主版本升级。
+
+本轮仅修改前端组件、样式、依赖、测试和说明。服务端 API、schema、业务配置、鉴权、端口、Tauri 壳和部署脚本均未修改；浏览器辅助存储只新增分栏偏好。局部来源查看回调从事件改为稳定入口元素，调用方同步更新。`tab=edit`、`returnTo`、筛选、分页和返回恢复契约保持。
+
+回退本轮 UI 提交可恢复此前显示和依赖；分栏偏好会被旧界面忽略，不需要操作业务数据库。检查点包含此前 v27 迁移实现，若回退到 v26 程序仍须遵守前文保护快照、导出和恢复约束；Git 源码检查点不替代数据保护。所有测试为合成数据与模拟供应商，没有生产部署、真实数据库写入／恢复或真实 AI 调用。
+
+### 变更文件与职责
+
+| 文件 | 目的 |
+| --- | --- |
+| `package.json`、`package-lock.json` | 精确依赖、删除 AutoAnimate、构建期审计覆盖与安装复现 |
+| `src/index.css`、`src/main.tsx` | Radix Colors、Typography 与统一样式入口 |
+| `src/lib/theme.ts`、`theme.test.ts` | 浏览器主题表面与 Sage 同步；按新颜色契约更新断言 |
+| `src/components/workspace/reading-workbench.css` | 共享颜色消费、圆角、正文、动效、图片、面板与分栏 |
+| `mobile-reading.css`、`mobile-workbench.css` | 删除重复正文间距、旧详情菜单及颜色覆盖，保留布局职责 |
+| `src/components/ui/button.tsx`、`reading-surface.tsx` | CVA／Slot 按钮、图标按钮、稳定阅读表面和可读字段 |
+| `src/components/ui/sheet.tsx` | 支持嵌套操作面板的遮罩层级 |
+| `src/components/workspace/ReadingActions.tsx` | 明确命令与连续控件，关闭后执行、视口适配及焦点返回 |
+| `ResponsiveSplit.tsx`、`WorkbenchSplit.tsx` | 宽屏按需加载、单次编辑器初始化、分栏键盘及比例保存 |
+| `ReadingImage.tsx`、`ReadingImageViewer.tsx` | 清洗后图像队列、按需查看、缩放、失败状态及资源释放 |
+| `src/lib/useWideLayout.ts`、`useReadingScroll.ts` | 宽屏订阅与内部滚动恢复 |
+| `src/App.tsx`、`src/components/CommandPalette.tsx` | 快捷导航按打开意图加载，保留键盘入口并恢复原触发位置 |
+| `src/components/MarkdownContent.tsx` | Typography、代码隔离、表格与图片阅读接入 |
+| `src/components/TodayPage.tsx` | 移动操作面板、宽屏分栏、窄屏切换与稳定正文 |
+| `src/components/KnowledgePage.tsx` | 共享命令、宽窄切换与详情滚动恢复 |
+| `src/components/knowledge/KnowledgeLibrary.tsx` | 分栏布局、列表恢复和既有批量管理分工 |
+| `KnowledgeReader.tsx`、`ReusePanel.tsx`、`CandidateOrganizer.tsx` | 共享按钮、轻量复用反馈和字段 |
+| `src/components/ArticleDetail.tsx` | 嵌套记录阅读的共享操作入口 |
+| `src/components/reviews/ReviewShared.tsx`、`src/components/ReviewsPage.tsx` | 周期回顾命令及来源焦点交接 |
+| `src/components/settings/RuntimeOverview.tsx` | 共享按钮组合设置链接 |
+| 两个浏览器回归脚本 | 图像、面板、分栏、返回恢复、对比度及性能验收 |
+| `README.md`、`AGENTS.md`、本说明 | 使用流程、索引、调研结论、证据和回退 |
+
+### 本轮验收结果
+
+- `npm ci`：标准安装通过；另有 `npm ci --ignore-scripts` 的锁文件初步检查。
+- `npm test`：31 个测试文件、133 项通过。主题色断言按新 Sage 浏览器表面更新，没有删减回归。
+- `npm run build`、`npm run check:bundle`：通过；首屏 gzip 177,288 / 180,000 字节。
+- 服务端 `cargo fmt --manifest-path server/Cargo.toml --check`、`cargo test --manifest-path server/Cargo.toml --locked`、`cargo clippy --manifest-path server/Cargo.toml --all-targets --locked -- -D warnings`：通过，140 项测试通过、2 项手动基准 ignored。仅模拟供应商需要允许 loopback 监听，未使用真实 AI。
+- 生产浏览器：62 项通过，业务写入 0；工作区：16 项通过，并覆盖六宽度明暗主题、正常文字角色对比度 ≥4.5、共享壁纸、简洁显示、短屏和模拟软键盘。
+- 新增知识列表实走验证了进入详情再返回的内部位置和选中标记；初次失败暴露路由重挂载丢失状态，已用会话内辅助状态修复，保留原断言。
+- 快捷搜索、AI 面板、嵌套图像关闭均恢复稳定焦点；图像缩放／复位／切换、PC 分栏键盘与刷新偏好、手机补记和保存均通过。
+- 两个脚本 `node --check`、`git diff --check`：通过。
+
+截图与原始报告在 `/home/conj-linux/.codex/visualizations/2026/10/09/01a11e48-a4ea-71c0-874a-e119dd918593/reading-workbench/`，包括 `production/`、`workspace/`、`baseline/` 和 `performance/`。性能报告保留每项 25 个原始样本及自动门槛比较。
+
+未进行实体 iPhone／Android 输入法测试；本轮为 Linux Chromium 与模拟可视视口验证。Tauri Rust 与部署脚本未修改，未运行这些专项检查；50,000 条数据库手动基准未重复运行，先前数据与边界说明保留。没有生产部署、真实数据恢复／删除、真实 AI 调用或业务数据离线同步。
+
+图片查看的截图审查发现 Panzoom 的 outside 边界模式会裁切初始图片；改为完整适配、仅放大时允许拖动，新增初始／复位／切图后图片边界断言，没有仅依据缩放比例宣称显示正确。
+
+最终图片几何补充回归单独通过 1 项，业务写入 0、浏览器错误 0；报告保存在 `reading-workbench/image-final/`，生产截图中的图片查看图同步替换为完整适配版本。最后整套图片复验请求曾两次自动审批超时，系统未判定操作不安全；缩小为只读图片场景后审批及测试通过。其余生产 62 项、工作区 16 项结果保留。
+
+交付提交仅包含阅读工作台修改。中断期间出现的个人档案演示及其 App／路由／侧栏／索引变更保留为另一组未提交内容，未混入本轮提交；上述验证结果对应阅读工作台实现与隔离夹具。

@@ -1,3 +1,4 @@
+import { Field } from "../ui/reading-surface";
 import RelatedKnowledgeField from "./RelatedKnowledgeField";
 import { useEffect, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
@@ -128,7 +129,7 @@ export default function CandidateOrganizer(p: Props) {
     const blocked = conflict || busy || p.disabled || !p.candidate.title.trim() || !p.candidate.content.trim() || (!!target && !p.existing && !merged.trim());
     return <section className="ko-editor" aria-label="整理候选知识">
     <div className="ko-heading"><span>{p.sourceName || "核对内容与来源"}</span><small>{checking ? "检查相似条目…" : `${similar.length} 个相似条目`}</small></div>
-    <label>标题<input className="ui-field" value={p.candidate.title} disabled={busy} onChange={e => p.onChange({ title: e.target.value })}/></label>
+    <Field label="标题" value={p.candidate.title} disabled={busy} onChange={e => p.onChange({ title: e.target.value })}/>
     <div className="ko-fields"><label>类型<select className="ui-field" value={p.candidate.card_type} onChange={e => p.onChange({ card_type: e.target.value as api.KnowledgeCardType })}>{Object.entries(cardTypeLabels).map(([v, label]) => <option key={v} value={v}>{label}</option>)}</select></label><label>标签<input className="ui-field" value={tagsText} onChange={e => { setTagsText(e.target.value); p.onChange({ tags: e.target.value.split(/[,，]/).map(t => t.trim()).filter(Boolean) }); }}/></label></div>
     <label>空间<input className="ui-field" value={spacesText} onChange={e => { setSpacesText(e.target.value); p.onChange({ projects: e.target.value.split(/[,，]/).map(t => t.trim()).filter(Boolean) }); }}/></label>
     {(!target||p.existing)&&<RelatedKnowledgeField ids={related} onChange={setRelated} exclude={target?.id}/>}

@@ -1,3 +1,6 @@
+import { motion, useReducedMotion } from "framer-motion";
+import { useSimpleDisplay } from "../../lib/simpleDisplay";
+import { Button } from "../ui/button";
 import { useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
@@ -7,6 +10,8 @@ import "./organize.css";
 
 export default function ReusePanel({ cardId }: { cardId: string }) {
   const client = useQueryClient();
+  const simple=useSimpleDisplay();
+  const reduced=useReducedMotion();
   const [page, setPage] = useState(1);
   const [historyOpen, setHistoryOpen] = useState(false);
   const [editing, setEditing] = useState<api.ReuseEvent | null>(null);
@@ -65,9 +70,9 @@ export default function ReusePanel({ cardId }: { cardId: string }) {
           <span>打开次数只表示浏览，不计入复用</span>
         </div>
         <div className="ko-reuse-controls">
-          <button className="ui-button-primary" disabled={busy || !!editing} onClick={() => void record()}>
+          <Button variant="primary" disabled={!!editing} loading={busy} onClick={() => void record()}>
             <CornerUpRight size={15} />记录本次使用
-          </button>
+          </Button>
           <button
             className="ui-button-secondary"
             aria-expanded={historyOpen}
@@ -81,7 +86,7 @@ export default function ReusePanel({ cardId }: { cardId: string }) {
       </div>
 
       {editing && (
-        <div className="ko-reuse-form">
+        <motion.div className="ko-reuse-form" initial={simple || reduced ? false : {opacity:0,y:4}} animate={{opacity:1,y:0}} transition={{duration:simple || reduced ? 0 : .18}}>
           <p role="status"><Check size={15} />{justRecorded ? "已记录一次，可选填使用场景。" : "补充这次复用的使用场景。"}</p>
           <label>
             用于哪个项目
@@ -118,7 +123,7 @@ export default function ReusePanel({ cardId }: { cardId: string }) {
               toast.success("已撤销本次复用");
             })}><Undo2 size={14} />撤销本次</button>
           </div>
-        </div>
+        </motion.div>
       )}
 
       {error && <p className="ui-alert-warn" role="alert">{error}</p>}

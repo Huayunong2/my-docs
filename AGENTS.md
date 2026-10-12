@@ -291,3 +291,11 @@ curl http://127.0.0.1:8080/health
 
 - 移动阅读操作：`src/components/workspace/ReadingActions.tsx`；移动断点订阅：`src/lib/useMobileLayout.ts`。
 - 修改记录读写入口或返回行为时检查 `tab=edit`、`returnTo` 及内部滚动恢复，并执行生产 UI 回归中的移动阅读场景。
+
+## 清新阅读工作台索引（2026-10-10）
+
+- 共享按钮与字段：`src/components/ui/button.tsx`、`reading-surface.tsx`；颜色角色在 `src/index.css`，正文及组件外观在 `src/components/workspace/reading-workbench.css`。阅读排版修改先检查 `MarkdownContent.tsx` 与 Typography，代码／Mermaid 使用 `not-prose` 独立排版。
+- 宽屏分栏：`ResponsiveSplit.tsx` 按页面意图和 ≥1280px 加载 `WorkbenchSplit.tsx`；本机比例按服务器与工作区隔离。内部阅读位置由 `src/lib/useReadingScroll.ts` 保存，知识列表在会话内按服务器保留位置和选中 ID；分栏、路由或断点修改必须验证编辑器只初始化一次及实际列表返回位置。
+- 图片阅读：`ReadingImage.tsx` 从清洗后的正文图像收集查看队列，按需加载 `ReadingImageViewer.tsx`；沿用 Radix 的嵌套焦点管理与 Panzoom，不能绕过 Markdown URL 清洗。
+- `ReadingActions.tsx` 的 `actions` 是一次性命令，关闭面板后执行并传递稳定入口；子内容是保留面板的连续控件。来源操作传递入口元素，不能保存即将卸载的菜单按钮作为返回焦点。
+- 设计与依赖变更的验证、性能口径和回退说明见 `WORKSPACE_OPTIMIZATION.md` 的清新阅读工作台章节；继续执行两套隔离浏览器回归。

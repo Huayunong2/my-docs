@@ -1,3 +1,4 @@
+import { useReadingScroll } from "../lib/useReadingScroll";
 import { useEffect, useMemo, useRef, useState } from "react";
 import KnowledgeLibrary, { type LibraryFilter } from "./knowledge/KnowledgeLibrary";
 import ReadingActions from "./workspace/ReadingActions";
@@ -353,7 +354,7 @@ export default function KnowledgePage({
   const [sourceExpanded, setSourceExpanded] = useState(false);
   const [detailError, setDetailError] = useState("");
   const [detailReload, setDetailReload] = useState(0);
-  const detailScrollRef = useRef<HTMLDivElement>(null);
+
   const sheetReturnFocusRef = useRef<HTMLElement | null>(null);
   const [mobileFiltersOpen, setMobileFiltersOpen] = useState(false);
   const [mobileBatchOpen, setMobileBatchOpen] = useState(false);
@@ -1983,8 +1984,8 @@ export default function KnowledgePage({
   if (typeFilter) libraryFilters.push({ label: `类型：${typeLabels[typeFilter as KnowledgeCardType]}`, onRemove: () => changeType("") });
   if (usageFilter) libraryFilters.push({ label: "从未打开", onRemove: () => changeUsage("") });
   if (qualityFilter) libraryFilters.push({ label: qualityOptions.find(([value]) => value === qualityFilter)?.[1] || qualityFilter, onRemove: () => changeQuality("") });
+  const detailScroll=useReadingScroll(`${selectedId}:${readerTab}`);
   useEffect(() => {
-    detailScrollRef.current?.scrollTo({ top: 0 });
     if (window.matchMedia("(max-width: 1023px)").matches) {
       document.getElementById("main-content")?.scrollTo({ top: 0 });
     }
@@ -2017,25 +2018,10 @@ export default function KnowledgePage({
             <h1>知识</h1>
           </div>
         </div>
-        <div className="kl-page-actions"><ReadingActions label="知识库操作">
-          <button
-            type="button"
-            onClick={() => setImportOpen(true)}
-            aria-label="导入知识"
-            className="ui-button-secondary"
-          >
-            <Upload size={16} />
-            <span>导入知识</span>
-          </button>
-          <button
-            type="button"
-            onClick={startNew}
-            className="ui-button-primary"
-          >
-            <Plus size={17} />
-            <span>新建条目</span>
-          </button>
-        </ReadingActions></div>
+        <div className="kl-page-actions"><ReadingActions label="知识库操作" actions={[
+          { id: "import", label: "导入知识", icon: <Upload size={17}/>, onSelect: () => setImportOpen(true) },
+          { id: "new", label: "新建条目", icon: <Plus size={17}/>, variant: "primary", onSelect: startNew },
+        ]}/></div>
       </header>
       {error && (
         <div
@@ -2823,18 +2809,19 @@ export default function KnowledgePage({
                   {selectedId ? mobileSaveLabel : "新建草稿"}
                 </span>
                 <div className="kl-mobile-actions">
-                  <DropdownMenu>
-                    <DropdownMenuTrigger asChild><button className="kl-icon" aria-label="知识操作"><MoreHorizontal size={20}/></button></DropdownMenuTrigger>
-                    <DropdownMenuContent align="end">
-                      <DropdownMenuItem disabled={!selectedId || awaitingDetail} onSelect={() => setReaderTab("read")}><BookOpen size={16}/>阅读正文</DropdownMenuItem>
-                      <DropdownMenuItem disabled={awaitingDetail} onSelect={() => setReaderTab("edit")}><PencilLine size={16}/>编辑知识</DropdownMenuItem>
-                      <DropdownMenuItem disabled={!selectedId || awaitingDetail} onSelect={() => setReaderTab("review")}><CheckCircle2 size={16}/>复习题与进度</DropdownMenuItem>
-                      <DropdownMenuSeparator/>
-                      <DropdownMenuItem onSelect={() => setImportOpen(true)}><Upload size={16}/>导入知识</DropdownMenuItem>
-                      <DropdownMenuItem onSelect={startNew}><Plus size={16}/>新建条目</DropdownMenuItem>
-                      {selectedId && <><DropdownMenuSeparator/>{draft.status === "draft" && <DropdownMenuItem onSelect={() => void updateStatus("confirmed")}><CheckCircle2 size={16}/>确认沉淀</DropdownMenuItem>}<DropdownMenuItem onSelect={() => void updateStatus(draft.status === "outdated" ? "confirmed" : "outdated")}>{draft.status === "outdated" ? "恢复为已确认" : "标记为过时"}</DropdownMenuItem><DropdownMenuItem onSelect={() => void deleteCards()} className="text-[var(--ui-danger-text)]"><Trash2 size={16}/>移入回收站</DropdownMenuItem></>}
-                    </DropdownMenuContent>
-                  </DropdownMenu>
+                  <ReadingActions label="知识操作" actions={[
+                    {id:"read",label:"阅读正文",icon:<BookOpen size={16}/>,disabled:!selectedId || awaitingDetail,onSelect:()=>setReaderTab("read")},
+                    {id:"edit",label:"编辑知识",icon:<PencilLine size={16}/>,disabled:awaitingDetail,onSelect:()=>setReaderTab("edit")},
+                    {id:"review",label:"复习题与进度",icon:<CheckCircle2 size={16}/>,disabled:!selectedId || awaitingDetail,onSelect:()=>setReaderTab("review")},
+                    {id:"import",label:"导入知识",icon:<Upload size={16}/>,onSelect:()=>setImportOpen(true)},
+                    {id:"new",label:"新建条目",icon:<Plus size={16}/>,onSelect:startNew},
+                    ...(selectedId ? [
+                      ...(draft.status === "draft" ? [{id:"confirm",label:"确认沉淀",onSelect:()=>void updateStatus("confirmed")}] : []),
+                      {id:"status",label:draft.status === "outdated" ? "恢复为已确认" : "标记为过时",onSelect:()=>void updateStatus(draft.status === "outdated" ? "confirmed" : "outdated")},
+                      {id:"trash",label:"移入回收站",variant:"danger" as const,icon:<Trash2 size={16}/>,onSelect:()=>void deleteCards()},
+                    ] : []),
+                  ]}/>
+
                 </div>
                 <button
                   type="button"
@@ -2880,7 +2867,7 @@ export default function KnowledgePage({
                 复习
               </button>
             </div>
-            <div className="kl-detail-scroll" ref={detailScrollRef}>
+            <div className="kl-detail-scroll" ref={detailScroll.attach} onScroll={detailScroll.onScroll}>
               {validationEntries.length > 0 && (
                 <div
                   ref={validationSummaryRef}

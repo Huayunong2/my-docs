@@ -18,7 +18,7 @@ export function nextExplicitThemeMode(dark: boolean): ExplicitThemeMode {
 }
 
 export function themeColorForMode(dark: boolean): string {
-  return dark ? "#11151b" : "#eef2f6";
+  return dark ? "#101211" : "#f7f9f8";
 }
 
 export function colorSchemeForMode(dark: boolean): "only light" | "only dark" {

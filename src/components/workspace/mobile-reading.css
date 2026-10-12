@@ -45,36 +45,6 @@
     scroll-margin-block: 12px calc(var(--ui-mobile-nav-total-height) + 12px);
   }
 
-  #main-content .markdown-content,
-  .article-detail-surface .markdown-content,
-  .rp-viewer .markdown-content {
-    max-width: 40em;
-    margin-inline: auto;
-    font-size: 16px;
-    line-height: 1.85;
-    overflow-wrap: anywhere;
-  }
-  #main-content .markdown-content > p,
-  .article-detail-surface .markdown-content > p,
-  .rp-viewer .markdown-content > p { margin-bottom: 1.1em; line-height: 1.85; }
-  #main-content .markdown-content :is(ul, ol),
-  .article-detail-surface .markdown-content :is(ul, ol),
-  .rp-viewer .markdown-content :is(ul, ol) { padding-inline-start: 1.35em; line-height: 1.8; }
-  #main-content .markdown-content li + li,
-  .article-detail-surface .markdown-content li + li,
-  .rp-viewer .markdown-content li + li { margin-top: 0.35em; }
-  #main-content .markdown-content :is(h1, h2, h3),
-  .article-detail-surface .markdown-content :is(h1, h2, h3),
-  .rp-viewer .markdown-content :is(h1, h2, h3) { line-height: 1.4; overflow-wrap: anywhere; text-wrap: pretty; }
-  #main-content .markdown-content h1,
-  .article-detail-surface .markdown-content h1,
-  .rp-viewer .markdown-content h1 { font-size: 1.65rem; }
-  #main-content .markdown-content h2,
-  .article-detail-surface .markdown-content h2,
-  .rp-viewer .markdown-content h2 { margin-block: 1.8em 0.7em; font-size: 1.35rem; }
-  #main-content .markdown-content h3,
-  .article-detail-surface .markdown-content h3,
-  .rp-viewer .markdown-content h3 { margin-block: 1.45em 0.55em; font-size: 1.125rem; }
   #main-content :is(input:not([type="checkbox"]):not([type="radio"]):not([type="range"]), select, textarea) { font-size: 16px; }
 
   /* Today: preview first; let it flow with the page instead of scrolling inside it. */
@@ -117,7 +87,6 @@
   #main-content .kl-reading > h2 { font-size: 28px; line-height: 1.4; }
   #main-content :is(.kl-reading-byline, .kl-reading-taxonomy span) { font-size: 12px; line-height: 1.6; }
   #main-content .kl-reading-content { margin-top: 24px; padding-top: 22px; font-size: 16px; line-height: 1.85; }
-  #main-content .kl-reading-content .markdown-content { font-size: 16px; line-height: 1.85; }
   #main-content .kl-reading-actions { gap: 8px; margin-top: 24px; }
   #main-content .kl-reading-actions button,
   #main-content .kl-reader-source summary { min-height: 44px; font-size: 13px; }

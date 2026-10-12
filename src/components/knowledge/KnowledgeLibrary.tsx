@@ -1,3 +1,7 @@
+import { getServerUrl } from "../../lib/api";
+import { useReadingScroll } from "../../lib/useReadingScroll";
+import { useWideLayout } from "../../lib/useWideLayout";
+import ResponsiveSplit, { preloadSplit } from "../workspace/ResponsiveSplit";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Link } from "@tanstack/react-router";
 import { WallpaperSurface } from "../workspace/WallpaperSurface";
@@ -53,6 +57,8 @@ import {
   SelectValue,
 } from "../ui/select";
 import { Tabs, TabsList, TabsTrigger } from "../ui/tabs";
+
+preloadSplit();
 
 export interface LibraryFilter {
   label: string;
@@ -117,12 +123,21 @@ const sortLabels = {
 } as const;
 
 export default function KnowledgeLibrary(p: Props) {
+  const wide=useWideLayout();
   const [managing, setManaging] = useState(false);
   const selecting = managing || p.selectedIds.length > 0;
   const searchRef = useRef<HTMLInputElement>(null);
   const composing = useRef(false);
   const selectAllRef = useRef<HTMLInputElement>(null);
-  const scrollRef = useRef<HTMLDivElement>(null);
+  const browseScope=`knowledge-library:${getServerUrl()}`;
+  const scroll=useReadingScroll(JSON.stringify([p.page,p.project,p.status,p.tag,p.sort,p.cardSearch.q,p.cardSearch.type,p.cardSearch.usage,p.cardSearch.quality]),p.detailVisible ? undefined : browseScope,!p.loading);
+  const activeId=p.detailVisible ? p.activeId : scroll.selected;
+  const open=(card:KnowledgeCard)=>{scroll.rememberSelection(card.id,browseScope);p.onOpen(card);};
+  const scrollRef=scroll.ref;
+  useEffect(()=>{
+    if(p.detailVisible || p.loading || !scroll.selected || document.activeElement!==document.body)return;
+    scrollRef.current?.querySelector<HTMLAnchorElement>(`[data-card-id="${CSS.escape(scroll.selected)}"]`)?.focus({preventScroll:true});
+  },[p.detailVisible,p.loading,scroll.selected,scrollRef]);
   const [spaceQuery, setSpaceQuery] = useState("");
   const visibleSpaces = useMemo(
     () =>
@@ -163,145 +178,9 @@ export default function KnowledgeLibrary(p: Props) {
     window.addEventListener("keydown", handle);
     return () => window.removeEventListener("keydown", handle);
   }, [p.detailVisible, p.onNew]);
-  const scrollPosition=useRef(0);
-  useEffect(()=>{
-    if(!p.detailVisible && scrollRef.current) scrollRef.current.scrollTop=scrollPosition.current;
-  },[p.detailVisible]);
-  useEffect(() => {
-    scrollRef.current?.scrollTo({ top: 0 });
-  }, [p.page, p.project, p.status, p.tag, p.sort]);
 
-  return (
-    <div
-      className="kl-workspace"
-      data-detail={p.detailVisible}
-      data-focused={p.focused}
-    >
-      <aside className="kl-nav" aria-label="知识导航">
-        <div className="kl-nav-section">
-          <span className="kl-eyebrow">知识库</span>
-          <button
-            className="kl-nav-item"
-            data-active={!p.project && p.status === "all"}
-            onClick={p.onReset}
-          >
-            <BookOpen size={17} />
-            <span>全部知识</span>
-            {!p.project && <small>{p.summary.total}</small>}
-          </button>
-          <button
-            className="kl-nav-item"
-            data-active={p.status === "draft"}
-            onClick={() => p.onStatus("draft")}
-          >
-            <Inbox size={17} />
-            <span>待确认</span>
-            {p.summary.draft > 0 && (
-              <small className="kl-count-warm">{p.summary.draft}</small>
-            )}
-          </button>
-          <button
-            className="kl-nav-item"
-            data-active={p.status === "confirmed"}
-            onClick={() => p.onStatus("confirmed")}
-          >
-            <CheckCircle2 size={17} />
-            <span>已沉淀</span>
-            <small>{p.summary.confirmed}</small>
-          </button>
-        </div>
-        <div className="kl-nav-section kl-nav-spaces">
-          <div className="kl-section-line">
-            <span className="kl-eyebrow">
-              空间 <span>{p.spaces.length}</span>
-            </span>
-            <button
-              className="kl-icon"
-              onClick={p.onManageSpaces}
-              aria-label="管理空间"
-              title="管理空间"
-            >
-              <FolderCog size={15} />
-            </button>
-          </div>
-          {p.spaces.length > 6 && (
-            <label className="kl-space-search">
-              <Search size={13} />
-              <input
-                aria-label="查找空间"
-                placeholder="查找空间"
-                value={spaceQuery}
-                onChange={(event) => setSpaceQuery(event.target.value)}
-              />
-            </label>
-          )}
-          <div className="kl-space-list">
-            {visibleSpaces.map((space) => (
-              <button
-                key={space.name}
-                className="kl-nav-item"
-                data-active={p.project === space.name}
-                onClick={() =>
-                  p.onProject(p.project === space.name ? "" : space.name)
-                }
-                title={space.description || space.name}
-              >
-                {space.kind === "project" ? (
-                  <Boxes size={16} />
-                ) : (
-                  <Folder size={16} />
-                )}
-                <span>{space.name}</span>
-                <small>{space.count}</small>
-              </button>
-            ))}
-            {p.spaces.length === 0 && (
-              <button className="kl-nav-empty" onClick={p.onManageSpaces}>
-                创建主题或项目空间
-                <ArrowUpRight size={14} />
-              </button>
-            )}
-            {p.spaces.length > 0 && visibleSpaces.length === 0 && (
-              <p className="kl-muted-note">没有匹配的空间</p>
-            )}
-          </div>
-        </div>
-        {p.tags.length > 0 && (
-          <div className="kl-nav-section">
-            <div className="kl-section-line">
-              <span className="kl-eyebrow">常用标签</span>
-              <button className="kl-text-button" onClick={p.onFilters}>
-                全部
-              </button>
-            </div>
-            <div className="kl-nav-tags">
-              {p.tags.slice(0, 8).map(({ tag }) => (
-                <button
-                  key={tag}
-                  data-active={p.tag === tag}
-                  onClick={() => p.onTag(p.tag === tag ? "" : tag)}
-                >
-                  <Hash size={12} />
-                  <span>{tag}</span>
-                </button>
-              ))}
-            </div>
-          </div>
-        )}
-        <div className="kl-nav-footer">
-          <Link
-            to="/knowledge/trash"
-            search={{} as never}
-            className="kl-nav-item"
-          >
-            <Trash2 size={16} />
-            <span>知识回收站</span>
-            <ChevronRight size={14} />
-          </Link>
-          <p>移除的条目仍可恢复</p>
-        </div>
-      </aside>
-      <WallpaperSurface as="section" target="knowledge.library" className="kl-library" data-managing={selecting} aria-label="知识浏览">
+
+  const library = <WallpaperSurface as="section" target="knowledge.library" className="kl-library" data-managing={selecting} aria-label="知识浏览">
         <div className="kl-library-top">
           <div className="kl-collection-heading">
             <div>
@@ -479,7 +358,7 @@ export default function KnowledgeLibrary(p: Props) {
           {p.batchBar}
         </div>
         <div
-          ref={scrollRef} onScroll={e=>{scrollPosition.current=e.currentTarget.scrollTop;}}
+          ref={scroll.attach} onScroll={scroll.onScroll}
           className="kl-library-scroll"
           aria-busy={p.loading}
         >
@@ -531,7 +410,7 @@ export default function KnowledgeLibrary(p: Props) {
                   className="kl-card"
                   key={card.id}
                   data-selected={p.selectedIds.includes(card.id)}
-                  data-active={p.detailVisible && p.activeId === card.id}
+                  data-active={activeId === card.id}
                 >
                   <div className="kl-card-top">
                     <span className="kl-type" data-type={card.card_type}>
@@ -571,7 +450,7 @@ export default function KnowledgeLibrary(p: Props) {
                       )
                         return;
                       event.preventDefault();
-                      p.onOpen(card);
+                      open(card);
                     }}
                     onKeyDown={(event) => {
                       if (event.key !== "ArrowDown" && event.key !== "ArrowUp")
@@ -629,7 +508,7 @@ export default function KnowledgeLibrary(p: Props) {
                     </DropdownMenuTrigger>
                     <DropdownMenuContent align="end">
                       <DropdownMenuLabel>知识条目</DropdownMenuLabel>
-                      <DropdownMenuItem onSelect={() => p.onOpen(card)}>
+                      <DropdownMenuItem onSelect={() => open(card)}>
                         <BookOpen size={14} />
                         打开阅读
                       </DropdownMenuItem>
@@ -683,8 +562,141 @@ export default function KnowledgeLibrary(p: Props) {
             </button>
           </div>
         </footer>
-      </WallpaperSurface>
-      {p.detailVisible && p.detail}
+      </WallpaperSurface>;
+
+  return (
+    <div
+      className="kl-workspace"
+      data-detail={p.detailVisible}
+      data-focused={p.focused}
+      data-split={wide && p.detailVisible && !p.focused}
+    >
+      <aside className="kl-nav" aria-label="知识导航">
+        <div className="kl-nav-section">
+          <span className="kl-eyebrow">知识库</span>
+          <button
+            className="kl-nav-item"
+            data-active={!p.project && p.status === "all"}
+            onClick={p.onReset}
+          >
+            <BookOpen size={17} />
+            <span>全部知识</span>
+            {!p.project && <small>{p.summary.total}</small>}
+          </button>
+          <button
+            className="kl-nav-item"
+            data-active={p.status === "draft"}
+            onClick={() => p.onStatus("draft")}
+          >
+            <Inbox size={17} />
+            <span>待确认</span>
+            {p.summary.draft > 0 && (
+              <small className="kl-count-warm">{p.summary.draft}</small>
+            )}
+          </button>
+          <button
+            className="kl-nav-item"
+            data-active={p.status === "confirmed"}
+            onClick={() => p.onStatus("confirmed")}
+          >
+            <CheckCircle2 size={17} />
+            <span>已沉淀</span>
+            <small>{p.summary.confirmed}</small>
+          </button>
+        </div>
+        <div className="kl-nav-section kl-nav-spaces">
+          <div className="kl-section-line">
+            <span className="kl-eyebrow">
+              空间 <span>{p.spaces.length}</span>
+            </span>
+            <button
+              className="kl-icon"
+              onClick={p.onManageSpaces}
+              aria-label="管理空间"
+              title="管理空间"
+            >
+              <FolderCog size={15} />
+            </button>
+          </div>
+          {p.spaces.length > 6 && (
+            <label className="kl-space-search">
+              <Search size={13} />
+              <input
+                aria-label="查找空间"
+                placeholder="查找空间"
+                value={spaceQuery}
+                onChange={(event) => setSpaceQuery(event.target.value)}
+              />
+            </label>
+          )}
+          <div className="kl-space-list">
+            {visibleSpaces.map((space) => (
+              <button
+                key={space.name}
+                className="kl-nav-item"
+                data-active={p.project === space.name}
+                onClick={() =>
+                  p.onProject(p.project === space.name ? "" : space.name)
+                }
+                title={space.description || space.name}
+              >
+                {space.kind === "project" ? (
+                  <Boxes size={16} />
+                ) : (
+                  <Folder size={16} />
+                )}
+                <span>{space.name}</span>
+                <small>{space.count}</small>
+              </button>
+            ))}
+            {p.spaces.length === 0 && (
+              <button className="kl-nav-empty" onClick={p.onManageSpaces}>
+                创建主题或项目空间
+                <ArrowUpRight size={14} />
+              </button>
+            )}
+            {p.spaces.length > 0 && visibleSpaces.length === 0 && (
+              <p className="kl-muted-note">没有匹配的空间</p>
+            )}
+          </div>
+        </div>
+        {p.tags.length > 0 && (
+          <div className="kl-nav-section">
+            <div className="kl-section-line">
+              <span className="kl-eyebrow">常用标签</span>
+              <button className="kl-text-button" onClick={p.onFilters}>
+                全部
+              </button>
+            </div>
+            <div className="kl-nav-tags">
+              {p.tags.slice(0, 8).map(({ tag }) => (
+                <button
+                  key={tag}
+                  data-active={p.tag === tag}
+                  onClick={() => p.onTag(p.tag === tag ? "" : tag)}
+                >
+                  <Hash size={12} />
+                  <span>{tag}</span>
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+        <div className="kl-nav-footer">
+          <Link
+            to="/knowledge/trash"
+            search={{} as never}
+            className="kl-nav-item"
+          >
+            <Trash2 size={16} />
+            <span>知识回收站</span>
+            <ChevronRight size={14} />
+          </Link>
+          <p>移除的条目仍可恢复</p>
+        </div>
+      </aside>
+      {wide && p.detailVisible && !p.focused ? <ResponsiveSplit workspace="knowledge" first={library} second={p.detail}/> : <>{library}{p.detailVisible && p.detail}</>}
+
     </div>
   );
 }
