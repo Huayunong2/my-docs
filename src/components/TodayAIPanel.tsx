@@ -1,3 +1,5 @@
+import { Checkbox } from "./ui/checkbox";
+import CandidateOrganizer from "./knowledge/CandidateOrganizer";
 import { useEffect, useRef, useState } from "react";
 import * as Dialog from "@radix-ui/react-dialog";
 import { useQueryClient } from "@tanstack/react-query";
@@ -71,7 +73,7 @@ export default function TodayAIPanel(p: Props) {
     !!candidateSource.date && !matchesAiSource(candidateSource, p);
   const selected = candidates.filter((item) => item.selected);
   const invalid = selected.some((item) => !validKnowledgeCandidate(item));
-  const generate = async (mode: Mode) => {
+  const generate = async (mode: Mode,force=false) => {
     if (lock.current || !p.content.trim()) return;
     const snapshot = { date: p.date, content: p.content };
     lock.current = true;
@@ -79,7 +81,12 @@ export default function TodayAIPanel(p: Props) {
     setErrors((value) => ({ ...value, [mode]: "" }));
     try {
       if (mode === "summary") {
-        const result = await api.summarizeWithAI({ content: snapshot.content });
+        const result = await api.summarizeWithAI({
+          content: snapshot.content,
+          date: snapshot.date,
+          source_name: `${snapshot.date} ${propsRef.current.title}`,
+          force,
+        });
         if (!mounted.current) return;
         if (!result.summary?.trim())
           throw new Error("没有收到可用总结，请重试。");
@@ -89,7 +96,7 @@ export default function TodayAIPanel(p: Props) {
         const result = await api.analyzeKnowledgeCards({
           content: snapshot.content,
           source_name: `${snapshot.date} ${p.title}`,
-          max_cards: 6,
+          max_cards: 6,force,
         });
         if (!mounted.current) return;
         setCandidates(
@@ -133,7 +140,7 @@ export default function TodayAIPanel(p: Props) {
         source.content !== candidateSource.content
       )
         throw new Error("原记录尚未保存或已经变化，请保存原文后重新提取。");
-      const result = await api.importKnowledgeCards(
+      const result = await api.saveKnowledgeCandidateDrafts(
         selected.map(({ selected: _selected, ...item }) => ({
           ...item,
           source_article_id: source.id,
@@ -315,7 +322,7 @@ export default function TodayAIPanel(p: Props) {
                 <>
                   <div className="ft-ai-candidate-top">
                     <span>
-                      {candidates.length} 个候选 · 已选 {selected.length}
+                      {candidates.length} 个候选 · 已选 {selected.length} · 未选候选可重新勾选
                     </span>
                     <button
                       className="ui-button-ghost"
@@ -339,7 +346,7 @@ export default function TodayAIPanel(p: Props) {
                       {candidates.map((candidate, index) => (
                         <div key={index} data-active={active === index}>
                           <label>
-                            <input
+                            <Checkbox
                               type="checkbox"
                               disabled={saving}
                               checked={candidate.selected}
@@ -366,56 +373,7 @@ export default function TodayAIPanel(p: Props) {
                       ))}
                     </nav>
                     {item && (
-                      <section className="ft-ai-candidate-editor">
-                        <label>
-                          标题
-                          <input
-                            disabled={saving}
-                            value={item.title}
-                            className="ui-field"
-                            aria-label="候选知识标题"
-                            onChange={(event) =>
-                              editCandidate({ title: event.target.value })
-                            }
-                          />
-                        </label>
-                        <label>
-                          正文
-                          <textarea
-                            disabled={saving}
-                            value={item.content}
-                            className="ui-textarea"
-                            aria-label="候选知识正文"
-                            onChange={(event) =>
-                              editCandidate({ content: event.target.value })
-                            }
-                          />
-                        </label>
-                        <details open>
-                          <summary>
-                            原文依据
-                            <ChevronDown size={14} />
-                          </summary>
-                          <textarea
-                            disabled={saving}
-                            className="ui-textarea"
-                            value={item.source_excerpt}
-                            aria-label="候选知识原文依据"
-                            onChange={(event) =>
-                              editCandidate({
-                                source_excerpt: event.target.value,
-                              })
-                            }
-                          />
-                        </details>
-                        {item.tags.length > 0 && (
-                          <div className="ft-ai-tags">
-                            {item.tags.map((tag) => (
-                              <span key={tag}>#{tag}</span>
-                            ))}
-                          </div>
-                        )}
-                      </section>
+                      <CandidateOrganizer key={`${candidateSource.date}-${active}`} candidate={item} sourceName={`${p.date} 今日记录`} candidateKey={item.candidate_key} disabled={saving || staleCandidates} onChange={editCandidate} source={async()=>{const source=await p.ensureSource();if(!source || !matchesAiSource(candidateSource,propsRef.current)) throw new Error("原记录已经变化，请核对来源后重新提取。");return {source_article_id:source.id,source_date:source.date};}} onProcessed={()=>{setCandidates(items=>items.filter((_,i)=>i!==active));setActive(i=>Math.max(0,i-1));}} onSkip={()=>{setCandidates(items=>items.map((v,i)=>i===active?{...v,selected:false}:v));setActive(i=>(i+1)%candidates.length);}} />
                     )}
                   </div>
                   {invalid && (
@@ -458,7 +416,7 @@ export default function TodayAIPanel(p: Props) {
             <span>
               {mode === "summary"
                 ? "当前页面保留结果，不改写记录"
-                : "仅在确认保存后写入知识草稿"}
+                : "逐条确认入库，或批量保存为草稿"}
             </span>
             <div>
               {mode === "summary" && summary && (
@@ -472,7 +430,7 @@ export default function TodayAIPanel(p: Props) {
                 <button
                   className="ui-button-secondary"
                   disabled={!!running || saving || !p.content.trim()}
-                  onClick={() => void generate(mode)}
+                  onClick={() => void generate(mode,true)}
                 >
                   <RefreshCw size={14} />
                   重新{mode === "summary" ? "生成" : "提取"}

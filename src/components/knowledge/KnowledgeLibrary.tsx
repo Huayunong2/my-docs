@@ -1,3 +1,11 @@
+import { useMobileLayout } from "../../lib/useMobileLayout";
+import ReadingActions from "../workspace/ReadingActions";
+import { Checkbox } from "../ui/checkbox";
+import { Input } from "../ui/reading-surface";
+import { getServerUrl } from "../../lib/api";
+import { useReadingScroll } from "../../lib/useReadingScroll";
+import { useWideLayout } from "../../lib/useWideLayout";
+import ResponsiveSplit, { preloadSplit } from "../workspace/ResponsiveSplit";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Link } from "@tanstack/react-router";
 import { WallpaperSurface } from "../workspace/WallpaperSurface";
@@ -47,12 +55,15 @@ import {
 } from "../ui/dropdown-menu";
 import {
   Select,
+  SelectField,
   SelectContent,
   SelectItem,
   SelectTrigger,
   SelectValue,
 } from "../ui/select";
 import { Tabs, TabsList, TabsTrigger } from "../ui/tabs";
+
+preloadSplit();
 
 export interface LibraryFilter {
   label: string;
@@ -97,6 +108,7 @@ interface Props {
   onDensity: (density: "comfortable" | "compact") => void;
   onSelect: (id: string) => void;
   onSelectAll: () => void;
+  onClearSelection: () => void;
   onInvert: () => void;
   onOpen: (card: KnowledgeCard) => void;
   onCardStatus: (card: KnowledgeCard) => void;
@@ -111,15 +123,27 @@ const statuses = ["all", "draft", "confirmed", "outdated"] as const;
 const sortLabels = {
   updated: "最近更新",
   created: "最近创建",
-  usage: "使用最多",
+  usage: "打开最多",
   review: "优先复习",
 } as const;
 
 export default function KnowledgeLibrary(p: Props) {
+  const wide=useWideLayout();
+  const mobile=useMobileLayout();
+  const [managing, setManaging] = useState(false);
+  const selecting = managing || p.selectedIds.length > 0;
   const searchRef = useRef<HTMLInputElement>(null);
   const composing = useRef(false);
   const selectAllRef = useRef<HTMLInputElement>(null);
-  const scrollRef = useRef<HTMLDivElement>(null);
+  const browseScope=`knowledge-library:${getServerUrl()}`;
+  const scroll=useReadingScroll(JSON.stringify([p.page,p.project,p.status,p.tag,p.sort,p.cardSearch.q,p.cardSearch.type,p.cardSearch.usage,p.cardSearch.quality]),p.detailVisible ? undefined : browseScope,!p.loading);
+  const activeId=p.detailVisible ? p.activeId : scroll.selected;
+  const open=(card:KnowledgeCard)=>{scroll.rememberSelection(card.id,browseScope);p.onOpen(card);};
+  const scrollRef=scroll.ref;
+  useEffect(()=>{
+    if(p.detailVisible || p.loading || !scroll.selected || document.activeElement!==document.body)return;
+    scrollRef.current?.querySelector<HTMLAnchorElement>(`[data-card-id="${CSS.escape(scroll.selected)}"]`)?.focus({preventScroll:true});
+  },[p.detailVisible,p.loading,scroll.selected,scrollRef]);
   const [spaceQuery, setSpaceQuery] = useState("");
   const visibleSpaces = useMemo(
     () =>
@@ -160,15 +184,403 @@ export default function KnowledgeLibrary(p: Props) {
     window.addEventListener("keydown", handle);
     return () => window.removeEventListener("keydown", handle);
   }, [p.detailVisible, p.onNew]);
-  useEffect(() => {
-    scrollRef.current?.scrollTo({ top: 0 });
-  }, [p.page, p.project, p.status, p.tag, p.sort]);
+
+
+  const library = <WallpaperSurface as="section" target="knowledge.library" className="kl-library" data-managing={selecting} aria-label="知识浏览">
+        <div className="kl-library-top">
+          <div className="kl-collection-heading" data-scoped={!!p.project}>
+            <div>
+              <div className="kl-eyebrow">
+                {p.project ? "空间" : "我的知识库"}
+              </div>
+              <h2 title={p.project || "全部知识"}>
+                {p.project || "全部知识"}
+                <span>{p.summary.total}</span>
+              </h2>
+            </div>
+            <button
+              className="kl-mobile-space kl-icon"
+              onClick={p.onFilters}
+              aria-label="选择空间"
+            >
+              <Folder size={18} />
+            </button>
+          </div>
+          <form noValidate
+            className="kl-search-line"
+            onSubmit={(event) => {
+              event.preventDefault();
+              if (!composing.current) p.onSearch();
+            }}
+          >
+            <div className="kl-search">
+              <Search size={17} />
+              <Input
+                ref={searchRef}
+                type="search"
+                value={p.query}
+                onChange={(event) => p.onQuery(event.target.value)}
+                onCompositionStart={() => {
+                  composing.current = true;
+                }}
+                onCompositionEnd={() => {
+                  composing.current = false;
+                }}
+                onKeyDown={(event) => {
+                  if (
+                    event.key === "Enter" &&
+                    (event.nativeEvent.isComposing || event.keyCode === 229)
+                  )
+                    event.preventDefault();
+                }}
+                aria-label="搜索知识条目"
+                placeholder="搜索标题、正文或来源"
+              />
+              {p.query ? (
+                <button
+                  type="button"
+                  className="kl-icon"
+                  onClick={p.onClearSearch}
+                  aria-label="清除搜索"
+                >
+                  <X size={14} />
+                </button>
+              ) : (
+                <kbd>/</kbd>
+              )}
+              <button
+                className="kl-search-submit"
+                type="submit"
+                aria-label="执行搜索"
+              >
+                搜索
+              </button>
+            </div>
+            <button
+              type="button"
+              className="kl-filter-button"
+              onClick={p.onFilters}
+              aria-label="打开搜索与筛选"
+            >
+              <SlidersHorizontal size={16} />
+              <span>筛选</span>
+              {p.filters.length > 0 && <b>{p.filters.length}</b>}
+            </button>
+          </form>
+          <div className="kl-viewbar">
+            {mobile?<SelectField aria-label="知识状态" value={p.status} onValueChange={value=>p.onStatus(value as Props["status"])} className="kl-mobile-status">
+              {statuses.map(status=><SelectItem key={status} value={status}>{status==="all"?"全部知识":cardStatusLabels[status]} · {status==="all"?p.summary.total:p.summary[status]}</SelectItem>)}
+            </SelectField>:<>            <Tabs
+              value={p.status}
+              onValueChange={(value) => p.onStatus(value as Props["status"])}
+              className="kl-status-tabs"
+            >
+              <TabsList>
+                {statuses.map((status) => (
+                  <TabsTrigger key={status} value={status}>
+                    {status === "all" ? "全部" : cardStatusLabels[status]}
+                    <span>
+                      {status === "all" ? p.summary.total : p.summary[status]}
+                    </span>
+                  </TabsTrigger>
+                ))}
+              </TabsList>
+            </Tabs>
+</>}
+            <ReadingActions label="知识排序与显示" triggerText="视图">
+            <div className="kl-display-tools">
+              <Select value={p.sort} onValueChange={p.onSort}>
+                <SelectTrigger aria-label="知识条目排序" className="kl-sort">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent align="end">
+                  {Object.entries(sortLabels).map(([value, label]) => (
+                    <SelectItem key={value} value={value}>
+                      {label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <div
+                className="kl-layout-toggle"
+                role="group"
+                aria-label="知识展示方式"
+              >
+                <button
+                  aria-label="卡片视图"
+                  aria-pressed={p.density === "comfortable"}
+                  onClick={() => p.onDensity("comfortable")}
+                  title="卡片视图"
+                >
+                  <LayoutGrid size={16} />
+                </button>
+                <button
+                  aria-label="列表视图"
+                  aria-pressed={p.density === "compact"}
+                  onClick={() => p.onDensity("compact")}
+                  title="列表视图"
+                >
+                  <List size={17} />
+                </button>
+              </div>
+            </div>
+            </ReadingActions>
+          </div>
+          {p.filters.length > 0 && (
+            <div className="kl-active-filters" aria-label="已应用的筛选条件">
+              {p.filters.map((filter) => (
+                <button key={filter.label} onClick={filter.onRemove}>
+                  {filter.label}
+                  <X size={12} />
+                </button>
+              ))}
+              <button className="kl-clear-filters" onClick={p.onReset}>
+                清除全部
+              </button>
+            </div>
+          )}
+          {p.cards.length > 0 && (
+            <div className="kl-selection-line">
+              <label>
+                <Checkbox
+                  ref={selectAllRef}
+                  type="checkbox"
+                  checked={allSelected}
+                  onChange={p.onSelectAll}
+                  aria-label="选择当前页全部知识条目"
+                />
+                <span>
+                  {p.selectedIds.length
+                    ? `已选 ${p.selectedIds.length} 项`
+                    : "选择本页"}
+                </span>
+              </label>
+              {selecting && <button className="kl-end-selection" onClick={() => { p.onClearSelection(); setManaging(false); }}>结束选择</button>}
+              <span className="kl-result-count" aria-live="polite">
+                {p.loading ? "更新中…" : `${p.total} 个条目`}
+              </span>
+              {p.selectedIds.length > 0 && (
+                <button onClick={p.onInvert} className="kl-text-button">
+                  反选
+                </button>
+              )}
+            </div>
+          )}
+          {p.batchBar}
+        </div>
+        <div
+          ref={scroll.attach} onScroll={scroll.onScroll}
+          className="kl-library-scroll"
+          aria-busy={p.loading}
+        >
+          {p.spaceOverview}
+          {p.loading && p.cards.length === 0 ? (
+            <div
+              className="kl-collection"
+              data-layout={p.density}
+              aria-label="正在加载知识条目"
+            >
+              {Array.from({ length: 6 }, (_, index) => (
+                <div key={index} className="kl-card kl-skeleton">
+                  <div className="ui-skeleton" />
+                  <div className="ui-skeleton" />
+                  <div className="ui-skeleton" />
+                </div>
+              ))}
+            </div>
+          ) : p.cards.length === 0 ? (
+            <div className="kl-empty">
+              <div className="kl-empty-symbol">
+                <BookOpen size={32} strokeWidth={1.4} />
+              </div>
+              <h3>{p.error ? "暂时无法读取知识库" : p.emptyTitle}</h3>
+              <p>
+                {p.error
+                  ? "请检查页面上方的连接提示并重试，已有内容不会丢失。"
+                  : p.emptyDescription}
+              </p>
+              {!p.error && p.emptyAction && (
+                <button
+                  className="ui-button-primary"
+                  onClick={p.emptyAction.onClick}
+                >
+                  {p.emptyAction.label}
+                  <ArrowUpRight size={15} />
+                </button>
+              )}
+            </div>
+          ) : (
+            <div
+              className="kl-collection"
+              data-layout={p.density}
+              data-selecting={p.selectedIds.length > 0}
+              data-loading={p.loading}
+            >
+              {p.cards.map((card) => (
+                <article
+                  className="kl-card"
+                  key={card.id}
+                  data-selected={p.selectedIds.includes(card.id)}
+                  data-active={activeId === card.id}
+                >
+                  <div className="kl-card-top">
+                    <span className="kl-type" data-type={card.card_type}>
+                      {card.card_type === "snippet" ? (
+                        <Code2 size={15} />
+                      ) : (
+                        <FileText size={15} />
+                      )}
+                      {cardTypeLabels[card.card_type]}
+                    </span>
+                    <span className="kl-status" data-status={card.status}>
+                      <i />
+                      {cardStatusLabels[card.status]}
+                    </span>
+                  </div>
+                  <label className="kl-card-check">
+                    <Checkbox
+                      type="checkbox"
+                      checked={p.selectedIds.includes(card.id)}
+                      onChange={() => p.onSelect(card.id)}
+                      aria-label={`${p.selectedIds.includes(card.id) ? "取消选择" : "选择"}：${card.title}`}
+                    />
+                  </label>
+                  <Link
+                    to="/knowledge/$cardId"
+                    params={{ cardId: card.id }}
+                    search={{ ...p.cardSearch, view: "detail" } as never}
+                    className="kl-card-link"
+                    data-card-id={card.id}
+                    onClick={(event) => {
+                      if (
+                        event.metaKey ||
+                        event.ctrlKey ||
+                        event.shiftKey ||
+                        event.altKey ||
+                        event.defaultPrevented
+                      )
+                        return;
+                      event.preventDefault();
+                      open(card);
+                    }}
+                    onKeyDown={(event) => {
+                      if (event.key !== "ArrowDown" && event.key !== "ArrowUp")
+                        return;
+                      event.preventDefault();
+                      const links = Array.from(
+                        scrollRef.current?.querySelectorAll<HTMLAnchorElement>(
+                          ".kl-card-link",
+                        ) || [],
+                      );
+                      const index = links.indexOf(event.currentTarget);
+                      links[
+                        index + (event.key === "ArrowDown" ? 1 : -1)
+                      ]?.focus();
+                    }}
+                    aria-label={`阅读：${card.title}`}
+                  >
+                    <h3>{card.title}</h3>
+                    <p className="kl-card-preview">
+                      {knowledgeExcerpt(card.content) || "暂无正文"}
+                    </p>
+                    <div className="kl-card-tags">
+                      {card.tags.slice(0, 2).map((tag) => (
+                        <span key={tag}>#{tag}</span>
+                      ))}
+                      {card.tags.length > 2 && (
+                        <span>+{card.tags.length - 2}</span>
+                      )}
+                    </div>
+                    <div className="kl-card-meta">
+                      <span>
+                        <Folder size={12} />
+                        {card.projects?.[0] || "未归入空间"}
+                        {(card.projects?.length || 0) > 1
+                          ? ` +${card.projects!.length - 1}`
+                          : ""}
+                      </span>
+                      <time
+                        dateTime={card.updated_at}
+                        title={`更新于 ${knowledgeDate(card.updated_at)}`}
+                      >
+                        {knowledgeDate(card.updated_at)}
+                      </time>
+                    </div>
+                  </Link>
+                  <DropdownMenu>
+                    <DropdownMenuTrigger asChild>
+                      <button
+                        className="kl-card-menu kl-icon"
+                        aria-label={`知识条目操作：${card.title}`}
+                        disabled={p.busy}
+                      >
+                        <MoreHorizontal size={16} />
+                      </button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="end">
+                      <DropdownMenuLabel>知识条目</DropdownMenuLabel>
+                      <DropdownMenuItem onSelect={() => open(card)}>
+                        <BookOpen size={14} />
+                        打开阅读
+                      </DropdownMenuItem>
+                      <DropdownMenuItem className="kl-mobile-manage-entry" onSelect={() => { setManaging(true); p.onSelect(card.id); }}>批量选择</DropdownMenuItem>
+                      <DropdownMenuItem onSelect={() => p.onCardStatus(card)}>
+                        <Check size={14} />
+                        {card.status === "draft"
+                          ? "确认沉淀"
+                          : card.status === "outdated"
+                            ? "恢复为已确认"
+                            : "标记为过时"}
+                      </DropdownMenuItem>
+                      <DropdownMenuSeparator />
+                      <DropdownMenuItem
+                        onSelect={() => p.onDelete(card)}
+                        className="text-[var(--ui-danger-text)]"
+                      >
+                        <Trash2 size={14} />
+                        移入回收站
+                      </DropdownMenuItem>
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+                </article>
+              ))}
+            </div>
+          )}
+        </div>
+        {p.total>0&&p.pageCount>1&&<footer className="kl-pagination">
+          <span>
+            {p.total > 0
+              ? `第 ${p.page} / ${p.pageCount} 页`
+              : "知识从一条记录开始"}
+            <span className="kl-key-hint"> · N 新建</span>
+          </span>
+          <div>
+            <button
+              className="kl-icon"
+              aria-label="上一页"
+              disabled={p.page <= 1 || p.loading}
+              onClick={() => p.onPage(p.page - 1)}
+            >
+              <ChevronLeft size={17} />
+            </button>
+            <button
+              className="kl-icon"
+              aria-label="下一页"
+              disabled={p.page >= p.pageCount || p.loading}
+              onClick={() => p.onPage(p.page + 1)}
+            >
+              <ChevronRight size={17} />
+            </button>
+          </div>
+        </footer>}
+      </WallpaperSurface>;
 
   return (
     <div
       className="kl-workspace"
       data-detail={p.detailVisible}
       data-focused={p.focused}
+      data-split={wide && p.detailVisible && !p.focused}
     >
       <aside className="kl-nav" aria-label="知识导航">
         <div className="kl-nav-section">
@@ -220,7 +632,7 @@ export default function KnowledgeLibrary(p: Props) {
           {p.spaces.length > 6 && (
             <label className="kl-space-search">
               <Search size={13} />
-              <input
+              <Input
                 aria-label="查找空间"
                 placeholder="查找空间"
                 value={spaceQuery}
@@ -294,388 +706,8 @@ export default function KnowledgeLibrary(p: Props) {
           <p>移除的条目仍可恢复</p>
         </div>
       </aside>
-      <WallpaperSurface as="section" target="knowledge.library" className="kl-library" aria-label="知识浏览">
-        <div className="kl-library-top">
-          <div className="kl-collection-heading">
-            <div>
-              <div className="kl-eyebrow">
-                {p.project ? "空间" : "我的知识库"}
-              </div>
-              <h2 title={p.project || "全部知识"}>
-                {p.project || "全部知识"}
-                <span>{p.summary.total}</span>
-              </h2>
-            </div>
-            <button
-              className="kl-mobile-space kl-icon"
-              onClick={p.onFilters}
-              aria-label="选择空间"
-            >
-              <Folder size={18} />
-            </button>
-          </div>
-          <form
-            className="kl-search-line"
-            onSubmit={(event) => {
-              event.preventDefault();
-              if (!composing.current) p.onSearch();
-            }}
-          >
-            <div className="kl-search">
-              <Search size={17} />
-              <input
-                ref={searchRef}
-                type="search"
-                value={p.query}
-                onChange={(event) => p.onQuery(event.target.value)}
-                onCompositionStart={() => {
-                  composing.current = true;
-                }}
-                onCompositionEnd={() => {
-                  composing.current = false;
-                }}
-                onKeyDown={(event) => {
-                  if (
-                    event.key === "Enter" &&
-                    (event.nativeEvent.isComposing || event.keyCode === 229)
-                  )
-                    event.preventDefault();
-                }}
-                aria-label="搜索知识条目"
-                placeholder="搜索标题、正文或来源"
-              />
-              {p.query ? (
-                <button
-                  type="button"
-                  className="kl-icon"
-                  onClick={p.onClearSearch}
-                  aria-label="清除搜索"
-                >
-                  <X size={14} />
-                </button>
-              ) : (
-                <kbd>/</kbd>
-              )}
-              <button
-                className="kl-search-submit"
-                type="submit"
-                aria-label="执行搜索"
-              >
-                搜索
-              </button>
-            </div>
-            <button
-              type="button"
-              className="kl-filter-button"
-              onClick={p.onFilters}
-              aria-label="打开搜索与筛选"
-            >
-              <SlidersHorizontal size={16} />
-              <span>筛选</span>
-              {p.filters.length > 0 && <b>{p.filters.length}</b>}
-            </button>
-          </form>
-          <div className="kl-viewbar">
-            <Tabs
-              value={p.status}
-              onValueChange={(value) => p.onStatus(value as Props["status"])}
-              className="kl-status-tabs"
-            >
-              <TabsList>
-                {statuses.map((status) => (
-                  <TabsTrigger key={status} value={status}>
-                    {status === "all" ? "全部" : cardStatusLabels[status]}
-                    <span>
-                      {status === "all" ? p.summary.total : p.summary[status]}
-                    </span>
-                  </TabsTrigger>
-                ))}
-              </TabsList>
-            </Tabs>
-            <div className="kl-display-tools">
-              <Select value={p.sort} onValueChange={p.onSort}>
-                <SelectTrigger aria-label="知识条目排序" className="kl-sort">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent align="end">
-                  {Object.entries(sortLabels).map(([value, label]) => (
-                    <SelectItem key={value} value={value}>
-                      {label}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-              <div
-                className="kl-layout-toggle"
-                role="group"
-                aria-label="知识展示方式"
-              >
-                <button
-                  aria-label="卡片视图"
-                  aria-pressed={p.density === "comfortable"}
-                  onClick={() => p.onDensity("comfortable")}
-                  title="卡片视图"
-                >
-                  <LayoutGrid size={16} />
-                </button>
-                <button
-                  aria-label="列表视图"
-                  aria-pressed={p.density === "compact"}
-                  onClick={() => p.onDensity("compact")}
-                  title="列表视图"
-                >
-                  <List size={17} />
-                </button>
-              </div>
-            </div>
-          </div>
-          {p.filters.length > 0 && (
-            <div className="kl-active-filters" aria-label="已应用的筛选条件">
-              {p.filters.map((filter) => (
-                <button key={filter.label} onClick={filter.onRemove}>
-                  {filter.label}
-                  <X size={12} />
-                </button>
-              ))}
-              <button className="kl-clear-filters" onClick={p.onReset}>
-                清除全部
-              </button>
-            </div>
-          )}
-          {p.cards.length > 0 && (
-            <div className="kl-selection-line">
-              <label>
-                <input
-                  ref={selectAllRef}
-                  type="checkbox"
-                  checked={allSelected}
-                  onChange={p.onSelectAll}
-                  aria-label="选择当前页全部知识条目"
-                />
-                <span>
-                  {p.selectedIds.length
-                    ? `已选 ${p.selectedIds.length} 项`
-                    : "选择本页"}
-                </span>
-              </label>
-              <span className="kl-result-count" aria-live="polite">
-                {p.loading ? "更新中…" : `${p.total} 个条目`}
-              </span>
-              {p.selectedIds.length > 0 && (
-                <button onClick={p.onInvert} className="kl-text-button">
-                  反选
-                </button>
-              )}
-            </div>
-          )}
-          {p.batchBar}
-        </div>
-        <div
-          ref={scrollRef}
-          className="kl-library-scroll"
-          aria-busy={p.loading}
-        >
-          {p.spaceOverview}
-          {p.loading && p.cards.length === 0 ? (
-            <div
-              className="kl-collection"
-              data-layout={p.density}
-              aria-label="正在加载知识条目"
-            >
-              {Array.from({ length: 6 }, (_, index) => (
-                <div key={index} className="kl-card kl-skeleton">
-                  <div className="ui-skeleton" />
-                  <div className="ui-skeleton" />
-                  <div className="ui-skeleton" />
-                </div>
-              ))}
-            </div>
-          ) : p.cards.length === 0 ? (
-            <div className="kl-empty">
-              <div className="kl-empty-symbol">
-                <BookOpen size={32} strokeWidth={1.4} />
-              </div>
-              <h3>{p.error ? "暂时无法读取知识库" : p.emptyTitle}</h3>
-              <p>
-                {p.error
-                  ? "请检查页面上方的连接提示并重试，已有内容不会丢失。"
-                  : p.emptyDescription}
-              </p>
-              {!p.error && p.emptyAction && (
-                <button
-                  className="ui-button-primary"
-                  onClick={p.emptyAction.onClick}
-                >
-                  {p.emptyAction.label}
-                  <ArrowUpRight size={15} />
-                </button>
-              )}
-            </div>
-          ) : (
-            <div
-              className="kl-collection"
-              data-layout={p.density}
-              data-selecting={p.selectedIds.length > 0}
-              data-loading={p.loading}
-            >
-              {p.cards.map((card) => (
-                <article
-                  className="kl-card"
-                  key={card.id}
-                  data-selected={p.selectedIds.includes(card.id)}
-                  data-active={p.detailVisible && p.activeId === card.id}
-                >
-                  <div className="kl-card-top">
-                    <span className="kl-type" data-type={card.card_type}>
-                      {card.card_type === "snippet" ? (
-                        <Code2 size={15} />
-                      ) : (
-                        <FileText size={15} />
-                      )}
-                      {cardTypeLabels[card.card_type]}
-                    </span>
-                    <span className="kl-status" data-status={card.status}>
-                      <i />
-                      {cardStatusLabels[card.status]}
-                    </span>
-                  </div>
-                  <label className="kl-card-check">
-                    <input
-                      type="checkbox"
-                      checked={p.selectedIds.includes(card.id)}
-                      onChange={() => p.onSelect(card.id)}
-                      aria-label={`${p.selectedIds.includes(card.id) ? "取消选择" : "选择"}：${card.title}`}
-                    />
-                  </label>
-                  <Link
-                    to="/knowledge/$cardId"
-                    params={{ cardId: card.id }}
-                    search={{ ...p.cardSearch, view: "detail" } as never}
-                    className="kl-card-link"
-                    data-card-id={card.id}
-                    onClick={(event) => {
-                      if (
-                        event.metaKey ||
-                        event.ctrlKey ||
-                        event.shiftKey ||
-                        event.altKey ||
-                        event.defaultPrevented
-                      )
-                        return;
-                      event.preventDefault();
-                      p.onOpen(card);
-                    }}
-                    onKeyDown={(event) => {
-                      if (event.key !== "ArrowDown" && event.key !== "ArrowUp")
-                        return;
-                      event.preventDefault();
-                      const links = Array.from(
-                        scrollRef.current?.querySelectorAll<HTMLAnchorElement>(
-                          ".kl-card-link",
-                        ) || [],
-                      );
-                      const index = links.indexOf(event.currentTarget);
-                      links[
-                        index + (event.key === "ArrowDown" ? 1 : -1)
-                      ]?.focus();
-                    }}
-                    aria-label={`阅读：${card.title}`}
-                  >
-                    <h3>{card.title}</h3>
-                    <p className="kl-card-preview">
-                      {knowledgeExcerpt(card.content) || "暂无正文"}
-                    </p>
-                    <div className="kl-card-tags">
-                      {card.tags.slice(0, 2).map((tag) => (
-                        <span key={tag}>#{tag}</span>
-                      ))}
-                      {card.tags.length > 2 && (
-                        <span>+{card.tags.length - 2}</span>
-                      )}
-                    </div>
-                    <div className="kl-card-meta">
-                      <span>
-                        <Folder size={12} />
-                        {card.projects?.[0] || "未归入空间"}
-                        {(card.projects?.length || 0) > 1
-                          ? ` +${card.projects!.length - 1}`
-                          : ""}
-                      </span>
-                      <time
-                        dateTime={card.updated_at}
-                        title={`更新于 ${knowledgeDate(card.updated_at)}`}
-                      >
-                        {knowledgeDate(card.updated_at)}
-                      </time>
-                    </div>
-                  </Link>
-                  <DropdownMenu>
-                    <DropdownMenuTrigger asChild>
-                      <button
-                        className="kl-card-menu kl-icon"
-                        aria-label={`知识条目操作：${card.title}`}
-                        disabled={p.busy}
-                      >
-                        <MoreHorizontal size={16} />
-                      </button>
-                    </DropdownMenuTrigger>
-                    <DropdownMenuContent align="end">
-                      <DropdownMenuLabel>知识条目</DropdownMenuLabel>
-                      <DropdownMenuItem onSelect={() => p.onOpen(card)}>
-                        <BookOpen size={14} />
-                        打开阅读
-                      </DropdownMenuItem>
-                      <DropdownMenuItem onSelect={() => p.onCardStatus(card)}>
-                        <Check size={14} />
-                        {card.status === "draft"
-                          ? "确认沉淀"
-                          : card.status === "outdated"
-                            ? "恢复为已确认"
-                            : "标记为过时"}
-                      </DropdownMenuItem>
-                      <DropdownMenuSeparator />
-                      <DropdownMenuItem
-                        onSelect={() => p.onDelete(card)}
-                        className="text-[var(--ui-danger-text)]"
-                      >
-                        <Trash2 size={14} />
-                        移入回收站
-                      </DropdownMenuItem>
-                    </DropdownMenuContent>
-                  </DropdownMenu>
-                </article>
-              ))}
-            </div>
-          )}
-        </div>
-        <footer className="kl-pagination">
-          <span>
-            {p.total > 0
-              ? `第 ${p.page} / ${p.pageCount} 页`
-              : "知识从一条记录开始"}
-            <span className="kl-key-hint"> · N 新建</span>
-          </span>
-          <div>
-            <button
-              className="kl-icon"
-              aria-label="上一页"
-              disabled={p.page <= 1 || p.loading}
-              onClick={() => p.onPage(p.page - 1)}
-            >
-              <ChevronLeft size={17} />
-            </button>
-            <button
-              className="kl-icon"
-              aria-label="下一页"
-              disabled={p.page >= p.pageCount || p.loading}
-              onClick={() => p.onPage(p.page + 1)}
-            >
-              <ChevronRight size={17} />
-            </button>
-          </div>
-        </footer>
-      </WallpaperSurface>
-      {p.detailVisible && p.detail}
+      {wide && p.detailVisible && !p.focused ? <ResponsiveSplit workspace="knowledge" first={library} second={p.detail}/> : <>{library}{p.detailVisible && p.detail}</>}
+
     </div>
   );
 }

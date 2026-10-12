@@ -55,6 +55,7 @@ fn reset_ai_health_for_test() {
 
 #[derive(Debug, Clone)]
 pub(crate) struct AiResponse {
+    pub(crate) usage: Option<crate::models::AiUsage>,
     pub(crate) content: String,
     pub(crate) model: String,
 }
@@ -198,7 +199,9 @@ impl AiAdapter for HttpAiAdapter {
                 retryable: true,
             });
         }
+        crate::ai_tasks::record_usage(data.usage.clone());
         Ok(AiResponse {
+            usage: data.usage,
             content,
             model: self.model.clone(),
         })
@@ -229,11 +232,15 @@ pub(crate) async fn complete_with_retry(
                 })
             }
             Err(failure) if failure.retryable && attempt < retries => {
+                crate::ai_tasks::record_usage(None);
                 if backoff {
                     tokio::time::sleep(Duration::from_millis(600 * (attempt + 1))).await;
                 }
             }
-            Err(failure) => return Err(failure),
+            Err(failure) => {
+                crate::ai_tasks::record_usage(None);
+                return Err(failure);
+            }
         }
     }
     unreachable!("retry loop always returns")
@@ -298,6 +305,7 @@ mod tests {
                     retryable: true,
                 }),
                 Ok(AiResponse {
+                    usage: None,
                     content: "valid".into(),
                     model: "mock".into(),
                 }),
@@ -320,6 +328,7 @@ mod tests {
                     retryable: false,
                 }),
                 Ok(AiResponse {
+                    usage: None,
                     content: "should not run".into(),
                     model: "mock".into(),
                 }),
@@ -349,6 +358,7 @@ mod tests {
     async fn rejects_empty_model_output_through_the_shared_workflow() {
         let adapter = MockAiAdapter {
             responses: Mutex::new(VecDeque::from([Ok(AiResponse {
+                usage: None,
                 content: "  ".into(),
                 model: "mock".into(),
             })])),

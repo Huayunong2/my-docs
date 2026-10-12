@@ -1,3 +1,4 @@
+import { Input as BaseInput, Textarea } from "../ui/reading-surface";
 import type { ButtonHTMLAttributes, InputHTMLAttributes, ReactNode, TextareaHTMLAttributes } from "react";
 
 export type Tone = "neutral" | "good" | "warn" | "bad";
@@ -16,14 +17,14 @@ export const Card = ({ children, className = "" }: { children: ReactNode; classN
 );
 
 export const Input = (props: InputHTMLAttributes<HTMLInputElement>) => (
-  <input
+  <BaseInput
     {...props}
     className={`ui-field ${props.className || ""}`}
   />
 );
 
 export const TextArea = (props: TextareaHTMLAttributes<HTMLTextAreaElement>) => (
-  <textarea
+  <Textarea
     {...props}
     className={`ui-textarea ${props.className || ""}`}
   />

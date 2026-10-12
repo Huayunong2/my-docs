@@ -9,6 +9,9 @@ import assert from "node:assert/strict";
 const out =
   process.env.KNOWLEDGE_UI_OUTPUT || "/tmp/daily-summary-stats-repair";
 await fs.mkdir(out, { recursive: true });
+const wallpaperSource=await fs.readFile(new URL("../src/lib/wallpapers.ts",import.meta.url),"utf8");
+const surfacePairs=[...wallpaperSource.matchAll(/id: "([^"]+)", module: "([^"]+)"/g)];
+const wallpaperPreferences=Object.fromEntries(["today","records","search","knowledge","review","stats","reviews","settings"].map(id=>[id,{wallpaperIds:[],overlay:80,cycleDaily:false,surfaces:Object.fromEntries(surfacePairs.filter(p=>p[2]===id).map(p=>[p[1],{wallpaperIds:[],overlay:80,cycleDaily:false}]))}]));
 const examples = [
   [
     "理解所有权：让资源生命周期变得清晰",
@@ -75,6 +78,8 @@ let cards = Array.from({ length: 30 }, (_, i) => {
     content_version: 1,
   };
 });
+examples[0][4] += "\n\n| 场景 | 建议 |\n| --- | --- |\n| 移动阅读 | 内容优先 |\n\n![阅读示意图一](/synthetic-image-a.svg)\n\n![阅读示意图二](/synthetic-image-b.svg)";
+cards[0].content = examples[0][4];
 const originalCards = structuredClone(cards);
 let deletedCards = [];
 let writes = [],
@@ -257,6 +262,7 @@ await context.addInitScript(() => {
 await context.route("**/*", async (route) => {
   const request = route.request(),
     url = new URL(request.url());
+  if (/^\/synthetic-image-[ab]\.svg$/.test(url.pathname)) return route.fulfill({contentType:"image/svg+xml",body:`<svg xmlns="http://www.w3.org/2000/svg" width="900" height="600"><rect width="900" height="600" rx="40" fill="#d7e8df"/><circle cx="450" cy="280" r="130" fill="#6a8f7b"/><text x="450" y="500" text-anchor="middle" font-family="sans-serif" font-size="40" fill="#203b2d">Reading workspace</text></svg>`});
   if (url.pathname.startsWith("/api/")) {
     const path = url.pathname.slice(4),
       method = request.method();
@@ -269,6 +275,12 @@ await context.route("**/*", async (route) => {
       });
     if (method !== "GET")
       writes.push({ path, method, body: request.postData() });
+    if(path === "/wallpapers") return send({revision:0,preferences:wallpaperPreferences,assets:[],presets:[],storageUsedBytes:0,storageQuotaBytes:268435456,hasUserData:false});
+    if(path === "/ai/tasks") return send([]);
+    if(path === "/articles/tag-suggestions") return send(["工作","Rust"]);
+    if(path === "/knowledge-cards/trash") return send([]);
+    if(path === "/knowledge-reuse") return send({events:[],total:0,page:1,has_more:false,from:"",to:""});
+    if(path.endsWith("/sources")) return send([]);
     if (path === "/articles/search") {
       const query = url.searchParams.get("q") || "";
       return send(
@@ -713,6 +725,7 @@ await context.route("**/*", async (route) => {
 });
 const page = await context.newPage();
 const errors = [];
+page.on("console",message=>{if(message.type()==="error")console.error("Browser:",message.text());});
 page.on("pageerror", (error) => errors.push(error.message));
 const checks = [];
 async function check(name, run) {
@@ -742,7 +755,76 @@ async function healthy(selector) {
     0,
   );
 }
+async function imageReadingRegression() {
+    await go("/history"); await healthy(".history-card");
+    await page.locator(".history-card-main").first().click();
+    const image=page.getByRole("button",{name:"查看图片：阅读示意图一",exact:true});
+    await image.scrollIntoViewIfNeeded();
+    const before=await page.locator(".article-detail-body:visible").evaluate(e=>e.scrollTop);
+    await image.click();await page.getByRole("dialog",{name:"阅读示意图一",exact:true}).waitFor();
+    await page.waitForFunction(()=>{const image=document.querySelector(".reading-image-stage img");return image?.style.transform&&Math.abs(new DOMMatrix(getComputedStyle(image).transform).a-1)<.01;});
+    const fits=()=>page.locator(".reading-image-stage").evaluate(stage=>{const image=stage.querySelector("img"),outer=stage.getBoundingClientRect(),inner=image.getBoundingClientRect();return inner.x>=outer.x-1&&inner.y>=outer.y-1&&inner.right<=outer.right+1&&inner.bottom<=outer.bottom+1;});
+    assert(await fits(),"initial image fits completely inside its reading viewport");
+    await page.getByRole("button",{name:"放大图片",exact:true}).click();
+    await page.waitForFunction(()=>{const img=document.querySelector(".reading-image-stage img");return img&&new DOMMatrix(getComputedStyle(img).transform).a>1;});
+    await page.getByRole("button",{name:"复位图片",exact:true}).click();
+    await page.waitForFunction(()=>{const img=document.querySelector(".reading-image-stage img");return img&&Math.abs(new DOMMatrix(getComputedStyle(img).transform).a-1)<.01;});
+    assert(await fits(),"reset returns the entire image to view");
+    await page.getByRole("button",{name:"下一张图片",exact:true}).click();
+    await page.getByRole("dialog",{name:"阅读示意图二",exact:true}).waitFor();
+    await page.waitForFunction(()=>{const image=document.querySelector(".reading-image-stage img");return image?.style.transform&&Math.abs(new DOMMatrix(getComputedStyle(image).transform).a-1)<.01;});
+    assert(await fits(),"gallery switching starts with a complete image");
+    await shot("image-viewer-mobile");
+    await page.keyboard.press("Escape");
+    await page.locator(".reading-image-viewer").waitFor({state:"hidden"});
+    // Radix restores focus in its asynchronous unmount callback, after the
+    // viewer stops painting. Wait for that lifecycle before asserting focus.
+    await page.waitForFunction(element=>document.activeElement===element,await image.elementHandle());
+    assert(await image.evaluate(e=>e===document.activeElement));
+    assert(Math.abs(await page.locator(".article-detail-body:visible").evaluate(e=>e.scrollTop)-before)<=1);
+    await page.getByRole("button",{name:"关闭详情",exact:true}).click();
+}
 try {
+  if(process.env.KNOWLEDGE_UI_GUIDELINES_ONLY === "1") {
+    for(const width of [320,390,768,1024,1280,1440]) {
+      await page.setViewportSize({width,height:width===320?568:1000});
+      for(const [name,path,selector] of [["history","/history",".history-card-main"],["knowledge","/knowledge",".kl-card"],["reviews","/reviews",".rp-period"],["stats","/stats?date=2026-09",".ft-metric"]]) {
+        await go(path);await healthy(selector);
+        await check(`${name} readable content and shared controls fit ${width}px`,async()=>{
+          const main=await page.locator("#main-content").boundingBox(),content=await page.locator(selector).first().boundingBox();
+          assert(content.y<main.y+main.height-24,"first content appears within the reading viewport");
+          assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);
+          assert.equal(await page.locator("#main-content").evaluate(e=>getComputedStyle(e).paddingBottom),"0px");
+          const clipped=await page.locator("#main-content .ui-select-trigger").evaluateAll(es=>es.filter(e=>e.getClientRects().length).some(e=>{const r=e.getBoundingClientRect(),m=document.getElementById("main-content").getBoundingClientRect();return r.right>m.right+1||r.left<m.left-1;}));assert(!clipped);
+          if(name==="stats")assert(await page.locator(".ft-monthly-story").evaluate(panel=>{const p=panel.getBoundingClientRect();return [...panel.querySelectorAll(".ft-monthly-ring,.ft-monthly-legend")].every(e=>{const r=e.getBoundingClientRect();return r.left>=p.left&&r.right<=p.right+1;});}),"overview graphics and labels fit their panel without masked clipping");
+        });
+        if(width===320||width===1440)await shot(`guidelines-${name}-${width}`);
+      }
+    }
+    await page.setViewportSize({width:320,height:568});
+    await check("mobile browsing has one scroll and returns from the reader without jumping",async()=>{
+      await go("/history");const main=page.locator("#main-content");
+      assert.equal(await page.locator(".history-list-scroll").evaluate(e=>getComputedStyle(e).overflowY),"visible");
+      const row=page.locator(".history-card-main").nth(3);await row.scrollIntoViewIfNeeded();const before=await main.evaluate(e=>e.scrollTop);assert(before>100);
+      await row.click();await page.locator(".article-detail-body:visible").waitFor();await page.getByRole("button",{name:"关闭详情",exact:true}).click();await page.locator(".article-detail-body:visible").waitFor({state:"hidden"});
+      await page.waitForFunction(element=>document.activeElement===element,await row.elementHandle());assert(Math.abs(await main.evaluate(e=>e.scrollTop)-before)<=1);
+    });
+    await check("library selects support keyboard, collision limits and focus return inside the view sheet",async()=>{
+      await go("/knowledge");const status=page.getByRole("combobox",{name:"知识状态",exact:true});await status.click();
+      await page.waitForFunction(()=>document.activeElement?.getAttribute("role")==="option");
+      await page.keyboard.press("End");await page.waitForFunction(()=>document.activeElement?.textContent?.includes("已过时"));assert((await page.evaluate(()=>document.activeElement?.textContent)).includes("已过时"));await page.keyboard.press("Escape");await page.getByRole("listbox").waitFor({state:"hidden"});await page.waitForFunction(element=>document.activeElement===element,await status.elementHandle());
+      await page.getByRole("button",{name:"知识排序与显示",exact:true}).click();const sort=page.getByRole("combobox",{name:"知识条目排序",exact:true});await sort.click();
+      const box=await page.getByRole("listbox").boundingBox();assert(box.x>=0&&box.y>=0&&box.x+box.width<=321&&box.y+box.height<=569);
+      await shot("guidelines-sort-popup-320");await page.keyboard.press("Escape");await page.getByRole("listbox").waitFor({state:"hidden"});await page.getByRole("button",{name:"关闭操作面板",exact:true}).click();
+    });
+    await check("the library empty state has a reachable primary action and no disabled pagination",async()=>{
+      cards=[];await go("/knowledge");await page.locator(".kl-empty").waitFor();const action=await page.locator(".kl-empty button").first().boundingBox(),main=await page.locator("#main-content").boundingBox();
+      assert(action.y+action.height<=main.y+main.height+1,"the short-screen starting action is fully visible");assert.equal(await page.locator(".kl-pagination").count(),0);await shot("guidelines-knowledge-empty-320");
+    });
+  } else if(process.env.KNOWLEDGE_IMAGE_ONLY === "1") {
+    await page.setViewportSize({width:390,height:844});
+    await check("image fit, zoom, reset, gallery and focus",imageReadingRegression);
+  } else {
   await check("production stats loads real optimized assets", async () => {
     await go("/stats?date=2026-09");
     await healthy("[data-calendar-cell=day]");
@@ -804,7 +886,8 @@ try {
     const paths = await page
       .locator(".sb-refined a.shell-nav-link")
       .evaluateAll((links) => links.map((link) => link.getAttribute("href")));
-    assert.equal(paths.length, 8);
+    assert.equal(paths.length, 9);
+    assert(paths.includes("/profile"), "personal profile is reachable from desktop navigation");
     assert.equal(new Set(paths).size, paths.length);
     assert.equal(
       await page.locator(".sb-refined a[aria-current=page]").count(),
@@ -1022,7 +1105,7 @@ try {
     ["/settings?tab=appearance", ".st-page"],
     ["/today", ".page-surface-today"],
     ["/search", ".ft-search"],
-    ["/history", ".ft-history"],
+    ["/history", ".ft-history"], ["/archive", ".ft-history"], ["/knowledge/trash", ".page-surface-knowledge-trash"],
   ]) {
     await check(`optimized route ${path} remains usable`, async () => {
       await go(path);
@@ -1035,6 +1118,169 @@ try {
       );
     });
   }
+  for (const width of [360, 390]) {
+    await page.setViewportSize({ width, height: 844 });
+    await page.emulateMedia({ colorScheme: width === 360 ? "dark" : "light" });
+    for (const [path, selector] of [
+      ["/knowledge", ".knowledge-hub"], ["/review", ".rs-page"],
+      ["/reviews", ".rp-page"], ["/settings?tab=appearance", ".st-page"],
+      ["/today", ".page-surface-today"], ["/search", ".ft-search"],
+      ["/history", ".ft-history"], ["/archive", ".ft-history"], ["/knowledge/trash", ".page-surface-knowledge-trash"],
+    ]) {
+      await check(`mobile route ${path} fits ${width}px and clears navigation`, async () => {
+        await go(path); await healthy(selector);
+        assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
+        const main = await page.locator("#main-content").boundingBox();
+        const nav = await page.locator(".shell-mobile-nav").boundingBox();
+        assert(main && nav && main.y + main.height <= nav.y + 1, "page viewport never extends behind navigation");
+        assert(await page.locator("#ai-task-launcher").isHidden(), "idle AI button never obscures mobile text");
+        await shot(`mobile-${width}-${path.split("?")[0].slice(1)}`);
+      });
+    }
+  }
+  await page.setViewportSize({ width: 390, height: 844 });
+  await check("mobile knowledge bulk selection is explicit and reversible", async () => {
+    await go("/knowledge"); await healthy(".kl-card");
+    assert(await page.locator(".kl-card-check").first().isHidden());
+    await page.locator(".kl-card-menu").first().click();
+    await page.getByRole("menuitem", {name:"批量选择", exact:true}).click();
+    assert(await page.locator(".kl-card-check").first().isVisible());
+    assert(await page.locator(".kl-batchbar").isVisible());
+    const all=page.getByRole("checkbox",{name:"选择当前页全部知识条目",exact:true});
+    assert(await all.evaluate(e=>e.indeterminate),"one selected card displays the mixed checkbox state");
+    await all.focus();await page.keyboard.press("Space");assert(await all.isChecked());assert(!(await all.evaluate(e=>e.indeterminate)));
+    await page.keyboard.press("Space");assert(!(await all.isChecked()));
+    await page.getByRole("button", {name:"结束选择", exact:true}).click();
+    assert(await page.locator(".kl-card-check").first().isHidden());
+    assert.equal(await page.locator(".kl-batchbar").count(), 0);
+  });
+  await check("mobile Today starts with the document and exposes editing on demand", async () => {
+    await go(`/today?date=${anchorDate}`);
+    await page.locator(".today-reading-title").waitFor();
+    assert(await page.locator(".today-actions").count() === 0);
+    assert.equal(await page.locator(".cm-editor").count(),0,"reading does not initialize a hidden editor");
+    assert(await page.getByLabel("今日记录标题", { exact: true }).count() === 0);
+    const originalTitle = records[0].title;
+    assert.equal(await page.locator(".today-reading-title").innerText(), originalTitle);
+    const body = await page.locator(".today-preview-surface .markdown-content").boundingBox();
+    if (!body || body.y >= 320) await fs.writeFile(`${out}/today-geometry.json`, JSON.stringify(await page.locator(".today-workspace").evaluate(e => [e,...e.querySelectorAll("div,h2")].map(n => ({c:n.className,box:n.getBoundingClientRect().toJSON(),margin:getComputedStyle(n).margin,padding:getComputedStyle(n).padding}))),null,2));
+    assert(body && body.y < 320, "record text leads the first screen");
+    await shot("today-reading-first");
+    await page.getByRole("button", { name: "补记", exact: true }).click();
+    assert.equal(await page.getByLabel("今日记录标题", { exact: true }).inputValue(), originalTitle);
+    await page.getByRole("button", { name: "返回阅读", exact: true }).click();
+    assert.equal(await page.locator(".today-reading-title").innerText(), originalTitle);
+    await page.getByRole("button", { name: "今日记录操作", exact: true }).click();
+    for (const name of ["立即保存", "AI 总结", "提取知识", "心情与标签"]) assert.equal(await page.getByRole("button", { name, exact: true }).count(), 1);
+    await page.keyboard.press("Escape");
+  });
+  await check("mobile commands close before opening the next AI dialog", async () => {
+    await go(`/today?date=${anchorDate}`);await page.locator(".today-reading-title").waitFor();
+    const trigger=page.getByRole("button",{name:"今日记录操作",exact:true});
+    await trigger.click();await page.getByRole("button",{name:"AI 总结",exact:true}).click();
+    await page.getByRole("dialog",{name:"AI 总结",exact:true}).waitFor();
+    assert.equal(await page.getByRole("dialog",{name:"今日记录操作",exact:true}).count(),0);
+    assert(await page.getByRole("dialog",{name:"AI 总结",exact:true}).evaluate(e=>e.contains(document.activeElement)));
+    await page.getByRole("button",{name:"关闭 AI 结果",exact:true}).click();
+    await page.getByRole("dialog",{name:"AI 总结",exact:true}).waitFor({state:"hidden"});
+    assert(await trigger.evaluate(e=>e===document.activeElement));
+    await trigger.click();await page.getByRole("dialog",{name:"今日记录操作",exact:true}).waitFor();await shot("today-actions-mobile");await page.keyboard.press("Escape");
+  });
+  await check("mobile empty Today opens writing only after an explicit action", async () => {
+    await go("/today?date=2026-10-01");
+    await page.getByRole("heading", { name: "这一天还没有记录", exact: true }).waitFor();
+    assert(await page.locator(".cm-editor").isHidden());
+    await page.getByRole("button", { name: "开始记录", exact: true }).click();
+    assert(await page.locator(".cm-editor").isVisible());
+    await page.getByRole("button", { name: "返回阅读", exact: true }).click();
+  });
+  await check("mobile history reads first and exposes management on demand", async () => {
+    await go("/history"); await healthy(".history-card");
+    assert(await page.locator(".history-card-edit").first().isHidden());
+    const card = page.locator(".history-card-main").nth(2); await card.scrollIntoViewIfNeeded();
+    const before = await page.locator("#main-content").evaluate(e => e.scrollTop);
+    await card.click(); await page.locator(".article-detail-body:visible .markdown-content").waitFor();assert.equal(await page.locator(".article-detail-body:visible").count(),1,"only one record reader is visible");
+    assert(await page.getByRole("button", { name: "编辑记录", exact: true }).isHidden());
+    await shot("history-reading-first");
+    await page.getByRole("button", { name: "记录阅读操作", exact: true }).click();
+    assert(await page.getByRole("button", { name: "编辑记录", exact: true }).isVisible());
+    await page.getByRole("button", { name: "关闭操作面板", exact: true }).click();
+    await page.getByRole("dialog",{name:"记录阅读操作",exact:true}).waitFor({state:"hidden"});
+    assert(await page.getByRole("button",{name:"记录阅读操作",exact:true}).evaluate(e=>e===document.activeElement));
+    await page.getByRole("button", { name: "关闭详情", exact: true }).click();
+    await page.locator(".article-detail-body:visible").waitFor({state:"hidden"});
+    assert(Math.abs(await page.locator("#main-content").evaluate(e => e.scrollTop) - before) <= 2);
+  });
+  await check("explicit mobile record editing opens the editor directly", async () => {
+    await go("/history"); await healthy(".history-card");
+    await page.getByRole("button",{name:`更多操作：${anchorDate}`,exact:true}).click();
+    await page.getByRole("menuitem",{name:"编辑记录",exact:true}).click();
+    await page.getByLabel("今日记录标题",{exact:true}).waitFor();
+    assert.equal(new URL(page.url()).searchParams.get("tab"),"edit");
+    assert(await page.locator(".cm-editor").isVisible());
+    await page.getByRole("button",{name:"返回阅读",exact:true}).click();
+    await page.locator(".today-reading-title").waitFor();
+    await page.waitForFunction(()=>!new URL(location.href).searchParams.has("tab"));
+    assert.equal(await page.locator(".cm-editor").count(),0);
+  });
+  await check("mobile review focuses one question and keeps the answer readable", async () => {
+    await go("/review"); await healthy(".rs-page");
+    await page.getByRole("button",{name:"开始复习",exact:true}).click();
+    await page.locator(".rs-prompt .markdown-content").waitFor();
+    assert(await page.locator(".rs-sidebar").isHidden());
+    await page.getByRole("button",{name:/^显示答案/}).click();
+    await page.locator(".rs-answer .markdown-content").waitFor();
+    const grade=page.locator(".rs-grade-grid button").first(); await grade.scrollIntoViewIfNeeded();
+    const bounds=await grade.boundingBox(),nav=await page.locator(".shell-mobile-nav").boundingBox();
+    assert(bounds&&bounds.y>=0&&bounds.y+bounds.height<=nav.y+1,"grading never enters the navigation area");
+    await shot("review-reading-first");
+  });
+  await check("mobile period review opens its document before management controls", async () => {
+    await go("/reviews"); await page.locator(".rp-period-copy h3 button").first().click();
+    await page.locator(".rp-viewer .review-viewer-body .markdown-content").waitFor();
+    const tools=page.getByRole("button",{name:"周期回顾阅读操作",exact:true});
+    assert.equal(await tools.getAttribute("aria-expanded"),"false");
+    await shot("period-reading-first");
+    await tools.click();
+    assert(await page.getByRole("button",{name:"编辑",exact:true}).isVisible());
+    await page.getByRole("button",{name:"关闭操作面板",exact:true}).click();
+    await page.getByRole("dialog",{name:"周期回顾阅读操作",exact:true}).waitFor({state:"hidden"});
+    await page.getByRole("button",{name:"关闭复盘详情",exact:true}).click();
+  });
+  await check("mobile settings uses a complete, visible library category selector", async () => {
+    await go("/settings?tab=appearance"); await healthy(".st-main");
+    const selector=page.getByRole("combobox",{name:"设置分类",exact:true});
+    const tab = await selector.boundingBox();
+    assert(tab && tab.x >= 0 && tab.x + tab.width <= 391, "selected category remains visible");
+    assert((await selector.innerText()).includes("外观"));
+    await selector.click();assert.equal(await page.getByRole("option").count(),5,"all five categories remain discoverable");await page.keyboard.press("Escape");
+    await page.getByRole("listbox").waitFor({state:"hidden"});
+    await page.waitForFunction(element=>element===document.activeElement,await selector.elementHandle());
+    assert(await selector.evaluate(e=>e===document.activeElement),"selector restores focus after dismissing its menu");
+    await shot("settings-reading-first");
+  });
+  await check("image viewer supports nested dialogs, zoom, gallery and focus return", imageReadingRegression);
+  await page.setViewportSize({width:1440,height:960});
+  await check("Today panels preserve editing through focus and narrow layouts", async () => {
+    await go(`/today?date=${anchorDate}`);await page.locator("#today-split").waitFor();
+    const content=await page.locator(".cm-content").innerText();
+    await page.getByRole("separator",{name:"调整编辑与预览区宽度",exact:true}).focus();await page.keyboard.press("ArrowLeft");
+    await shot("today-wide-split");
+    await page.setViewportSize({width:1024,height:960});await page.locator("#today-split").waitFor({state:"hidden"});
+    await page.getByRole("button",{name:"编辑记录",exact:true}).click();assert.equal(await page.locator(".cm-content").innerText(),content);
+    await page.getByRole("button",{name:"阅读预览",exact:true}).click();assert(await page.locator(".today-preview-pane").isVisible());assert(await page.locator(".today-editor-pane").isHidden());
+    await page.setViewportSize({width:1440,height:960});
+  });
+  await page.setViewportSize({ width: 1440, height: 960 });
+  await check("quick navigation loads on demand and restores keyboard focus", async () => {
+    await go("/search");await healthy(".ft-search");
+    const trigger=page.getByRole("button",{name:"打开快速跳转",exact:true});
+    await trigger.click();await page.getByRole("dialog",{name:"快速导航",exact:true}).waitFor();
+    await page.getByPlaceholder("跳转到页面…",{exact:true}).fill("知识");
+    assert(await page.getByRole("option",{name:/知识/}).isVisible());
+    await page.keyboard.press("Escape");await page.getByRole("dialog",{name:"快速导航",exact:true}).waitFor({state:"hidden"});
+    assert(await trigger.evaluate(e=>e===document.activeElement));
+  });
   await check(
     "failed route module keeps the sidebar and a recovery action",
     async () => {
@@ -1065,6 +1311,7 @@ try {
       }
     },
   );
+  }
   assert.deepEqual(errors, []);
   assert.equal(
     writes.length,

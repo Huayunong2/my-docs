@@ -1,3 +1,4 @@
+pub(crate) mod organize;
 use crate::ai::{call_ai, load_ai_config_for_task};
 use crate::db::{
     valid_review_item_draft, Database, KnowledgeCardDraft, KnowledgePageQuery, ReviewItemDraft,
@@ -55,6 +56,7 @@ struct AnalyzeJobChunkState {
 
 #[derive(Debug)]
 struct AnalyzeJobState {
+    preserve_duplicates: bool,
     job_id: String,
     source_name: String,
     total_chars: usize,
@@ -851,18 +853,21 @@ pub(crate) async fn query_cards(
             .map_err(|error| (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()))?;
         let (cards, total) = db
             .knowledge()
-            .query_page(KnowledgePageQuery {
-                query: &query,
-                card_type: q.card_type.as_deref(),
-                status: q.status.as_deref(),
-                usage: q.usage.as_deref(),
-                tag: q.tag.as_deref(),
-                project: q.project.as_deref(),
-                quality: q.quality.as_deref(),
-                sort: &sort,
-                page,
-                page_size,
-            })
+            .query_page_mode(
+                KnowledgePageQuery {
+                    query: &query,
+                    card_type: q.card_type.as_deref(),
+                    status: q.status.as_deref(),
+                    usage: q.usage.as_deref(),
+                    tag: q.tag.as_deref(),
+                    project: q.project.as_deref(),
+                    quality: q.quality.as_deref(),
+                    sort: &sort,
+                    page,
+                    page_size,
+                },
+                q.summary.unwrap_or(false),
+            )
             .map_err(|error| (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()))?;
         Ok(Json(KnowledgeCardsPage {
             cards,
@@ -1238,8 +1243,12 @@ pub(crate) async fn analyze_cards(
     let mut db = db
         .lock()
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-    let (kept, skipped) = dedupe_drafts(&mut db, drafts)
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let (kept, skipped) = if payload.preserve_duplicates {
+        Ok((drafts, 0))
+    } else {
+        dedupe_drafts(&mut db, drafts)
+    }
+    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     let cards = kept
         .into_iter()
         .map(candidate_from_draft)
@@ -1254,6 +1263,7 @@ pub(crate) async fn analyze_cards(
 fn finish_analyze_job(job: &mut AnalyzeJobState) {
     job.active_chunk = None;
     job.worker_running = false;
+    job.created_at = Instant::now();
     for chunk in &mut job.chunks {
         if chunk.status != "failed" {
             chunk.content.clear();
@@ -1322,6 +1332,9 @@ async fn run_analyze_job(db: AppState, handle: AnalyzeJobHandle) {
             let Ok(mut job) = handle.lock() else {
                 return;
             };
+            if crate::ai_tasks::current_cancelled() {
+                job.cancel_requested = true;
+            }
             if job.cancel_requested {
                 finish_analyze_job(&mut job);
                 None
@@ -1380,7 +1393,11 @@ async fn run_analyze_job(db: AppState, handle: AnalyzeJobHandle) {
 
         match result {
             Ok((drafts, model)) => {
-                let (kept, skipped) = dedupe_drafts_against(&existing, &job.accepted, drafts);
+                let (kept, skipped) = if job.preserve_duplicates {
+                    (drafts, 0)
+                } else {
+                    dedupe_drafts_against(&existing, &job.accepted, drafts)
+                };
                 let cards = kept
                     .iter()
                     .cloned()
@@ -1466,6 +1483,7 @@ pub(crate) async fn create_analyze_job(
         .map(|chunk| chunk.content.len())
         .sum::<usize>();
     let handle = Arc::new(Mutex::new(AnalyzeJobState {
+        preserve_duplicates: payload.preserve_duplicates,
         job_id: job_id.clone(),
         source_name,
         total_chars,
@@ -1517,7 +1535,7 @@ pub(crate) async fn create_analyze_job(
         store.insert(job_id.clone(), handle.clone());
     }
 
-    tokio::spawn(run_analyze_job(db, handle));
+    crate::ai_tasks::spawn_with_context(run_analyze_job(db, handle));
     Ok(Json(AnalyzeCardsJobCreatedResponse {
         job_id,
         status: "queued".into(),
@@ -1604,7 +1622,7 @@ pub(crate) async fn retry_analyze_job(
         job.active_chunk = None;
         job.error = None;
     }
-    tokio::spawn(run_analyze_job(db, handle.clone()));
+    crate::ai_tasks::spawn_with_context(run_analyze_job(db, handle.clone()));
     let job = handle
         .lock()
         .map_err(|error| (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()))?;

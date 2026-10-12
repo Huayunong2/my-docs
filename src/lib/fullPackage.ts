@@ -83,10 +83,14 @@ export function validateFullPackageManifest(value: unknown) {
     || typeof counts.dateRange !== "string") {
     throw new Error("迁移包预览摘要无效。");
   }
+  for (const name of ["profileEntryCount","profileGoalCount"]) {
+    if (counts[name] !== undefined && (!Number.isSafeInteger(counts[name]) || Number(counts[name]) < 0)) throw new Error("个人档案预览数量无效。");
+  }
+  if (counts.hasPersonalProfile !== undefined && typeof counts.hasPersonalProfile !== "boolean") throw new Error("个人档案预览标识无效。");
   return manifest as {
     formatVersion: 1;
     dataFile: "data.json";
-    summary: { articleCount: number; reviewCount: number; knowledgeCount: number; dateRange: string };
+    summary: { articleCount: number; reviewCount: number; knowledgeCount: number; dateRange: string; profileEntryCount?: number; profileGoalCount?: number; hasPersonalProfile?: boolean };
     preferences: unknown;
     assets: Array<{ metadata?: { name?: string } }>;
     presets: unknown[];

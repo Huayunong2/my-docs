@@ -1,3 +1,4 @@
+import { Input, Textarea } from "./ui/reading-surface";
 import { useCallback, useEffect, useState } from "react";
 import {
   Check,
@@ -299,9 +300,9 @@ export default function ReviewItemsPanel({
               </label>
               <div className="hidden sm:block" />
             </div>
-            <textarea value={form.prompt} onChange={(event) => setForm((current) => ({ ...current, prompt: event.target.value }))} placeholder="问题：例如“C++ 中 vector 扩容时迭代器何时失效？”" className="ui-textarea min-h-[76px] text-sm leading-5" />
-            <textarea value={form.answer} onChange={(event) => setForm((current) => ({ ...current, answer: event.target.value }))} placeholder="答案：只写回答这个问题所需的最小充分内容，可使用 Markdown。" className="ui-textarea min-h-[120px] text-sm leading-5" />
-            <input value={form.hint} onChange={(event) => setForm((current) => ({ ...current, hint: event.target.value }))} placeholder="提示（可选）" className="ui-field h-11 min-h-11 text-xs md:h-9 md:min-h-9" />
+            <Textarea value={form.prompt} onChange={(event) => setForm((current) => ({ ...current, prompt: event.target.value }))} placeholder="问题：例如“C++ 中 vector 扩容时迭代器何时失效？”" className="ui-textarea min-h-[76px] text-sm leading-5" />
+            <Textarea value={form.answer} onChange={(event) => setForm((current) => ({ ...current, answer: event.target.value }))} placeholder="答案：只写回答这个问题所需的最小充分内容，可使用 Markdown。" className="ui-textarea min-h-[120px] text-sm leading-5" />
+            <Input value={form.hint} onChange={(event) => setForm((current) => ({ ...current, hint: event.target.value }))} placeholder="提示（可选）" className="ui-field h-11 min-h-11 text-xs md:h-9 md:min-h-9" />
           </div>
           {error && <div className="ui-alert-bad mt-3 px-3 py-2 text-xs">{error}</div>}
           <div className="mt-3 flex justify-end gap-2">

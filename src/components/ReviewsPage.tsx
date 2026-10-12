@@ -1,3 +1,6 @@
+import { useMobileLayout } from "../lib/useMobileLayout";
+import { SelectField } from "./ui/select";
+import { Input } from "./ui/reading-surface";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import * as Dialog from "@radix-ui/react-dialog";
 import {
@@ -139,6 +142,7 @@ export default function ReviewsPage({
   onKindChange?: (kind: KindFilter) => void;
   onStatusChange?: (status: StatusFilter) => void;
 } = {}) {
+  const mobile=useMobileLayout();
   const [reviews, setReviews] = useState<Review[]>([]);
   const [kindFilter, setKindFilter] = useState<KindFilter>(
     initialKind || "all",
@@ -522,9 +526,9 @@ export default function ReviewsPage({
 
   const openSources = async (
     review: Review,
-    event?: React.MouseEvent<HTMLButtonElement>,
+    event?: React.MouseEvent<HTMLButtonElement> | HTMLButtonElement | null,
   ) => {
-    if (event) sourceTriggerRef.current = event.currentTarget;
+    if (event) sourceTriggerRef.current = event instanceof HTMLButtonElement ? event : event.currentTarget;
     const requestId = ++sourceRequestRef.current;
     setSourceModal({
       review,
@@ -642,6 +646,7 @@ export default function ReviewsPage({
       <WorkspaceHeader
         icon={BookOpenText}
         title="复盘"
+        actionsLabel="生成"
         actions={
           onNavigate && (
             <button
@@ -783,7 +788,7 @@ export default function ReviewsPage({
           <div className="rp-tools">
             <label className="wb-search">
               <Search size={16} />
-              <input
+              <Input
                 id="review-library-search"
                 type="search"
                 aria-label="搜索复盘标题、正文、周期或模型"
@@ -816,7 +821,9 @@ export default function ReviewsPage({
             </button>
           </div>
           <div className="rp-filterbar">
-            <Tabs value={kindFilter} onValueChange={changeKind}>
+            {mobile?<SelectField aria-label="复盘类型" value={kindFilter} onValueChange={value=>changeKind(value as KindFilter)}>
+              <SelectItem value="all">全部周期</SelectItem><SelectItem value="weekly">周复盘</SelectItem><SelectItem value="monthly">月复盘</SelectItem>
+            </SelectField>:<Tabs value={kindFilter} onValueChange={changeKind}>
               <TabsList aria-label="复盘类型">
                 {(["all", "weekly", "monthly"] as const).map((kind) => (
                   <TabsTrigger key={kind} value={kind}>
@@ -828,7 +835,7 @@ export default function ReviewsPage({
                   </TabsTrigger>
                 ))}
               </TabsList>
-            </Tabs>
+            </Tabs>}
             <div className="rp-status-filter">
               <label htmlFor="review-status-select" className="sr-only">
                 复盘状态
@@ -1345,35 +1352,35 @@ function ReviewCompareModal({
             <div className="ui-soft-divider grid gap-3 border-b px-4 py-3 sm:grid-cols-2 sm:px-5">
               <label className="min-w-0 text-xs font-semibold text-[var(--ui-text-muted)]">
                 主版本
-                <select
+                <SelectField
                   value={currentReview.id}
-                  onChange={(event) => selectCurrent(event.target.value)}
+                  onValueChange={(event) => selectCurrent(event)}
                   className="ui-field mt-1.5 h-10 w-full text-sm font-normal"
                   aria-label="选择主版本"
                 >
                   {versions.map((review) => (
-                    <option key={review.id} value={review.id}>
+                    <SelectItem key={review.id} value={review.id}>
                       v{review.version} ·{" "}
                       {review.status === "confirmed" ? "已确认" : "草稿"}
-                    </option>
+                    </SelectItem>
                   ))}
-                </select>
+                </SelectField>
               </label>
               <label className="min-w-0 text-xs font-semibold text-[var(--ui-text-muted)]">
                 对比版本
-                <select
+                <SelectField
                   value={previousReview.id}
-                  onChange={(event) => setPreviousId(event.target.value)}
+                  onValueChange={(event) => setPreviousId(event)}
                   className="ui-field mt-1.5 h-10 w-full text-sm font-normal"
                   aria-label="选择对比版本"
                 >
                   {previousOptions.map((review) => (
-                    <option key={review.id} value={review.id}>
+                    <SelectItem key={review.id} value={review.id}>
                       v{review.version} ·{" "}
                       {review.status === "confirmed" ? "已确认" : "草稿"}
-                    </option>
+                    </SelectItem>
                   ))}
-                </select>
+                </SelectField>
               </label>
               <p className="text-[11px] font-normal leading-5 text-[var(--ui-text-subtle)] sm:col-span-2">
                 {partial

@@ -107,7 +107,7 @@ async fn detailed_health_check(
     Ok(Json(serde_json::json!({
         "version": env!("CARGO_PKG_VERSION"),
         "build": BUILD_TIME,
-        "features": { "ai": ai, "reviews": true, "knowledge": true, "exports": true, "backups": true },
+        "features": { "ai": ai, "reviews": true, "knowledge": true, "profile": true, "exports": true, "backups": true },
         "ai_config": {
             "configured": ai,
             "api_key_configured": ai,
@@ -228,6 +228,26 @@ async fn import_full_package(
             "迁移包需要使用 ZIP 文件格式。".into(),
         ));
     }
+    let profile_revision = uri
+        .query()
+        .and_then(|q| {
+            q.split('&')
+                .find_map(|part| part.strip_prefix("profile_revision="))
+        })
+        .and_then(|value| value.parse::<i64>().ok());
+    if uri
+        .query()
+        .is_some_and(|q| q.split('&').any(|part| part == "replace_profile=true"))
+        && profile_revision.is_none()
+    {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "替换档案前需要刷新并确认当前版本。".into(),
+        ));
+    }
+    let replace_profile = uri
+        .query()
+        .is_some_and(|q| q.split('&').any(|pair| pair == "replace_profile=true"));
     let expected_revision = uri
         .query()
         .and_then(|query| {
@@ -294,11 +314,13 @@ async fn import_full_package(
             let mut db = db
                 .lock()
                 .map_err(|error| (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()))?;
-            crate::wallpaper_package::import_package(
+            crate::wallpaper_package::import_package_with_profile_mode(
                 &mut db,
                 &path,
                 expected_revision,
                 &backups_dir(),
+                replace_profile,
+                profile_revision,
             )
             .map_err(|error| match error {
                 crate::wallpaper_package::PackageImportError::Invalid(message) => {
@@ -324,17 +346,36 @@ async fn import_full_package(
     Ok(Json(operation))
 }
 
+#[derive(serde::Deserialize, Default)]
+struct PersonalImportOptions {
+    #[serde(default)]
+    replace_profile: bool,
+    #[serde(default)]
+    profile_revision: Option<i64>,
+}
+
 async fn import_full(
     State(db): State<AppState>,
+    axum::extract::Query(options): axum::extract::Query<PersonalImportOptions>,
     Json(payload): Json<serde_json::Value>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    if options.replace_profile && options.profile_revision.is_none() {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "替换档案前需要刷新并确认当前版本。".into(),
+        ));
+    }
     let result = run_blocking(move || {
         let mut db = db
             .lock()
             .map_err(|error| (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()))?;
         let report = db
             .portable_archive()
-            .import_json(payload)
+            .import_json_with_profile_revision(
+                payload,
+                options.replace_profile,
+                options.profile_revision,
+            )
             .map_err(|error| match error {
                 ArchiveImportError::Invalid(_) | ArchiveImportError::Json(_) => {
                     (StatusCode::BAD_REQUEST, error.to_string())
@@ -347,6 +388,8 @@ async fn import_full(
             "imported_articles": report.imported_articles,
             "imported_reviews": report.imported_reviews,
             "imported_knowledge_cards": report.imported_knowledge_cards,
+            "imported_personal_entries": report.imported_personal_entries,
+            "imported_personal_goals": report.imported_personal_goals,
         }))
     })
     .await?;
@@ -390,6 +433,50 @@ fn build_router(db: Database) -> Router {
     let state: AppState = Arc::new(Mutex::new(db));
 
     let api_router = Router::new()
+        .route(
+            "/profile/analyses",
+            axum::routing::get(crate::profile::analyses),
+        )
+        .route(
+            "/profile/import-resume",
+            axum::routing::post(crate::profile::import_resume),
+        )
+        .route(
+            "/profile",
+            axum::routing::get(crate::profile::get).patch(crate::profile::save),
+        )
+        .route(
+            "/profile/entries/:id",
+            axum::routing::put(crate::profile::save_entry),
+        )
+        .route(
+            "/profile/entries/:id/state",
+            axum::routing::patch(crate::profile::entry_state),
+        )
+        .route(
+            "/profile/goals/:id",
+            axum::routing::put(crate::profile::save_goal),
+        )
+        .route(
+            "/profile/goals/:id/state",
+            axum::routing::patch(crate::profile::goal_state),
+        )
+        .route(
+            "/profile/sources",
+            axum::routing::get(crate::profile::sources),
+        )
+        .route(
+            "/profile/context",
+            axum::routing::post(crate::profile::context),
+        )
+        .route(
+            "/profile/analyze",
+            axum::routing::post(crate::profile::analyze),
+        )
+        .route(
+            "/profile/analyses/:id",
+            axum::routing::get(crate::profile::analysis),
+        )
         .route(
             "/articles",
             axum::routing::get(articles::list_articles).post(articles::create_article),
@@ -535,6 +622,47 @@ fn build_router(db: Database) -> Router {
         .route(
             "/knowledge-cards/analyze",
             axum::routing::post(knowledge::analyze_cards),
+        )
+        .route(
+            "/ai/tasks",
+            axum::routing::get(crate::ai_tasks::list).post(crate::ai_tasks::create),
+        )
+        .route(
+            "/ai/tasks/:id",
+            axum::routing::get(crate::ai_tasks::read).delete(crate::ai_tasks::cancel),
+        )
+        .route(
+            "/ai/tasks/:id/retry",
+            axum::routing::post(crate::ai_tasks::retry),
+        )
+        .route(
+            "/articles/tag-suggestions",
+            axum::routing::get(articles::article_tags),
+        )
+        .route(
+            "/knowledge-cards/similar",
+            axum::routing::post(knowledge::organize::similar),
+        )
+        .route(
+            "/knowledge-cards/organize",
+            axum::routing::post(knowledge::organize::organize),
+        )
+        .route(
+            "/knowledge-cards/:id/sources",
+            axum::routing::get(knowledge::organize::sources),
+        )
+        .route(
+            "/knowledge-cards/:id/reuse",
+            axum::routing::post(knowledge::organize::reuse_create),
+        )
+        .route(
+            "/knowledge-reuse",
+            axum::routing::get(knowledge::organize::reuse_list),
+        )
+        .route(
+            "/knowledge-reuse/:id",
+            axum::routing::patch(knowledge::organize::reuse_update)
+                .delete(knowledge::organize::reuse_delete),
         )
         .route(
             "/knowledge-cards/analyze-jobs",
@@ -690,7 +818,9 @@ pub async fn run() {
     let bind = bind_address(std::env::var("DAILY_SUMMARY_BIND").ok());
     validate_security_configuration(&bind)
         .unwrap_or_else(|error| panic!("Invalid security configuration: {error}"));
-    let db = Database::new().expect("Failed to initialize database");
+    let mut db = Database::new().expect("Failed to initialize database");
+    db.personal_recover_pending()
+        .expect("Failed to recover interrupted personal analyses");
     let router = build_router(db);
     let listener = tokio::net::TcpListener::bind(&bind)
         .await

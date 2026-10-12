@@ -1,5 +1,9 @@
+import DatePickerPopover from "./ui/date-picker";
+import { Input, Textarea } from "./ui/reading-surface";
+import { useReadingScroll } from "../lib/useReadingScroll";
 import { useEffect, useMemo, useRef, useState } from "react";
 import KnowledgeLibrary, { type LibraryFilter } from "./knowledge/KnowledgeLibrary";
+import ReadingActions from "./workspace/ReadingActions";
 import KnowledgeReader from "./knowledge/KnowledgeReader";
 import "./knowledge/knowledge.css";
 import { Link } from "@tanstack/react-router";
@@ -69,7 +73,7 @@ const knowledgePageSize = 24;
 const sortOptions: Array<[KnowledgeSort, string]> = [
   ["updated", "最近更新"],
   ["created", "最近创建"],
-  ["usage", "使用最多"],
+  ["usage", "打开最多"],
   ["review", "优先复习"],
 ];
 const qualityOptions: Array<[api.KnowledgeCardQuality, string, string]> = [
@@ -289,10 +293,11 @@ export default function KnowledgePage({
   onOpenCard,
   onNewCard,
   onBackToList,
+  backLabel = "返回知识库",
   dark,
   onWikiLink,
 }: {
-  onEditDate: (date: string) => void;
+  onEditDate: (date: string, editing?: boolean) => void;
   onNavigate: (page: Page) => void;
   initialCardId?: string;
   initialNonce?: number;
@@ -310,6 +315,7 @@ export default function KnowledgePage({
   onOpenCard?: (cardId: string) => void;
   onNewCard?: () => void;
   onBackToList?: () => void;
+  backLabel?: string;
   dark?: boolean;
   onWikiLink?: (title: string) => void;
 }) {
@@ -350,7 +356,7 @@ export default function KnowledgePage({
   const [sourceExpanded, setSourceExpanded] = useState(false);
   const [detailError, setDetailError] = useState("");
   const [detailReload, setDetailReload] = useState(0);
-  const detailScrollRef = useRef<HTMLDivElement>(null);
+
   const sheetReturnFocusRef = useRef<HTMLElement | null>(null);
   const [mobileFiltersOpen, setMobileFiltersOpen] = useState(false);
   const [mobileBatchOpen, setMobileBatchOpen] = useState(false);
@@ -568,7 +574,7 @@ export default function KnowledgePage({
   }, [initialPage]);
 
   const sortedCards = useMemo(() => sortKnowledgeCards(cards, sort), [cards, sort]);
-  const selectedCard = useMemo(() => cards.find((card) => card.id === selectedId) || (detailCard?.id === selectedId ? detailCard : null), [cards, detailCard, selectedId]);
+  const selectedCard = useMemo(() => (detailCard?.id === selectedId ? detailCard : null) || cards.find((card) => card.id === selectedId), [cards, detailCard, selectedId]);
   const selectedSpace = useMemo(
     () => projectCounts.find((space) => space.name.toLocaleLowerCase() === projectFilter.toLocaleLowerCase()),
     [projectCounts, projectFilter]
@@ -869,7 +875,7 @@ export default function KnowledgePage({
       const [pageResult, summaryResult] = await Promise.all([
         queryClient.fetchQuery({
           queryKey: api.knowledgeQueryKeys.cards(filterKey),
-          queryFn: ({ signal }) => api.queryKnowledgeCards({
+          queryFn: ({ signal }) => api.queryKnowledgeCards({ summary:true,
             card_type: cardType,
             status: statusParam,
             q: search,
@@ -959,7 +965,7 @@ export default function KnowledgePage({
     };
     void queryClient.prefetchQuery({
       queryKey: api.knowledgeQueryKeys.cards(filterKey),
-      queryFn: ({ signal }) => api.queryKnowledgeCards({
+      queryFn: ({ signal }) => api.queryKnowledgeCards({ summary:true,
         card_type: cardType,
         status: statusParam,
         q: search,
@@ -1294,7 +1300,10 @@ export default function KnowledgePage({
           discardStoredDraft(null);
         }
       }
-      if (selectedId !== card.id) selectCard(card);
+      if (selectedId !== card.id) {
+        try { const full=card.content_is_summary ? await api.getKnowledgeCard(card.id) : card;selectCard(full); }
+        catch(e){setDetailError(api.getErrorMessage(e));return;}
+      }
       setMobileView("detail");
       onOpenCard?.(card.id);
     };
@@ -1306,7 +1315,7 @@ export default function KnowledgePage({
   useEffect(() => {
     if (!initialCardId || initialCardHandled.current === initialCardId) return;
     const target = cards.find((card) => card.id === initialCardId);
-    if (target) {
+    if (target && !target.content_is_summary) {
       initialCardHandled.current = initialCardId;
       selectCard(target);
       return;
@@ -1390,7 +1399,7 @@ export default function KnowledgePage({
     const timer = setTimeout(() => {
       void queryClient.fetchQuery({
         queryKey: api.knowledgeQueryKeys.cards({ q: search, sort: "updated", page: "1", pageSize: "8" }),
-        queryFn: ({ signal }) => api.queryKnowledgeCards({ q: search, sort: "updated", page: 1, page_size: 8 }, { signal }),
+        queryFn: ({ signal }) => api.queryKnowledgeCards({ summary:true, q: search, sort: "updated", page: 1, page_size: 8 }, { signal }),
         staleTime: knowledgeQueryStaleTime,
       })
         .then((result) => {
@@ -1411,7 +1420,7 @@ export default function KnowledgePage({
     const timer = setTimeout(() => {
       void queryClient.fetchQuery({
         queryKey: api.knowledgeQueryKeys.cards({ q: search, sort: "updated", page: "1", pageSize: "8" }),
-        queryFn: ({ signal }) => api.queryKnowledgeCards({ q: search, sort: "updated", page: 1, page_size: 8 }, { signal }),
+        queryFn: ({ signal }) => api.queryKnowledgeCards({ summary:true, q: search, sort: "updated", page: 1, page_size: 8 }, { signal }),
         staleTime: knowledgeQueryStaleTime,
       })
         .then((result) => {
@@ -1496,7 +1505,7 @@ export default function KnowledgePage({
     const returnId = selectedId;
     window.setTimeout(() => {
       const link = returnId ? document.querySelector<HTMLAnchorElement>(`[data-card-id="${CSS.escape(returnId)}"]`) : null;
-      (link || document.querySelector<HTMLInputElement>('.kl-search input'))?.focus();
+      (link || document.querySelector<HTMLInputElement>('.kl-search input'))?.focus({ preventScroll: true });
     }, 80);
     if (onBackToList) onBackToList();
     else onNavigate("knowledge");
@@ -1816,7 +1825,7 @@ export default function KnowledgePage({
         }
       }
       setSourceDetailOpen(false);
-      onEditDate(date);
+      onEditDate(date, true);
     };
     void open();
   };
@@ -1975,10 +1984,10 @@ export default function KnowledgePage({
   if (projectFilter) libraryFilters.push({ label: `空间：${projectFilter}`, onRemove: () => changeProject("") });
   if (tagFilter) libraryFilters.push({ label: `标签：${tagFilter}`, onRemove: () => changeTag("") });
   if (typeFilter) libraryFilters.push({ label: `类型：${typeLabels[typeFilter as KnowledgeCardType]}`, onRemove: () => changeType("") });
-  if (usageFilter) libraryFilters.push({ label: "从未使用", onRemove: () => changeUsage("") });
+  if (usageFilter) libraryFilters.push({ label: "从未打开", onRemove: () => changeUsage("") });
   if (qualityFilter) libraryFilters.push({ label: qualityOptions.find(([value]) => value === qualityFilter)?.[1] || qualityFilter, onRemove: () => changeQuality("") });
+  const detailScroll=useReadingScroll(`${selectedId}:${readerTab}`);
   useEffect(() => {
-    detailScrollRef.current?.scrollTo({ top: 0 });
     if (window.matchMedia("(max-width: 1023px)").matches) {
       document.getElementById("main-content")?.scrollTo({ top: 0 });
     }
@@ -2001,7 +2010,7 @@ export default function KnowledgePage({
     return () => window.removeEventListener("keydown", keydown);
   }, [detailVisible, readerTab, saving, saveState, selectedId, draft, dirty]);
   return (
-    <div className="knowledge-hub">
+    <div className="knowledge-hub" data-detail={detailVisible} data-reader-tab={readerTab}>
       <header className="kl-page-header">
         <div className="kl-page-title">
           <span className="kl-brand-mark">
@@ -2011,25 +2020,10 @@ export default function KnowledgePage({
             <h1>知识</h1>
           </div>
         </div>
-        <div className="kl-page-actions">
-          <button
-            type="button"
-            onClick={() => setImportOpen(true)}
-            aria-label="导入知识"
-            className="ui-button-secondary"
-          >
-            <Upload size={16} />
-            <span>导入知识</span>
-          </button>
-          <button
-            type="button"
-            onClick={startNew}
-            className="ui-button-primary"
-          >
-            <Plus size={17} />
-            <span>新建条目</span>
-          </button>
-        </div>
+        <div className="kl-page-actions"><ReadingActions label="知识库操作" actions={[
+          { id: "import", label: "导入知识", icon: <Upload size={17}/>, onSelect: () => setImportOpen(true) },
+          { id: "new", label: "新建条目", icon: <Plus size={17}/>, variant: "primary", onSelect: startNew },
+        ]}/></div>
       </header>
       {error && (
         <div
@@ -2118,7 +2112,7 @@ export default function KnowledgePage({
                 className="absolute left-3 top-1/2 -translate-y-1/2 text-[var(--ui-text-subtle)]"
                 size={16}
               />
-              <input
+              <Input
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
                 onKeyDown={(e) => {
@@ -2181,7 +2175,7 @@ export default function KnowledgePage({
                       className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-[var(--ui-text-subtle)]"
                       size={15}
                     />
-                    <input
+                    <Input
                       value={spaceFilterQuery}
                       onChange={(event) =>
                         setSpaceFilterQuery(event.target.value)
@@ -2270,7 +2264,7 @@ export default function KnowledgePage({
                       )
                     }
                   >
-                    从未使用
+                    从未打开
                   </FilterButton>
                 </div>
               </div>
@@ -2579,7 +2573,7 @@ export default function KnowledgePage({
                 </div>
                 <div className="flex items-center gap-2">
                   {batchMode === "tag" || batchMode === "remove_tag" ? (
-                    <input
+                    <Input
                       value={batchValue}
                       onChange={(e) => setBatchValue(e.target.value)}
                       onKeyDown={(e) => {
@@ -2700,6 +2694,7 @@ export default function KnowledgePage({
         onSort={changeSort}
         onDensity={changeDensity}
         onSelect={toggleSelected}
+        onClearSelection={clearSelection}
         onSelectAll={selectAllVisible}
         onInvert={invertVisibleSelection}
         onOpen={openCard}
@@ -2805,7 +2800,7 @@ export default function KnowledgePage({
                 onClick={() => void closeMobileDetail()}
               >
                 <ArrowLeft size={16} />
-                <span>返回知识库</span>
+                <span>{backLabel}</span>
               </button>
               <div>
                 <span
@@ -2815,6 +2810,21 @@ export default function KnowledgePage({
                 >
                   {selectedId ? mobileSaveLabel : "新建草稿"}
                 </span>
+                <div className="kl-mobile-actions">
+                  <ReadingActions label="知识操作" actions={[
+                    {id:"read",label:"阅读正文",icon:<BookOpen size={16}/>,disabled:!selectedId || awaitingDetail,onSelect:()=>setReaderTab("read")},
+                    {id:"edit",label:"编辑知识",icon:<PencilLine size={16}/>,disabled:awaitingDetail,onSelect:()=>setReaderTab("edit")},
+                    {id:"review",label:"复习题与进度",icon:<CheckCircle2 size={16}/>,disabled:!selectedId || awaitingDetail,onSelect:()=>setReaderTab("review")},
+                    {id:"import",label:"导入知识",icon:<Upload size={16}/>,onSelect:()=>setImportOpen(true)},
+                    {id:"new",label:"新建条目",icon:<Plus size={16}/>,onSelect:startNew},
+                    ...(selectedId ? [
+                      ...(draft.status === "draft" ? [{id:"confirm",label:"确认沉淀",onSelect:()=>void updateStatus("confirmed")}] : []),
+                      {id:"status",label:draft.status === "outdated" ? "恢复为已确认" : "标记为过时",onSelect:()=>void updateStatus(draft.status === "outdated" ? "confirmed" : "outdated")},
+                      {id:"trash",label:"移入回收站",variant:"danger" as const,icon:<Trash2 size={16}/>,onSelect:()=>void deleteCards()},
+                    ] : []),
+                  ]}/>
+
+                </div>
                 <button
                   type="button"
                   className="kl-icon kl-focus-button"
@@ -2859,7 +2869,7 @@ export default function KnowledgePage({
                 复习
               </button>
             </div>
-            <div className="kl-detail-scroll" ref={detailScrollRef}>
+            <div className="kl-detail-scroll" ref={detailScroll.attach} onScroll={detailScroll.onScroll}>
               {validationEntries.length > 0 && (
                 <div
                   ref={validationSummaryRef}
@@ -2968,6 +2978,8 @@ export default function KnowledgePage({
                 <>
                   {readerTab === "read" && selectedCard && (
                     <KnowledgeReader
+                      key={selectedCard.id+selectedCard.updated_at}
+                      onUpdated={card=>{selectCard(card);void loadCards(false,false);}}
                       card={{
                         ...selectedCard,
                         ...payloadFromDraft(draft, draftRelatedIds),
@@ -3003,7 +3015,7 @@ export default function KnowledgePage({
                           >
                             知识标题
                           </label>
-                          <input
+                          <Input
                             id="knowledge-card-title"
                             value={draft.title}
                             onChange={(e) =>
@@ -3184,7 +3196,7 @@ export default function KnowledgePage({
                                       #{tag} <X size={12} />
                                     </button>
                                   ))}
-                                  <input
+                                  <Input
                                     id="knowledge-card-tags"
                                     value={tagInput}
                                     onChange={(e) =>
@@ -3498,7 +3510,7 @@ export default function KnowledgePage({
                                 {sourceState === "error" &&
                                   "来源读取失败；可以修复连接后重试，也可以清空来源字段。"}
                               </p>
-                              <textarea
+                              <Textarea
                                 id="knowledge-source-excerpt"
                                 aria-label="支撑知识条目的来源片段"
                                 aria-invalid={!!fieldErrors.source}
@@ -3527,12 +3539,13 @@ export default function KnowledgePage({
                               >
                                 来源日期（可选）
                               </label>
-                              <input
+                              <DatePickerPopover
                                 id="knowledge-source-date"
-                                type="date"
+                                label="来源日期（可选）"
+                                hideLabel clearable
                                 value={draft.source_date}
                                 onChange={(e) =>
-                                  updateDraft({ source_date: e.target.value })
+                                  updateDraft({ source_date: e })
                                 }
                                 aria-invalid={!!fieldErrors.source}
                                 aria-describedby={[
@@ -3543,7 +3556,7 @@ export default function KnowledgePage({
                                 ]
                                   .filter(Boolean)
                                   .join(" ")}
-                                className="ui-field h-11 min-h-11 text-xs"
+                                className="w-full"
                               />
                               <p
                                 id="knowledge-source-date-help"
@@ -3563,7 +3576,7 @@ export default function KnowledgePage({
                               >
                                 有可读取来源时自动带入；手动来源片段可以留空。
                               </p>
-                              <input
+                              <Input
                                 id="knowledge-source-id"
                                 value={
                                   draft.source_article_id ||
@@ -3813,7 +3826,7 @@ function SpaceOverview({
   articles: api.ArticleSummary[];
   loading: boolean;
   error: string;
-  onEditDate: (date: string) => void;
+  onEditDate: (date: string, editing?: boolean) => void;
 }) {
   const kindLabel = space?.kind === "project" ? "项目" : "主题";
   const articleCount = space?.article_count ?? articles.length;
@@ -3941,7 +3954,7 @@ function TagFilterPicker({
       {canSearch && (
         <label className="relative block">
           <Search className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-[var(--ui-text-subtle)]" size={compact ? 14 : 13} />
-          <input
+          <Input
             id={inputId}
             value={query}
             onChange={(event) => setQuery(event.target.value)}

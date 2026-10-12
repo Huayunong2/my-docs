@@ -1,3 +1,4 @@
+import ReadingActions from "./workspace/ReadingActions";
 import { useRef, useState, type RefObject } from "react";
 import * as Dialog from "@radix-ui/react-dialog";
 import { CalendarDays, Check, Copy, Edit3, Folder, Trash2, X } from "lucide-react";
@@ -98,18 +99,11 @@ export default function ArticleDetail({
             )}
           </div>
           <div className="article-detail-actions flex shrink-0 flex-wrap items-center gap-1 self-end" role="group" aria-label="记录操作">
-            <button type="button" onClick={copyContent} className="article-detail-action-button ui-button-ghost justify-center" aria-label={copied ? "已复制记录内容" : "复制记录内容"} title={copied ? "已复制" : "复制记录内容"}>
-              {copied ? <Check size={14} /> : <Copy size={14} />}
-              <span className="article-detail-action-label">{copied ? "已复制" : "复制"}</span>
-            </button>
-            <button type="button" onClick={() => onEdit(article.date)} className="article-detail-action-button ui-button-ghost justify-center" aria-label="编辑记录" title="编辑记录">
-              <Edit3 size={14} /> <span className="article-detail-action-label">编辑</span>
-            </button>
-            {onDelete && (
-              <button type="button" onClick={() => onDelete(article)} className="article-detail-action-button ui-button-danger justify-center" aria-label="移入记录回收站" title="移入记录回收站">
-                <Trash2 size={14} /> <span className="article-detail-action-label">移入回收站</span>
-              </button>
-            )}
+            <ReadingActions label="记录阅读操作" actions={[
+              { id:"copy", label:copied ? "已复制记录内容" : "复制记录内容", icon:copied ? <Check size={14}/> : <Copy size={14}/>, onSelect: () => void copyContent() },
+              { id:"edit", label:"编辑记录", icon:<Edit3 size={14}/>, onSelect: () => onEdit(article.date) },
+              ...(onDelete ? [{id:"delete", label:"移入记录回收站", variant:"danger" as const, icon:<Trash2 size={14}/>, onSelect: () => onDelete(article)}] : []),
+            ]}/>
             <button type="button" onClick={onClose} className="article-detail-close-button ui-icon-button" title="关闭" aria-label="关闭详情">
               <X size={16} />
             </button>

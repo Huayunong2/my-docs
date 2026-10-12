@@ -1,10 +1,15 @@
 # Dependencies
 node_modules/
+.npm/
+.pnpm-store/
 
 # Frontend and Rust/Tauri build output
 dist/
 target/
 src-tauri/gen/
+*.tsbuildinfo
+.vite/
+.cache/
 
 # Deployment staging created by setup.sh
 .deploy-stage.*
@@ -12,18 +17,44 @@ src-tauri/gen/
 # Local environment and secrets
 .env
 .env.*
+*.env
 !.env.example
 !server/backup.env.example
+.aws/
+.ssh/
 *.pem
 *.key
 *.crt
+*.p12
+*.pfx
 
 # Local application data and SQLite files
 .daily-summary/
-*.db*
+*.db
+*.db-*
+*.sqlite
+*.sqlite-*
+*.sqlite3
+*.sqlite3-*
 
 # Migration bundles created by ops.sh in the project directory
 *.tar.gz
+/backups/
+/exports/
+/server/backups/
+/server/exports/
+
+# Local test reports, screenshots, logs and coverage
+# Keep source images and regression scripts; write generated reports here or /tmp.
+coverage/
+test-results/
+playwright-report/
+blob-report/
+ui-artifacts/
+logs/
+*.log
+*.profraw
+*.profdata
 
 # OS / editor
 .DS_Store
@@ -33,11 +64,11 @@ Thumbs.db
 *.swp
 *.swo
 
-# Local helper scripts generated ad hoc
-gen_icons.py
+# Internal research stays local; referenced, maintained project guides are public.
+docs/*
+!docs/knowledge-ui-redesign.md
 
-# Local-only workspace files
-docs/
+# Local-only agent workspace files
 .agents/
 .codex/
 .impeccable/

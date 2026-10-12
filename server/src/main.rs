@@ -1,5 +1,6 @@
 mod ai;
 mod ai_client;
+mod ai_tasks;
 mod archive;
 mod articles;
 mod backup_policy;
@@ -11,6 +12,7 @@ pub(crate) mod helpers;
 mod knowledge;
 pub(crate) mod middleware;
 pub(crate) mod models;
+mod profile;
 mod review;
 mod server;
 mod stats;

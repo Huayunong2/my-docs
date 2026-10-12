@@ -17,6 +17,8 @@ import "./workspace/sidebar.css";
 import * as Dialog from "@radix-ui/react-dialog";
 import { Link } from "@tanstack/react-router";
 import {
+  ArrowUp,
+  Sparkles,
   BarChart3,
   BookMarked,
   BookOpenText,
@@ -35,6 +37,7 @@ import {
   PanelLeftOpen,
   Search,
   Settings,
+  UserRound,
   Sun,
   X,
   type LucideIcon,
@@ -49,6 +52,7 @@ const primary: NavItem[] = [
   { id: "today", label: "今日", icon: NotebookPen },
   { id: "history", label: "记录", icon: CalendarDays },
   { id: "knowledge", label: "知识", icon: BookMarked },
+  { id: "profile", label: "个人档案", icon: UserRound },
 ];
 const learning: NavItem[] = [
   { id: "review", label: "复习", icon: Brain },
@@ -60,7 +64,7 @@ const utilities: NavItem[] = [
   { id: "settings", label: "设置", icon: Settings },
 ];
 const mobilePrimary = [primary[0], primary[2], learning[0], learning[1]];
-const mobileMore = [primary[1], learning[2], ...utilities];
+const mobileMore = [primary[1], primary[3], learning[2], ...utilities];
 const themeIcons = { system: Monitor, light: Sun, dark: Moon };
 interface SidebarProps {
   page: Page;
@@ -79,6 +83,7 @@ export default function Sidebar(p: SidebarProps) {
     () => readLocalStorage("sidebar-collapsed") === "1",
   );
   const [moreOpen, setMoreOpen] = useState(false);
+  const openAiAfterClose = useRef(false);
   const [hint, setHint] = useState<{
     key: string;
     label: string;
@@ -390,7 +395,12 @@ export default function Sidebar(p: SidebarProps) {
         </nav>
         <Dialog.Portal>
           <Dialog.Overlay className="ui-overlay fixed inset-0 z-[70]" />
-          <Dialog.Content className="shell-more-dialog">
+          <Dialog.Content className="shell-more-dialog" onCloseAutoFocus={event => {
+            if (!openAiAfterClose.current) return;
+            openAiAfterClose.current = false;
+            event.preventDefault();
+            window.dispatchEvent(new Event("ai-tasks-open"));
+          }}>
             <header>
               <Dialog.Title>更多</Dialog.Title>
               <Dialog.Close asChild>
@@ -417,6 +427,10 @@ export default function Sidebar(p: SidebarProps) {
                 </Link>
               ))}
             </nav>
+            <div className="mobile-tools" aria-label="页面工具">
+              <button onClick={() => { openAiAfterClose.current = true; setMoreOpen(false); }}><Sparkles size={19}/><span>AI 用量与任务</span><ChevronRight size={16}/></button>
+              <button onClick={() => { document.getElementById("main-content")?.scrollTo({ top: 0, behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth" }); setMoreOpen(false); }}><ArrowUp size={19}/><span>回到顶部</span></button>
+            </div>
             <div
               className="shell-theme-options"
               role="group"

@@ -137,7 +137,7 @@ export default function HistoryPage({
         detailTriggerRef.current &&
         document.contains(detailTriggerRef.current)
       ) {
-        detailTriggerRef.current.focus();
+        detailTriggerRef.current.focus({preventScroll:true});
       }
       closeTimerRef.current = null;
     }, 140);
@@ -751,7 +751,7 @@ export default function HistoryPage({
                 onCloseAutoFocus={(event) => {
                   if (!detailTriggerRef.current) return;
                   event.preventDefault();
-                  detailTriggerRef.current.focus();
+                  detailTriggerRef.current.focus({preventScroll:true});
                 }}
               >
                 <motion.div
@@ -920,7 +920,7 @@ function HistoryCard({
   article: ArticleSummary;
   selected: boolean;
   onOpen: (event: MouseEvent<HTMLButtonElement>) => void;
-  onEdit: (event: MouseEvent<HTMLButtonElement>) => void;
+  onEdit: (event?: MouseEvent<HTMLButtonElement>) => void;
   onDelete: (event?: MouseEvent<HTMLButtonElement>) => void;
 }) {
   const spaces = article.spaces || [];
@@ -996,7 +996,7 @@ function CardActions({
   onDelete,
   date,
 }: {
-  onEdit: (event: MouseEvent<HTMLButtonElement>) => void;
+  onEdit: (event?: MouseEvent<HTMLButtonElement>) => void;
   onDelete: (event?: MouseEvent<HTMLButtonElement>) => void;
   date: string;
 }) {
@@ -1005,7 +1005,7 @@ function CardActions({
       <button
         type="button"
         onClick={onEdit}
-        className="history-card-action"
+        className="history-card-action history-card-edit"
         aria-label={`编辑 ${date} 的记录`}
       >
         <PenLine size={13} aria-hidden="true" /> 编辑
@@ -1021,6 +1021,7 @@ function CardActions({
           </button>
         </DropdownMenuTrigger>
         <DropdownMenuContent align="end">
+          <DropdownMenuItem onSelect={() => onEdit()}><PenLine size={14}/>编辑记录</DropdownMenuItem>
           <DropdownMenuItem
             onSelect={() => onDelete()}
             className="text-[var(--ui-danger-text)]"

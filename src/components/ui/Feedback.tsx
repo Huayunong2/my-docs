@@ -75,9 +75,9 @@ export function EmptyState({
   action?: ReactNode;
 }) {
   return (
-    <div className="ui-panel-muted relative flex min-h-[200px] flex-col items-center justify-center px-5 py-10 text-center">
+    <div className="ui-empty-state relative flex min-h-[200px] flex-col items-center justify-center px-5 py-10 text-center">
       {Icon && (
-        <span className="relative mb-4 flex h-12 w-12 items-center justify-center rounded-xl bg-[var(--ui-surface-selected)] text-[var(--ui-accent-text)] ring-1 ring-[var(--ui-selected-border)]">
+        <span className="ui-empty-state-icon relative mb-4 flex h-12 w-12 items-center justify-center">
           <Icon size={22} strokeWidth={2} />
         </span>
       )}

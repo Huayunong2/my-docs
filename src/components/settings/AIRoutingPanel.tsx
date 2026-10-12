@@ -25,6 +25,8 @@ type ProfileDraft = {
   timeoutSecs: string;
   retries: string;
   minIntervalMs: string;
+  inputPrice: string;
+  outputPrice: string;
 };
 
 type RoutingDraft = {
@@ -42,6 +44,7 @@ const TASKS: Array<{
   { id: "daily_summary", label: "每日总结", description: "整理当天记录，生成可复习的简短总结", icon: CalendarDays },
   { id: "knowledge_extract", label: "知识条目提取", description: "从文档、记录或周期回顾中提炼知识条目候选", icon: BookOpen },
   { id: "weekly_review", label: "周复盘", description: "归纳一周的主题、事实与可复用沉淀", icon: BarChart3 },
+  { id: "profile_analysis", label: "个人分析", description: "基于明确选择的个人档案与目标提供分析", icon: FileText },
   { id: "monthly_review", label: "月复盘", description: "梳理跨周脉络，提炼长期复习材料", icon: FileText },
 ];
 
@@ -50,6 +53,8 @@ const FALLBACK_ROUTE = "__fallback__";
 
 function profileToDraft(profile: api.AiModelProfile): ProfileDraft {
   return {
+    inputPrice:profile.input_price_cny == null ? "" : String(profile.input_price_cny),
+    outputPrice:profile.output_price_cny == null ? "" : String(profile.output_price_cny),
     id: profile.id,
     name: profile.name,
     model: profile.model,
@@ -85,6 +90,8 @@ function draftToRouting(draft: RoutingDraft): api.AiRoutingConfig {
       timeout_secs: Number(profile.timeoutSecs),
       retries: Number(profile.retries),
       min_interval_ms: Number(profile.minIntervalMs),
+      input_price_cny:profile.inputPrice.trim() ? Number(profile.inputPrice):null,
+      output_price_cny:profile.outputPrice.trim() ? Number(profile.outputPrice):null,
     })),
     routes: draft.routes,
     fallback_profile: draft.fallbackProfile,
@@ -101,6 +108,7 @@ function createProfile(id: string, source?: ProfileDraft): ProfileDraft {
     timeoutSecs: source?.timeoutSecs || "45",
     retries: source?.retries || "2",
     minIntervalMs: source?.minIntervalMs || "1200",
+    inputPrice:source?.inputPrice||"",outputPrice:source?.outputPrice||"",
   };
 }
 
@@ -122,6 +130,7 @@ function validateDraft(draft: RoutingDraft): string {
     if (!profile.model.trim()) return `“${profile.name || "未命名档案"}”的模型 ID 不能为空。`;
     if (profile.model.trim().length > 160) return "模型 ID 不能超过 160 个字符。";
 
+    for(const price of [profile.inputPrice,profile.outputPrice]){if(price.trim() && (!Number.isFinite(Number(price))||Number(price)<0||Number(price)>1_000_000)) return "人民币单价必须为 0–1,000,000 的数字，留空不估算费用。";}
     const temperature = Number(profile.temperature);
     const maxTokens = Number(profile.maxTokens);
     const timeoutSecs = Number(profile.timeoutSecs);
@@ -561,6 +570,8 @@ function ProfileCard({
               className="h-10 text-sm"
             />
           </ProfileField>
+          <ProfileField label="输入单价" hint="元 / 百万 token；留空不估算"><Input type="number" min={0} step="any" value={profile.inputPrice} onChange={e=>onChange(profile.id,"inputPrice",e.target.value)} disabled={disabled}/></ProfileField>
+          <ProfileField label="输出单价" hint="元 / 百万 token；留空不估算"><Input type="number" min={0} step="any" value={profile.outputPrice} onChange={e=>onChange(profile.id,"outputPrice",e.target.value)} disabled={disabled}/></ProfileField>
           <ProfileField label="最小请求间隔" hint="毫秒" className="sm:col-span-2">
             <Input
               type="number"

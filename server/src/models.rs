@@ -505,14 +505,16 @@ pub(crate) enum AiTask {
     KnowledgeExtract,
     WeeklyReview,
     MonthlyReview,
+    ProfileAnalysis,
 }
 
 impl AiTask {
-    pub(crate) const ALL: [Self; 4] = [
+    pub(crate) const ALL: [Self; 5] = [
         Self::DailySummary,
         Self::KnowledgeExtract,
         Self::WeeklyReview,
         Self::MonthlyReview,
+        Self::ProfileAnalysis,
     ];
 
     pub(crate) const fn key(self) -> &'static str {
@@ -521,12 +523,17 @@ impl AiTask {
             Self::KnowledgeExtract => "knowledge_extract",
             Self::WeeklyReview => "weekly_review",
             Self::MonthlyReview => "monthly_review",
+            Self::ProfileAnalysis => "profile_analysis",
         }
     }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct AiModelProfile {
+    #[serde(default)]
+    pub(crate) input_price_cny: Option<f64>,
+    #[serde(default)]
+    pub(crate) output_price_cny: Option<f64>,
     pub(crate) id: String,
     pub(crate) name: String,
     pub(crate) model: String,
@@ -547,6 +554,8 @@ pub(crate) struct AiRoutingConfig {
 impl AiRoutingConfig {
     pub(crate) fn from_global(config: &AiConfig) -> Self {
         let profile = |id: &str, name: &str| AiModelProfile {
+            input_price_cny: None,
+            output_price_cny: None,
             id: id.into(),
             name: name.into(),
             model: config.model.clone(),
@@ -561,6 +570,7 @@ impl AiRoutingConfig {
         routes.insert(AiTask::KnowledgeExtract.key().into(), "fast".into());
         routes.insert(AiTask::WeeklyReview.key().into(), "pro".into());
         routes.insert(AiTask::MonthlyReview.key().into(), "pro".into());
+        routes.insert(AiTask::ProfileAnalysis.key().into(), "pro".into());
         Self {
             profiles: vec![profile("fast", "快速模型"), profile("pro", "高质量模型")],
             routes,
@@ -789,6 +799,7 @@ pub(crate) struct ReviewListQuery {
 
 #[derive(Debug, Deserialize)]
 pub(crate) struct KnowledgeListQuery {
+    pub(crate) summary: Option<bool>,
     pub(crate) card_type: Option<String>,
     pub(crate) status: Option<String>,
     pub(crate) q: Option<String>,
@@ -907,6 +918,8 @@ pub(crate) struct ExtractKnowledgeCardsPayload {
 
 #[derive(Debug, Deserialize)]
 pub(crate) struct AnalyzeKnowledgeCardsPayload {
+    #[serde(default)]
+    pub(crate) preserve_duplicates: bool,
     pub(crate) content: String,
     #[serde(default)]
     pub(crate) source_name: String,
@@ -1029,6 +1042,8 @@ pub(crate) struct AiSummaryResponse {
 
 #[derive(Debug, Deserialize)]
 pub(crate) struct ChatCompletionResponse {
+    #[serde(default, deserialize_with = "deserialize_ai_usage")]
+    pub(crate) usage: Option<AiUsage>,
     pub(crate) choices: Vec<ChatChoice>,
 }
 
@@ -1041,4 +1056,193 @@ pub(crate) struct ChatChoice {
 pub(crate) struct ChatMessage {
     pub(crate) role: String,
     pub(crate) content: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub(crate) struct KnowledgeSource {
+    #[serde(default)]
+    pub article_id: String,
+    #[serde(default)]
+    pub review_id: String,
+    #[serde(default)]
+    pub date: String,
+    pub excerpt: String,
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct ReuseEvent {
+    pub id: String,
+    pub card_id: String,
+    #[serde(default)]
+    pub title: String,
+    pub used_at: String,
+    pub project: String,
+    pub problem: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct AiUsage {
+    pub prompt_tokens: u64,
+    pub completion_tokens: u64,
+    #[serde(default)]
+    pub total_tokens: u64,
+}
+
+fn deserialize_ai_usage<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<AiUsage>, D::Error> {
+    let value = Option::<serde_json::Value>::deserialize(deserializer)?;
+    Ok(value
+        .and_then(|value| serde_json::from_value::<AiUsage>(value).ok())
+        .map(|mut usage| {
+            if usage.total_tokens == 0 {
+                usage.total_tokens = usage.prompt_tokens.saturating_add(usage.completion_tokens);
+            }
+            usage
+        }))
+}
+#[cfg(test)]
+mod usage_compatibility_tests {
+    use super::*;
+    #[test]
+    fn optional_or_incomplete_usage_does_not_discard_valid_content() {
+        for usage in [
+            serde_json::Value::Null,
+            serde_json::json!({"completion_tokens":20}),
+            serde_json::json!({"prompt_tokens":"unknown","completion_tokens":20}),
+        ] {
+            let response:ChatCompletionResponse=serde_json::from_value(serde_json::json!({"choices":[{"message":{"role":"assistant","content":"有效结果"}}],"usage":usage})).unwrap();
+            assert!(response.usage.is_none());
+            assert_eq!(response.choices[0].message.content, "有效结果");
+        }
+        let response: ChatCompletionResponse = serde_json::from_value(
+            serde_json::json!({"choices":[],"usage":{"prompt_tokens":10,"completion_tokens":20}}),
+        )
+        .unwrap();
+        assert_eq!(response.usage.unwrap().total_tokens, 30);
+    }
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields, rename_all = "camelCase")]
+pub(crate) struct PersonalProfile {
+    pub name: String,
+    pub direction: String,
+    pub city: String,
+    pub bio: String,
+    pub goal: String,
+    pub preference: String,
+    pub email: String,
+    pub phone: String,
+    pub website: String,
+    pub skills: Vec<String>,
+}
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields, rename_all = "camelCase")]
+pub(crate) struct PersonalSource {
+    pub kind: String,
+    pub target_id: String,
+    pub title: String,
+    pub url: String,
+    pub date: String,
+    pub available: bool,
+}
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields, rename_all = "camelCase")]
+pub(crate) struct PersonalEntry {
+    pub id: String,
+    pub kind: String,
+    pub title: String,
+    pub organization: String,
+    pub start: String,
+    pub end: String,
+    pub status: String,
+    pub degree: String,
+    pub major: String,
+    pub position: String,
+    pub role: String,
+    pub focus: String,
+    pub description: String,
+    pub result: String,
+    pub achievement_type: String,
+    pub source_note: String,
+    pub source_url: String,
+    pub sources: Vec<PersonalSource>,
+    pub parent_id: String,
+    pub tags: Vec<String>,
+    pub ai_allowed: bool,
+    pub removed: bool,
+    pub updated_at: String,
+}
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields, rename_all = "camelCase")]
+pub(crate) struct PersonalGoal {
+    pub id: String,
+    pub title: String,
+    pub description: String,
+    pub status: String,
+    pub target_date: String,
+    pub next_step: String,
+    pub space_id: String,
+    pub space_title: String,
+    pub space_available: bool,
+    pub ai_allowed: bool,
+    pub removed: bool,
+    pub updated_at: String,
+}
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields, rename_all = "camelCase")]
+pub(crate) struct PersonalAnalysis {
+    pub id: String,
+    pub status: String,
+    pub question: String,
+    pub content: String,
+    pub model: String,
+    pub created_at: String,
+    pub profile_revision: i64,
+    pub purpose: String,
+    pub include_profile: bool,
+    pub imported: bool,
+    pub context_text: String,
+    pub context_fingerprint: String,
+    pub outdated: bool,
+    pub entry_ids: Vec<String>,
+    pub goal_ids: Vec<String>,
+    pub error: String,
+}
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields, rename_all = "camelCase")]
+pub(crate) struct PersonalArchive {
+    pub profile: PersonalProfile,
+    pub entries: Vec<PersonalEntry>,
+    pub goals: Vec<PersonalGoal>,
+    pub analyses: Vec<PersonalAnalysis>,
+}
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct PersonalSnapshot {
+    pub revision: i64,
+    pub updated_at: String,
+    pub profile: PersonalProfile,
+    pub entries: Vec<PersonalEntry>,
+    pub goals: Vec<PersonalGoal>,
+    pub analyses: Vec<PersonalAnalysis>,
+}
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub(crate) struct PersonalContextRequest {
+    pub expected_revision: i64,
+    pub purpose: String,
+    pub include_profile: bool,
+    pub entry_ids: Vec<String>,
+    #[serde(default)]
+    pub goal_ids: Vec<String>,
+}
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct PersonalContext {
+    pub revision: i64,
+    pub text: String,
+    pub fingerprint: String,
+    pub entry_count: usize,
+    pub goal_count: usize,
 }

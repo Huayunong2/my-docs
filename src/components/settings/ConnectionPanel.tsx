@@ -1,3 +1,5 @@
+import { Checkbox } from "../ui/checkbox";
+import RuntimeOverview from "./RuntimeOverview";
 import { useEffect, useState } from "react";
 import { ChevronDown, ClipboardCopy, Link2, RefreshCw, Save, Trash2, Wifi } from "lucide-react";
 import * as api from "../../lib/api";
@@ -183,7 +185,7 @@ export default function ConnectionPanel({
   };
 
   return (
-    <div className="settings-panel-stack flex w-full flex-col gap-5">
+    <div className="settings-panel-stack flex w-full flex-col gap-5"><RuntimeOverview/>
       <Card className="settings-connection-card">
         <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
           <SectionTitle desc="输入服务端地址和令牌，测试成功后才会保存到当前设备。修改表单不会立即改变当前连接。">服务端连接</SectionTitle>
@@ -191,7 +193,7 @@ export default function ConnectionPanel({
             {connectionStatusLabel}
           </span>
         </div>
-        <form onSubmit={(event) => { event.preventDefault(); void saveAndTest(); }} className="settings-connection-form grid gap-5">
+        <form noValidate onSubmit={(event) => { event.preventDefault(); void saveAndTest(); }} className="settings-connection-form grid gap-5">
           <div className="settings-connection-fields grid gap-5 md:grid-cols-[minmax(0,1.15fr)_minmax(17rem,0.85fr)]">
             <label htmlFor="server-url" className="block min-w-0">
               <span className="block text-sm font-semibold text-[var(--ui-text)]">服务器地址</span>
@@ -239,7 +241,7 @@ export default function ConnectionPanel({
           </div>
           <div className="settings-connection-controls flex flex-col gap-3 border-t border-[var(--ui-border)] pt-4 sm:flex-row sm:items-center sm:justify-between">
             <label className="flex min-h-10 items-center gap-2 text-sm text-[var(--ui-text-muted)]">
-              <input type="checkbox" checked={showToken} onChange={(event) => setShowToken(event.target.checked)} disabled={testing} className="accent-[var(--ui-accent-solid)]" />
+              <Checkbox type="checkbox" checked={showToken} onChange={(event) => setShowToken(event.target.checked)} disabled={testing} className="accent-[var(--ui-accent-solid)]" />
               显示令牌
             </label>
             <div className="flex flex-col gap-2 sm:flex-row sm:justify-end">

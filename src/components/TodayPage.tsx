@@ -1,3 +1,11 @@
+import { Input, Textarea } from "./ui/reading-surface";
+import ReadingActions from "./workspace/ReadingActions";
+import { ReadingSurface } from "./ui/reading-surface";
+import { useWideLayout } from "../lib/useWideLayout";
+import ResponsiveSplit, { preloadSplit } from "./workspace/ResponsiveSplit";
+import { useMobileLayout } from "../lib/useMobileLayout";
+import {useQueryClient} from "@tanstack/react-query";
+import {useDeferredValue} from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import TodayAIPanel from "./TodayAIPanel";
@@ -31,7 +39,7 @@ import { offerArticleUndo } from "../lib/articleUndo";
 import { normalizeTag } from "../lib/tags";
 import { DailyRecordSession } from "../lib/dailyRecordSession";
 import MarkdownContent from "./MarkdownContent";
-import { useConfirmDialog } from "./ui/Feedback";
+import { LoadingState, useConfirmDialog } from "./ui/Feedback";
 import { toast } from "sonner";
 import {
   DropdownMenu,
@@ -40,7 +48,6 @@ import {
   DropdownMenuTrigger,
 } from "./ui/dropdown-menu";
 import DatePickerPopover from "./ui/date-picker";
-import { Tabs, TabsList, TabsTrigger } from "./ui/tabs";
 import CodeMirror from "@uiw/react-codemirror";
 import { EditorView } from "@codemirror/view";
 import { markdown } from "@codemirror/lang-markdown";
@@ -224,12 +231,16 @@ function clearLocalDraft(date: string) {
   }
 }
 
+preloadSplit();
+
 type SaveStatus = "idle" | "saving" | "saved" | "error";
 type MobilePane = "edit" | "preview";
 
 export default function TodayPage({
   targetDate,
   targetNonce,
+  initialEditing = false,
+  onRead,
   onDateChange,
   onNavigate,
   returnTo,
@@ -242,6 +253,8 @@ export default function TodayPage({
 }: {
   targetDate?: string;
   targetNonce?: number;
+  initialEditing?: boolean;
+  onRead?: () => void;
   onDateChange?: (date: string) => void;
   onNavigate?: (page: "knowledge") => void;
   returnTo?: string;
@@ -252,6 +265,7 @@ export default function TodayPage({
   dark?: boolean;
   onWikiLink?: (title: string) => void;
 }) {
+  const queryClient=useQueryClient();
   const titleFieldRef = useRef<HTMLTextAreaElement>(null);
   const [selectedDate, setSelectedDate] = useState(
     () => targetDate || todayDate(),
@@ -265,15 +279,24 @@ export default function TodayPage({
   // 空间归属在知识确认阶段维护；这里只静默保留旧记录的关系，避免编辑日报时误清除。
   const [spaces, setSpaces] = useState<string[]>([]);
   const [dirty, setDirty] = useState(false);
+  const deferredContent = useDeferredValue(content);
   const [saveStatus, setSaveStatus] = useState<SaveStatus>("idle");
   const [saveError, setSaveError] = useState("");
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState("");
+  const [loadAttempt, setLoadAttempt] = useState(0);
   const [showMobileMore, setShowMobileMore] = useState(false);
+  const isMobile = useMobileLayout();
+  const wide=useWideLayout();
   const [metaExpanded, setMetaExpanded] = useState(false);
   const [mobilePane, setMobilePane] = useState<MobilePane>(() =>
     typeof window !== "undefined" && window.matchMedia?.("(max-width: 767px)").matches
-      ? "preview"
+      ? initialEditing ? "edit" : "preview"
       : "edit",
   );
+  useEffect(() => {
+    if (isMobile) { setMobilePane(initialEditing ? "edit" : "preview"); setMetaExpanded(false); }
+  }, [selectedDate, isMobile, initialEditing]);
   const [tagSuggestions, setTagSuggestions] = useState<string[]>(
     DEFAULT_TAG_SUGGESTIONS,
   );
@@ -301,6 +324,8 @@ export default function TodayPage({
   // Load article for selected date
   useEffect(() => {
     let cancelled = false;
+    setLoading(true);
+    setLoadError("");
     if (saveTimer.current) clearTimeout(saveTimer.current);
     if (localDraftTimer.current) clearTimeout(localDraftTimer.current);
     setArticle(null);
@@ -363,20 +388,21 @@ export default function TodayPage({
       .catch((e) => {
         if (cancelled) return;
         const restored = restoreLocalDraft(null);
+        setLoadError(api.getErrorMessage(e));
         setSaveError(
           restored
             ? "连接服务器失败，已保留本地草稿，恢复连接后可继续保存。"
             : "连接服务器失败: " + api.getErrorMessage(e),
         );
         setSaveStatus("error");
-      });
+      }).finally(() => { if (!cancelled) setLoading(false); });
 
     return () => {
       cancelled = true;
       if (saveTimer.current) clearTimeout(saveTimer.current);
       if (localDraftTimer.current) clearTimeout(localDraftTimer.current);
     };
-  }, [date]);
+  }, [date, loadAttempt]);
 
   // Keep ref in sync
   useEffect(() => {
@@ -385,28 +411,16 @@ export default function TodayPage({
 
   useEffect(() => {
     let cancelled = false;
-    api
-      .listArticles(1, 60)
-      .then(({ items }) => {
+    queryClient.fetchQuery({queryKey:["articleTagSuggestions",api.getServerUrl()],queryFn:({signal})=>api.getArticleTagSuggestions({signal}),staleTime:60_000})
+      .then((frequent) => {
         if (cancelled) return;
-        const counts = new Map<string, number>();
-        for (const item of items) {
-          for (const tag of item.tags) {
-            counts.set(tag, (counts.get(tag) || 0) + 1);
-          }
-        }
-        const frequent = [...counts.entries()]
-          .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
-          .map(([tag]) => tag);
-        setTagSuggestions(
-          [...new Set([...frequent, ...DEFAULT_TAG_SUGGESTIONS])].slice(0, 16),
-        );
+        setTagSuggestions([...new Set([...frequent,...DEFAULT_TAG_SUGGESTIONS])].slice(0,16));
       })
       .catch(() => undefined);
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [queryClient]);
 
   // Persist save — uses ref to avoid stale closure
   const doSave = useCallback(
@@ -783,19 +797,71 @@ export default function TodayPage({
     resize();
     window.addEventListener("resize", resize);
     return () => window.removeEventListener("resize", resize);
-  }, [title, zen]);
+  }, [title, zen, mobilePane, isMobile]);
 
   // Word & char count
   const charCount = content.length;
   const wordCount = content ? content.replace(/\s/g, "").length : 0;
 
+  const editorPane = <div
+          className={`${zen || mobilePane === "edit" ? "flex" : "hidden"} today-editor-pane min-w-0 flex-col md:flex`}
+        >
+          <div className="today-pane-heading ui-section-kicker mb-2 flex items-center justify-between gap-3">
+            <span className="inline-flex items-center gap-2">
+              <PenLine size={13} /> 编辑{" "}
+              <span className="today-format-hint">Markdown</span>
+            </span>
+            <span className="font-mono normal-case tracking-normal">
+              {wordCount} 字
+            </span>
+          </div>
+          <WallpaperSurface target="today.editor" className="today-writing-surface ui-editor-surface ui-code-editor h-[56dvh] min-h-0 w-full overflow-hidden md:h-auto md:flex-1">
+            <CodeMirror
+              value={content}
+              onCreateEditor={view => { if (isMobile) view.dispatch({ selection: { anchor: view.state.doc.length } }); }}
+              onChange={handleContentChange}
+              extensions={[markdown(), EditorView.lineWrapping]}
+              placeholder={`记录 ${date} 的进展、想法与收获…`}
+              aria-label="今日记录正文"
+              theme={dark ? "dark" : "light"}
+              height="100%"
+              style={{ height: "100%" }}
+              basicSetup={{
+                lineNumbers: false,
+                foldGutter: false,
+                highlightActiveLine: false,
+              }}
+            />
+          </WallpaperSurface>
+        </div>;
+  const previewPane = <div
+          className={`${mobilePane === "preview" ? "flex" : "hidden"} today-preview-pane min-w-0 flex-col md:flex`}
+          style={zen ? { display: "none" } : undefined}
+        >
+          <div className="today-pane-heading ui-section-kicker mb-2 flex items-center justify-between gap-3">
+            <span className="inline-flex items-center gap-2">
+              <Eye size={13} /> 实时预览
+            </span>
+            <span className="font-mono normal-case tracking-normal">
+              {charCount} 字符
+            </span>
+          </div>
+          <WallpaperSurface target="today.preview" className="today-preview-surface ui-editor-surface h-[56dvh] min-h-0 overflow-y-auto p-4 md:h-auto md:flex-1 md:p-5">
+            <ReadingSurface className="today-reading-document mx-auto max-w-[760px]">
+              {isMobile && loading ? <LoadingState label="正在读取记录…" rows={3}/> : isMobile && loadError && !content.trim() && !dirty ? <div className="today-reading-empty" role="alert"><h2>暂时无法读取记录</h2><p>{loadError}</p><button className="ui-button-secondary" onClick={() => setLoadAttempt(value => value + 1)}>重新读取</button></div> : isMobile && !content.trim() ? <div className="today-reading-empty"><Calendar size={30} strokeWidth={1.4}/><h2>{article || title.trim() ? "正文暂时为空" : "这一天还没有记录"}</h2><p>可以查看其他日期，或补记今天的进展与想法。</p><button className="ui-button-primary" onClick={() => setMobilePane("edit")}>{article || title.trim() ? "补充正文" : "开始记录"}</button></div> : <MarkdownPreview
+                content={deferredContent}
+                onWikiLink={onWikiLink}
+                onRepairContent={handleContentChange}
+              />}
+            </ReadingSurface>
+          </WallpaperSurface>
+        </div>;
   return (
     <motion.div
-      initial={{ opacity: 0, y: 10 }}
-      animate={{ opacity: 1, y: 0 }}
-      transition={{ duration: 0.3 }}
+      initial={false}
       className="page-surface page-surface-today h-full flex flex-col relative"
       data-zen={zen || undefined}
+      data-mobile-pane={mobilePane}
     >
       {zen && (
         <div className="flex items-center justify-between px-3 py-2 md:px-8 md:py-3">
@@ -816,6 +882,31 @@ export default function TodayPage({
         className="px-3 pb-2 pt-3 md:px-8 md:pt-4"
         style={zen ? { display: "none" } : undefined}
       >
+        {isMobile ? <header className="today-reading-header">
+          <div className="today-reading-topline">
+            <h1>今日记录</h1>
+            <div className="today-reading-tools">
+              <button className="ui-button-secondary" disabled={loading} onClick={() => { if (mobilePane === "preview") setMobilePane("edit"); else { setMobilePane("preview"); if (initialEditing) onRead?.(); } }}><PenLine size={16}/>{mobilePane === "preview" ? "补记" : "返回阅读"}</button>
+              <ReadingActions label="今日记录操作" actions={[
+                ...(returnTo && onReturn ? [{id:"return",label:`返回${returnLabel}`,icon:<ChevronLeft size={16}/>,onSelect:()=>void requestReturn()}] : []),
+                {id:"save",label:"立即保存",icon:<Save size={16}/>,disabled:loading || saveStatus === "saving",onSelect:handleManualSave},
+                {id:"summary",label:"AI 总结",icon:<Sparkles size={16}/>,disabled:loading || !content.trim(),onSelect:origin=>{aiTriggerRef.current=origin;setAiMode("summary");}},
+                {id:"knowledge",label:"提取知识",icon:<BookMarked size={16}/>,disabled:loading || !content.trim(),onSelect:origin=>{aiTriggerRef.current=origin;setAiMode("knowledge");}},
+                {id:"meta",label:"心情与标签",icon:<Smile size={16}/>,disabled:loading,onSelect:()=>setMetaExpanded(value=>!value)},
+                {id:"focus",label:"专注编辑",icon:<Maximize2 size={16}/>,disabled:loading,onSelect:()=>{setMobilePane("edit");onToggleZen?.();}},
+                ...TEMPLATES.map(template=>({id:`template:${template.name}`,label:`使用模板：${template.name}`,disabled:loading,onSelect:()=>void applyTemplate(template)})),
+                ...(article ? [{id:"trash",label:"移入回收站",variant:"danger" as const,icon:<Trash2 size={16}/>,onSelect:()=>void handleDelete()}] : []),
+              ]}/>
+
+            </div>
+          </div>
+          <div className="today-reading-date">
+            <button className="ui-icon-button" aria-label="前一天" onClick={() => requestDateChange(shiftDate(date,-1))}><ChevronLeft size={18}/></button>
+            <DatePickerPopover value={date} onChange={requestDateChange}/>
+            <button className="ui-icon-button" aria-label="后一天" onClick={() => requestDateChange(shiftDate(date,1))}><ChevronRight size={18}/></button>
+          </div>
+          <div className="today-reading-status" role="status"><span>{relativeDateLabel(date)} · {wordCount} 字</span><span>{loading ? "正在读取" : loadError ? "服务器读取失败" : saveStatus === "error" ? "保存失败，请重试" : saveStatus === "saving" ? "正在保存" : dirty ? "本机修改尚未保存" : article ? "已同步" : "尚无记录"}</span></div>
+        </header> : (
         <div className="today-header-panel px-2 py-2 sm:px-3">
           <div className="flex flex-col gap-2 xl:flex-row xl:items-center xl:justify-between">
             <div className="flex min-w-0 items-center justify-between gap-2">
@@ -941,7 +1032,7 @@ export default function TodayPage({
               </button>
             )}
             <motion.button
-              whileTap={{ scale: 0.95 }}
+              whileTap={{ scale: 0.98 }}
               onClick={handleManualSave}
               disabled={saveStatus === "saving"}
               className="ui-button-primary w-full md:w-auto"
@@ -1083,7 +1174,7 @@ export default function TodayPage({
 
             {article && (
               <motion.button
-                whileTap={{ scale: 0.95 }}
+                whileTap={{ scale: 0.98 }}
                 onClick={handleDelete}
                 className="ui-button-ghost hidden text-[var(--ui-danger-text)] md:inline-flex"
                 title="移入回收站"
@@ -1094,6 +1185,7 @@ export default function TodayPage({
           </div>
         </div>
 
+        )}
         <TodayAIPanel
           key={date}
           mode={aiMode}
@@ -1119,7 +1211,7 @@ export default function TodayPage({
 
         {/* Save error banner */}
         <AnimatePresence>
-          {saveError && (
+          {saveError && (!isMobile || !loadError || dirty) && (
             <motion.div
               initial={{ opacity: 0, height: 0 }}
               animate={{ opacity: 1, height: "auto" }}
@@ -1161,7 +1253,7 @@ export default function TodayPage({
                 <motion.button
                   key={m.emoji}
                   type="button"
-                  whileTap={{ scale: 0.94 }}
+                  whileTap={{ scale: 0.98 }}
                   onClick={() => handleMoodChange(m.emoji)}
                   aria-pressed={mood === m.emoji}
                   className={
@@ -1201,7 +1293,7 @@ export default function TodayPage({
                   #{tag} <X size={12} />
                 </button>
               ))}
-              <input
+              <Input
                 value={tagInput}
                 onChange={(e) => setTagInput(e.target.value)}
                 onKeyDown={(e) => {
@@ -1237,93 +1329,21 @@ export default function TodayPage({
       <div
         className={`today-title-block px-3 pb-2 md:px-8 ${zen ? "mx-auto w-full max-w-2xl" : ""}`}
       >
-        <textarea
+        {isMobile && mobilePane === "preview" ? (title.trim() && <h2 className="today-reading-title">{title}</h2>) : <Textarea
           ref={titleFieldRef}
           rows={1}
           value={title}
           onChange={handleTitleChange}
           placeholder="为这一天写个标题…"
           aria-label="今日记录标题"
+          disabled={isMobile && loading}
           className="today-title-input w-full resize-none overflow-hidden border-0 bg-transparent text-2xl font-semibold text-[var(--ui-text)] outline-hidden placeholder:text-[var(--ui-text-disabled)] md:text-2xl"
-        />
+        />}
       </div>
 
-      <div
-        className="px-3 pb-2 md:hidden"
-        style={zen ? { display: "none" } : undefined}
-      >
-        <Tabs
-          value={mobilePane}
-          onValueChange={(v) => setMobilePane(v as "edit" | "preview")}
-        >
-          <TabsList className="grid w-full grid-cols-2">
-            <TabsTrigger value="edit">
-              <PenLine size={14} /> 编辑
-            </TabsTrigger>
-            <TabsTrigger value="preview">
-              <Eye size={14} /> 预览
-            </TabsTrigger>
-          </TabsList>
-        </Tabs>
-      </div>
-
-      {/* Split editor */}
-      <div
-        className={`today-workspace grid flex-1 grid-cols-1 gap-4 px-3 pb-28 md:px-8 md:pb-6 min-h-0 ${zen ? "" : "md:grid-cols-[minmax(0,1.08fr)_minmax(360px,0.92fr)]"}`}
-      >
-        <div
-          className={`${zen || mobilePane === "edit" ? "flex" : "hidden"} min-w-0 flex-col md:flex`}
-        >
-          <div className="today-pane-heading ui-section-kicker mb-2 flex items-center justify-between gap-3">
-            <span className="inline-flex items-center gap-2">
-              <PenLine size={13} /> 编辑{" "}
-              <span className="today-format-hint">Markdown</span>
-            </span>
-            <span className="font-mono normal-case tracking-normal">
-              {wordCount} 字
-            </span>
-          </div>
-          <WallpaperSurface target="today.editor" className="today-writing-surface ui-editor-surface ui-code-editor h-[56dvh] min-h-0 w-full overflow-hidden md:h-auto md:flex-1">
-            <CodeMirror
-              value={content}
-              onChange={handleContentChange}
-              extensions={[markdown(), EditorView.lineWrapping]}
-              placeholder={`记录 ${date} 的进展、想法与收获…`}
-              aria-label="今日记录正文"
-              theme={dark ? "dark" : "light"}
-              height="100%"
-              style={{ height: "100%" }}
-              basicSetup={{
-                lineNumbers: false,
-                foldGutter: false,
-                highlightActiveLine: false,
-              }}
-            />
-          </WallpaperSurface>
-        </div>
-
-        <div
-          className={`${mobilePane === "preview" ? "flex" : "hidden"} min-w-0 flex-col md:flex`}
-          style={zen ? { display: "none" } : undefined}
-        >
-          <div className="today-pane-heading ui-section-kicker mb-2 flex items-center justify-between gap-3">
-            <span className="inline-flex items-center gap-2">
-              <Eye size={13} /> 实时预览
-            </span>
-            <span className="font-mono normal-case tracking-normal">
-              {charCount} 字符
-            </span>
-          </div>
-          <WallpaperSurface target="today.preview" className="today-preview-surface ui-editor-surface h-[56dvh] min-h-0 overflow-y-auto p-4 md:h-auto md:flex-1 md:p-5">
-            <div className="mx-auto max-w-[760px]">
-              <MarkdownPreview
-                content={content}
-                onWikiLink={onWikiLink}
-                onRepairContent={handleContentChange}
-              />
-            </div>
-          </WallpaperSurface>
-        </div>
+      {!isMobile && !wide && !zen && <div className="today-narrow-tabs" role="group" aria-label="今日记录视图"><button className="ui-button-secondary" aria-pressed={mobilePane === "edit"} onClick={()=>setMobilePane("edit")}>编辑记录</button><button className="ui-button-secondary" aria-pressed={mobilePane === "preview"} onClick={()=>setMobilePane("preview")}>阅读预览</button></div>}
+      <div className="today-workspace flex-1 min-h-0 px-3 pb-28 md:px-8 md:pb-6" data-pane={mobilePane} data-wide={wide} data-zen={zen}>
+        {wide && !zen ? <ResponsiveSplit workspace="today" first={editorPane} second={previewPane}/> : <>{(!isMobile || !loading && (zen || mobilePane === "edit")) && editorPane}{previewPane}</>}
       </div>
       {dialog}
     </motion.div>

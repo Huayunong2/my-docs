@@ -1,3 +1,5 @@
+import { Input } from "../ui/reading-surface";
+import { Checkbox, Radio } from "../ui/checkbox";
 import {
   useEffect,
   useMemo,
@@ -156,7 +158,7 @@ function WallpaperTargetGroup({
           <span className="wm-target-expand-spacer" aria-hidden="true" />
         )}
         <label className="wm-target-parent">
-          <input
+          <Checkbox
             ref={parentCheckbox}
             type="checkbox"
             checked={allSelected}
@@ -174,7 +176,7 @@ function WallpaperTargetGroup({
         >
           {targets.map((target) => (
             <label key={target.id} className="wm-target">
-              <input
+              <Checkbox
                 type="checkbox"
                 checked={selectedTargets.includes(target.id)}
                 onChange={() => onToggleTarget(target.id)}
@@ -1417,7 +1419,7 @@ export default function WallpaperManagerPanel({
                   <div className="wm-library-filters">
                     <label className="wm-library-search">
                       <Search size={15} aria-hidden="true" />
-                      <input
+                      <Input
                         type="search"
                         aria-label="按名称搜索壁纸"
                         placeholder="搜索壁纸名称"
@@ -1478,7 +1480,7 @@ export default function WallpaperManagerPanel({
                       </div>
                       <label className="wm-field">
                         <span>壁纸名称</span>
-                        <input
+                        <Input
                           type="text"
                           maxLength={80}
                           value={wallpaperName}
@@ -1497,6 +1499,7 @@ export default function WallpaperManagerPanel({
                           </span>
                           <input
                             type="file"
+                            className="sr-only"
                             accept="image/png,image/jpeg,image/webp"
                             disabled={busy || wallpaperReadOnly}
                             onChange={(event) => updateFile("desktop", event)}
@@ -1510,6 +1513,7 @@ export default function WallpaperManagerPanel({
                           </span>
                           <input
                             type="file"
+                            className="sr-only"
                             accept="image/png,image/jpeg,image/webp"
                             disabled={busy || wallpaperReadOnly}
                             onChange={(event) => updateFile("mobile", event)}
@@ -1624,7 +1628,7 @@ export default function WallpaperManagerPanel({
                               <fieldset className="wm-apply-mode">
                                 <legend>应用方式</legend>
                                 <label>
-                                  <input
+                                  <Radio
                                     type="radio"
                                     name="wallpaper-apply-mode"
                                     checked={applyMode === "append"}
@@ -1633,7 +1637,7 @@ export default function WallpaperManagerPanel({
                                   添加到现有壁纸
                                 </label>
                                 <label>
-                                  <input
+                                  <Radio
                                     type="radio"
                                     name="wallpaper-apply-mode"
                                     checked={applyMode === "replace"}
@@ -1906,7 +1910,7 @@ export default function WallpaperManagerPanel({
                   ) : null}
                   {preference.wallpaperIds.length > 1 && (
                     <label className="wm-cycle-toggle">
-                      <input
+                      <Checkbox
                         type="checkbox"
                         checked={preference.cycleDaily}
                         disabled={wallpaperReadOnly}
@@ -1924,7 +1928,7 @@ export default function WallpaperManagerPanel({
                         <span>背景遮罩</span>
                         <strong>{overlayDraft}%</strong>
                       </label>
-                      <input
+                      <Input
                         id="wm-module-overlay"
                         type="range"
                         min={45}
@@ -2180,7 +2184,7 @@ export default function WallpaperManagerPanel({
                           </button>
                         </Dialog.Close>
                       </div>
-                      <form
+                      <form noValidate
                         className="wm-profile-form"
                         onSubmit={(event) => {
                           event.preventDefault();
@@ -2189,7 +2193,7 @@ export default function WallpaperManagerPanel({
                       >
                         <label className="wm-field" htmlFor="wm-preset-name">
                           <span>方案名称</span>
-                          <input
+                          <Input
                             id="wm-preset-name"
                             type="text"
                             autoFocus

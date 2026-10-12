@@ -20,9 +20,12 @@ const ReviewPage = lazy(() => import("./components/ReviewPage"));
 const KnowledgePage = lazy(() => import("./components/KnowledgePage"));
 const KnowledgeTrashPage = lazy(() => import("./components/KnowledgeTrashPage"));
 const SettingsPage = lazy(() => import("./components/SettingsPage"));
+const ProfilePage = lazy(() => import("./components/ProfilePage"));
 
 export type AppSearch = {
   q?: string;
+  profileKind?: string;
+  entry?: string;
   date?: string;
   historyView?: "timeline" | "month" | "trash";
   historyMonth?: string;
@@ -55,6 +58,8 @@ function validateAppSearch(search: Record<string, unknown>): AppSearch {
   const view = stringValue(search.view);
   return {
     q: stringValue(search.q),
+    profileKind: stringValue(search.profileKind),
+    entry: stringValue(search.entry),
     date: stringValue(search.date),
     historyView: validHistoryView(stringValue(search.historyView)),
     historyMonth: validHistoryMonth(stringValue(search.historyMonth)),
@@ -222,10 +227,22 @@ const routeTree = rootRoute.addChildren([
   knowledgeTrashRoute,
   knowledgeDetailRoute,
   settingsRoute,
+  createRoute({ getParentRoute: () => rootRoute, path: "/profile", component: ProfileRoute }),
 ]);
 
 function useRootSearch() {
   return useSearch({ from: rootRoute.id }) as AppSearch;
+}
+
+function ProfileRoute() {
+  const search = useRootSearch();
+  const shell = useAppShell();
+  const tab = search.tab === "timeline" || search.tab === "context" || search.tab === "goals" || search.tab === "analyses" ? search.tab : "overview";
+  const kind = ["education","work","learning","project","achievement","milestone","certificate"].includes(search.profileKind || "") ? search.profileKind : "all";
+  return <ProfilePage tab={tab} entryId={search.entry} kind={kind} query={search.q}
+    onTabChange={value => shell.updateSearch({tab:value==="overview"?undefined:value,entry:undefined})}
+    onSelect={entry => shell.updateSearch({tab:"timeline",entry})}
+    onFilter={(profileKind,q) => shell.updateSearch({profileKind:profileKind==="all"?undefined:profileKind,q:q||undefined,entry:undefined},true)} />;
 }
 
 function TodayRoute() {
@@ -238,10 +255,12 @@ function TodayRoute() {
     <TodayPage
       targetDate={search.date}
       targetNonce={stringNonce(search.date)}
-      onDateChange={shell.openRecordDate}
+      initialEditing={search.tab === "edit"}
+      onRead={() => shell.updateSearch({ tab: undefined }, true)}
+      onDateChange={(date) => shell.openRecordDate(date, search.returnTo)}
       returnTo={search.returnTo}
       onReturn={search.returnTo ? returnFromToday : undefined}
-      returnLabel={search.returnTo?.startsWith("/history") ? "记录" : "复盘库"}
+      returnLabel={search.returnTo?.startsWith("/history") ? "记录" : search.returnTo?.startsWith("/search") ? "搜索结果" : "复盘库"}
       onNavigate={shell.navigate}
       zen={shell.zen}
       onToggleZen={shell.onToggleZen}
@@ -256,7 +275,7 @@ function HistoryRoute() {
   const shell = useAppShell();
   return (
     <HistoryPage
-      onEditDate={shell.openRecordDate}
+      onEditDate={(date, returnTo) => shell.openRecordDate(date, returnTo, true)}
       initialView={search.historyView || "timeline"}
       initialMonth={search.historyMonth}
       onViewChange={(view) => shell.updateSearch({
@@ -277,7 +296,7 @@ function SearchRoute() {
   const shell = useAppShell();
   return (
     <SearchPage
-      onEditDate={shell.openRecordDate}
+      onEditDate={date => shell.openRecordDate(date, `${window.location.pathname}${window.location.search}`, true)}
       onOpenKnowledgeCard={shell.openKnowledgeCard}
       initialQuery={search.q}
       initialNonce={stringNonce(search.q)}
@@ -359,7 +378,7 @@ function KnowledgeRouteContent({ cardId, forcedView }: { cardId?: string; forced
   const initialView = forcedView || search.view || (cardId ? "detail" : "list");
   return (
     <KnowledgePage
-      onEditDate={shell.openRecordDate}
+      onEditDate={(date, editing) => shell.openRecordDate(date, undefined, editing)}
       onNavigate={shell.navigate}
       initialCardId={cardId}
       initialNonce={stringNonce(cardId)}
@@ -377,6 +396,7 @@ function KnowledgeRouteContent({ cardId, forcedView }: { cardId?: string; forced
       onOpenCard={shell.openKnowledgeCard}
       onNewCard={shell.openNewKnowledgeCard}
       onBackToList={shell.backToKnowledge}
+      backLabel={search.returnTo?.startsWith("/search") ? "返回搜索结果" : search.returnTo?.startsWith("/reviews") ? "返回复盘" : search.returnTo?.startsWith("/review") ? "返回复习" : search.returnTo?.startsWith("/stats") ? "返回统计" : "返回知识库"}
       dark={shell.dark}
       onWikiLink={shell.openSearchTerm}
     />

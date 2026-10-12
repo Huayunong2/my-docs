@@ -1,5 +1,8 @@
+import {simpleDisplay,useSimpleDisplay} from "./lib/simpleDisplay";
+import ConnectionStatus from "./components/workspace/ConnectionStatus";
 import {
   createContext,
+  lazy,
   Suspense,
   useCallback,
   useContext,
@@ -14,10 +17,11 @@ import { Outlet, useLocation, useNavigate as useRouterNavigate } from "@tanstack
 import { useQuery } from "@tanstack/react-query";
 import { Toaster, toast } from "sonner";
 import WorkspaceInteractions from "./components/workspace/WorkspaceInteractions";
+import AiTaskLauncher from "./components/workspace/AiTaskLauncher";
 import { WallpaperSurfaceProvider } from "./components/workspace/WallpaperSurface";
 import { pageShortcuts, isInteractionBlocked } from "./lib/navigationInteractions";
 import Sidebar from "./components/Sidebar";
-import CommandPalette from "./components/CommandPalette";
+const CommandPalette=lazy(()=>import("./components/CommandPalette"));
 import * as api from "./lib/api";
 import { wallpaperConnectionMessage } from "./lib/wallpaperSyncStatus";
 import { useResponsiveWallpaperImage } from "./lib/useResponsiveWallpaperImage";
@@ -88,9 +92,10 @@ function emptyWallpaperSnapshot(): WallpaperSnapshot {
   };
 }
 
-export type Page = "today" | "history" | "archive" | "search" | "stats" | "reviews" | "review" | "knowledge" | "settings";
+export type Page = "today" | "history" | "archive" | "search" | "stats" | "reviews" | "review" | "knowledge" | "settings" | "profile";
 export type { ThemeMode } from "./lib/theme";
 
+const AiTaskTray=lazy(()=>import("./components/workspace/AiTaskTray"));
 const pageLoaders: Partial<Record<Page, () => Promise<unknown>>> = {
   today: () => import("./components/TodayPage"),
   history: () => import("./components/HistoryPage"),
@@ -102,16 +107,19 @@ const pageLoaders: Partial<Record<Page, () => Promise<unknown>>> = {
   review: () => import("./components/ReviewPage"),
   knowledge: () => import("./components/KnowledgePage"),
   settings: () => import("./components/SettingsPage"),
+  profile: () => import("./components/ProfilePage"),
 };
 
 export function preloadPage(page: Page) {
   void pageLoaders[page]?.().catch(() => { /* Navigation handles a failed lazy chunk; prefetch must stay silent. */ });
 }
 
+document.documentElement.dataset.simpleDisplay=String(simpleDisplay());
+
 function pageFromPath(pathname: string): Page {
   if (pathname.startsWith("/knowledge")) return "knowledge";
   const page = pathname.replace(/^\//, "") as Page;
-  return ["today", "history", "archive", "search", "stats", "reviews", "review", "settings"].includes(page)
+  return ["today", "history", "archive", "search", "stats", "reviews", "review", "settings", "profile"].includes(page)
     ? page
     : "today";
 }
@@ -137,14 +145,15 @@ function titleForPath(pathname: string) {
     "/archive": "记录",
     "/reviews": "复盘",
     "/settings": "设置",
+    "/profile": "个人档案",
   };
   return labels[pathname] || "每日总结";
 }
 
 export interface AppShellContextValue {
   navigate: (page: Page) => void;
-  updateSearch: (patch: Record<string, unknown>) => void;
-  openRecordDate: (date: string, returnTo?: string) => void;
+  updateSearch: (patch: Record<string, unknown>, replace?: boolean) => void;
+  openRecordDate: (date: string, returnTo?: string, editing?: boolean) => void;
   openReviewLibrary: (returnTo?: string) => void;
   returnFromToday: (returnTo?: string) => void;
   openSearchTerm: (query: string) => void;
@@ -203,6 +212,7 @@ export function AppShell() {
   const location = useLocation();
   const [zen, setZen] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
+  const paletteReturnFocus=useRef<HTMLElement|null>(null);
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
   const [themeMode, setThemeMode] = useState<ThemeMode>(() => {
     if (typeof window !== "undefined") {
@@ -357,7 +367,7 @@ export function AppShell() {
     if (typeof window !== "undefined") writeLocalStorage("themeMode", mode);
   }, []);
   const toggleDark = useCallback(() => changeThemeMode(nextExplicitThemeMode(dark)), [changeThemeMode, dark]);
-  const openPalette = useCallback(() => setPaletteOpen(true), []);
+  const openPalette = useCallback(() => { paletteReturnFocus.current=document.activeElement instanceof HTMLElement ? document.activeElement : null;setPaletteOpen(true); }, []);
   const changeAccentTheme = useCallback((theme: string) => {
     setAccentTheme(theme);
     if (typeof window !== "undefined") writeLocalStorage("accentTheme", theme);
@@ -484,8 +494,9 @@ export function AppShell() {
     if (nextPage !== "today") setZen(false);
   }, [go]);
 
-  const updateSearch = useCallback((patch: Record<string, unknown>) => {
+  const updateSearch = useCallback((patch: Record<string, unknown>, replace = false) => {
     void routerNavigate({
+      replace,
       search: (previous) => {
         const next = { ...previous, ...patch };
         const previousSearch = previous as unknown as Record<string, unknown>;
@@ -496,8 +507,8 @@ export function AppShell() {
     });
   }, [routerNavigate]);
 
-  const openRecordDate = useCallback((date: string, returnTo?: string) => {
-    go("/today", returnTo ? { date, returnTo } : { date });
+  const openRecordDate = useCallback((date: string, returnTo?: string, editing = false) => {
+    go("/today", { date, returnTo, tab: editing ? "edit" : undefined });
   }, [go]);
 
   const openReviewLibrary = useCallback((returnTo?: string) => {
@@ -550,13 +561,17 @@ export function AppShell() {
     go("/search", query.trim() ? { q: query.trim() } : {});
   }, [go]);
 
+  const readingOrigin = useRef<{ href: string; index: number } | null>(null);
   const openKnowledgeCard = useCallback((cardId: string) => {
+    const origin = !location.pathname.startsWith("/knowledge") ? `${location.pathname}${location.searchStr}` : undefined;
+    if (origin) readingOrigin.current = { href: origin, index: window.history.state?.__TSR_index };
     preloadPage("knowledge");
     void routerNavigate({
       to: "/knowledge/$cardId" as never,
       params: { cardId } as never,
       search: (previous) => ({
         q: previous.q,
+        returnTo: origin || previous.returnTo,
         project: previous.project,
         tag: previous.tag,
         status: previous.status,
@@ -568,7 +583,7 @@ export function AppShell() {
         view: "detail",
       }) as never,
     });
-  }, [routerNavigate]);
+  }, [routerNavigate, location.pathname, location.searchStr]);
 
   const openKnowledgeQuality = useCallback((quality: api.KnowledgeCardQuality) => {
     preloadPage("knowledge");
@@ -600,21 +615,29 @@ export function AppShell() {
       if (isInteractionBlocked(event) || isEditableTarget(event.target) || document.querySelector('[role="dialog"], [role="alertdialog"], [role="menu"], [role="listbox"]')) return;
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "k") {
         event.preventDefault();
-        setPaletteOpen((value) => !value);
+        openPalette();
       }
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, []);
+  }, [openPalette]);
 
   // Route chunks are loaded on navigation or explicit hover/focus intent.
 
   const backToKnowledge = useCallback(() => {
+    const target = location.search.returnTo;
+    if (typeof target === "string") {
+      const origin = readingOrigin.current;
+      const index = window.history.state?.__TSR_index;
+      if (origin?.href === target && Number.isInteger(origin.index) && Number.isInteger(index) && index > origin.index) window.history.go(origin.index - index);
+      else returnFromToday(target);
+      return;
+    }
     void routerNavigate({
       to: "/knowledge" as never,
       search: (previous) => ({ ...previous, view: undefined }) as never,
     });
-  }, [routerNavigate]);
+  }, [routerNavigate, location.search.returnTo, returnFromToday]);
 
   const returnFromConnectionSettings = useCallback((message?: string) => {
     if (message) toast.success(message);
@@ -651,6 +674,17 @@ export function AppShell() {
     }
   }, [go, refreshWallpaperSnapshot, routerNavigate]);
 
+  const simple=useSimpleDisplay();
+  const [aiTaskMounted,setAiTaskMounted]=useState(() => api.rememberedAiTasks().length > 0);
+  const [aiTaskOpen,setAiTaskOpen]=useState(false);
+  const [runningAiTasks,setRunningAiTasks]=useState(0);
+  useEffect(()=>{const mount=()=>setAiTaskMounted(true);window.addEventListener("ai-tasks-changed",mount);return()=>window.removeEventListener("ai-tasks-changed",mount);},[]);
+  useEffect(() => {
+    const open = () => { setAiTaskMounted(true); setAiTaskOpen(true); };
+    window.addEventListener("ai-tasks-open", open);
+    return () => window.removeEventListener("ai-tasks-open", open);
+  }, []);
+  useEffect(()=>{document.documentElement.dataset.simpleDisplay=String(simple);},[simple]);
   const currentPage = useMemo(() => pageFromPath(location.pathname), [location.pathname]);
   const wallpaperModule = wallpaperModuleForPage(currentPage);
   const wallpaperPreference = wallpaperPreferences[wallpaperModule];
@@ -739,10 +773,10 @@ export function AppShell() {
   };
 
   return (
-    <MotionConfig reducedMotion="user">
+    <MotionConfig reducedMotion={simple ? "always" : "user"}>
       <AppShellContext.Provider value={contextValue}>
         <div className={dark ? "dark" : ""} style={{ display: "contents" }}>
-          <div className="app-shell flex h-full w-full min-w-0 transition-colors duration-300">
+          <div className="app-shell flex h-full w-full min-w-0 transition-colors duration-300" data-ai-running={runningAiTasks > 0} data-zen={zen}>
             <a
               href="#main-content"
               className="sr-only fixed left-3 top-3 z-[100] rounded-lg bg-[var(--ui-accent-solid)] px-3 py-2 text-sm font-semibold text-white shadow-lg focus:not-sr-only"
@@ -779,13 +813,16 @@ export function AppShell() {
                   assetsRevision: wallpaperAssetsRevision,
                 }}
               >
+                <ConnectionStatus/>
                 <Suspense fallback={<PageFallback />}>
                   <Outlet />
                 </Suspense>
               </WallpaperSurfaceProvider>
             </main>
+            <AiTaskLauncher running={runningAiTasks} open={aiTaskOpen} onOpen={() => { setAiTaskMounted(true); setAiTaskOpen((value) => !value); }} />
+            {aiTaskMounted && <Suspense fallback={null}><AiTaskTray open={aiTaskOpen} onOpenChange={setAiTaskOpen} onRunningCountChange={setRunningAiTasks}/></Suspense>}
             <WorkspaceInteractions pageKey={currentPage} open={shortcutsOpen} onOpenChange={setShortcutsOpen} />
-            <CommandPalette open={paletteOpen} onClose={() => setPaletteOpen(false)} onNavigate={(page) => { navigate(page); setPaletteOpen(false); }} />
+            {paletteOpen && <Suspense fallback={<div className="sr-only" role="status">正在打开快捷搜索…</div>}><CommandPalette returnFocus={paletteReturnFocus} open={paletteOpen} onClose={() => setPaletteOpen(false)} onNavigate={(page) => { navigate(page); setPaletteOpen(false); }} /></Suspense>}
           </div>
           <Toaster richColors position="bottom-center" theme={dark ? "dark" : "light"} />
         </div>
