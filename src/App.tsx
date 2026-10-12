@@ -21,7 +21,7 @@ import AiTaskLauncher from "./components/workspace/AiTaskLauncher";
 import { WallpaperSurfaceProvider } from "./components/workspace/WallpaperSurface";
 import { pageShortcuts, isInteractionBlocked } from "./lib/navigationInteractions";
 import Sidebar from "./components/Sidebar";
-import CommandPalette from "./components/CommandPalette";
+const CommandPalette=lazy(()=>import("./components/CommandPalette"));
 import * as api from "./lib/api";
 import { wallpaperConnectionMessage } from "./lib/wallpaperSyncStatus";
 import { useResponsiveWallpaperImage } from "./lib/useResponsiveWallpaperImage";
@@ -210,6 +210,7 @@ export function AppShell() {
   const location = useLocation();
   const [zen, setZen] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
+  const paletteReturnFocus=useRef<HTMLElement|null>(null);
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
   const [themeMode, setThemeMode] = useState<ThemeMode>(() => {
     if (typeof window !== "undefined") {
@@ -364,7 +365,7 @@ export function AppShell() {
     if (typeof window !== "undefined") writeLocalStorage("themeMode", mode);
   }, []);
   const toggleDark = useCallback(() => changeThemeMode(nextExplicitThemeMode(dark)), [changeThemeMode, dark]);
-  const openPalette = useCallback(() => setPaletteOpen(true), []);
+  const openPalette = useCallback(() => { paletteReturnFocus.current=document.activeElement instanceof HTMLElement ? document.activeElement : null;setPaletteOpen(true); }, []);
   const changeAccentTheme = useCallback((theme: string) => {
     setAccentTheme(theme);
     if (typeof window !== "undefined") writeLocalStorage("accentTheme", theme);
@@ -612,12 +613,12 @@ export function AppShell() {
       if (isInteractionBlocked(event) || isEditableTarget(event.target) || document.querySelector('[role="dialog"], [role="alertdialog"], [role="menu"], [role="listbox"]')) return;
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "k") {
         event.preventDefault();
-        setPaletteOpen((value) => !value);
+        openPalette();
       }
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, []);
+  }, [openPalette]);
 
   // Route chunks are loaded on navigation or explicit hover/focus intent.
 
@@ -819,7 +820,7 @@ export function AppShell() {
             <AiTaskLauncher running={runningAiTasks} open={aiTaskOpen} onOpen={() => { setAiTaskMounted(true); setAiTaskOpen((value) => !value); }} />
             {aiTaskMounted && <Suspense fallback={null}><AiTaskTray open={aiTaskOpen} onOpenChange={setAiTaskOpen} onRunningCountChange={setRunningAiTasks}/></Suspense>}
             <WorkspaceInteractions pageKey={currentPage} open={shortcutsOpen} onOpenChange={setShortcutsOpen} />
-            <CommandPalette open={paletteOpen} onClose={() => setPaletteOpen(false)} onNavigate={(page) => { navigate(page); setPaletteOpen(false); }} />
+            {paletteOpen && <Suspense fallback={<div className="sr-only" role="status">正在打开快捷搜索…</div>}><CommandPalette returnFocus={paletteReturnFocus} open={paletteOpen} onClose={() => setPaletteOpen(false)} onNavigate={(page) => { navigate(page); setPaletteOpen(false); }} /></Suspense>}
           </div>
           <Toaster richColors position="bottom-center" theme={dark ? "dark" : "light"} />
         </div>

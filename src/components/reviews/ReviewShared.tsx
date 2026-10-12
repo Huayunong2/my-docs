@@ -1,5 +1,5 @@
 import ReadingActions from "../workspace/ReadingActions";
-import { useEffect, useRef, useState, type MouseEvent } from "react";
+import { useEffect, useRef, useState } from "react";
 import * as Dialog from "@radix-ui/react-dialog";
 import {
   BookMarked,
@@ -65,7 +65,7 @@ export function ReviewViewerModal({
   onDelete: () => void | boolean | Promise<void | boolean>;
   onExtractKnowledge?: () => void;
   extractingKnowledge?: boolean;
-  onOpenSources?: (event: MouseEvent<HTMLButtonElement>) => void;
+  onOpenSources?: (origin: HTMLButtonElement | null) => void;
   onDiscardChanges?: () => Promise<boolean>;
   onClose: () => void;
   onRestoreFocus?: () => void;
@@ -349,7 +349,12 @@ export function ReviewViewerModal({
                 </DropdownMenuContent>
               </DropdownMenu>
             )}
-            <ReadingActions label="周期回顾阅读操作" reading={!editing && !readOnly}>
+            <ReadingActions label="周期回顾阅读操作" reading={!editing && !readOnly} actions={!editing && !readOnly ? [
+              ...(onExtractKnowledge ? [{id:"extract",label:extractingKnowledge ? "提取中" : "提取知识",icon:<BookMarked size={14}/>,disabled:saving || extractingKnowledge,onSelect:onExtractKnowledge}] : []),
+              ...(onOpenSources && sourceCount > 0 ? [{id:"sources",label:"查看来源",disabled:saving || extractingKnowledge,onSelect:onOpenSources}] : []),
+              {id:"edit",label:"编辑",disabled:saving || extractingKnowledge,onSelect:enterEdit},
+              ...(review.status !== "confirmed" ? [{id:"confirm",label:saving ? "确认中…" : "确认版本",variant:"primary" as const,disabled:saving || extractingKnowledge,onSelect:()=>void submit(onConfirm)}] : []),
+            ] : []}>
               {readOnly ? (
                 <button
                   type="button"
@@ -391,45 +396,6 @@ export function ReviewViewerModal({
                 </>
               ) : (
                 <>
-                  {onExtractKnowledge && (
-                    <button
-                      type="button"
-                      onClick={onExtractKnowledge}
-                      disabled={saving || extractingKnowledge}
-                      className="ui-button-secondary flex-1 sm:flex-none"
-                    >
-                      <BookMarked size={14} />
-                      {extractingKnowledge ? "提取中" : "提取知识"}
-                    </button>
-                  )}
-                  {onOpenSources && sourceCount > 0 && (
-                    <button
-                      type="button"
-                      onClick={(event) => onOpenSources(event)}
-                      disabled={saving || extractingKnowledge}
-                      className="ui-button-secondary flex-1 sm:flex-none"
-                    >
-                      查看来源
-                    </button>
-                  )}
-                  <button
-                    type="button"
-                    onClick={enterEdit}
-                    disabled={saving || extractingKnowledge}
-                    className="ui-button-secondary flex-1 sm:flex-none"
-                  >
-                    编辑
-                  </button>
-                  {review.status !== "confirmed" && (
-                    <button
-                      type="button"
-                      onClick={() => void submit(onConfirm)}
-                      disabled={saving || extractingKnowledge}
-                      className="ui-button-primary flex-1 sm:flex-none"
-                    >
-                      {saving ? "确认中…" : "确认版本"}
-                    </button>
-                  )}
                 </>
               )}
             </ReadingActions>

@@ -118,11 +118,6 @@
   #main-content .kl-reading-taxonomy { gap: 6px; margin-top: 16px; }
   #main-content .kl-reading-taxonomy span { padding: 5px 9px; border-radius: 8px; font-size: 11px; }
   #main-content .kl-reading-content { margin-top: 24px; padding-top: 0; border-top: 0; }
-  #main-content .kl-reading-content .markdown-content { font-size: 16px; line-height: 1.85; }
-  #main-content .markdown-content h2 { font-size: 21px; margin-block: 1.6em .65em; padding-bottom: .45em; }
-  #main-content .markdown-content > :first-child { margin-top: 0; }
-  #main-content .markdown-content :is(pre, table) { max-width: 100%; overflow-x: auto; overscroll-behavior-x: contain; }
-  #main-content .markdown-content pre { border-radius: 14px; padding: 16px; font-size: 13px; }
   #main-content .kl-reading-actions { margin-top: 28px; padding-top: 20px; border-top: 1px solid var(--ui-border); }
   #main-content .kl-reading-actions button { min-height: 44px; border-radius: 12px; }
   #main-content :is(.ko-organize-existing, .kl-reader-source, .ko-reuse-history) { border-radius: 16px; }
@@ -192,33 +187,11 @@
   #ai-task-panel.ko-task-dialog, .ko-task-overlay, .shell-mobile-nav .shell-mobile-link { animation: none; transition: none; }
 }
 
-.reading-actions:not([open]) > .reading-actions-content { display: none; }
 .reading-actions-content { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 .rp-viewer-footer > .reading-actions-content { flex: 1; justify-content: flex-end; }
 
 /* Reading-first refinement: soft surfaces and progressively disclosed tools. */
 @media (max-width: 767px) {
-  :root:not(.dark) {
-    --ui-canvas: #f5f8f7;
-    --ui-surface: #ffffff;
-    --ui-surface-raised: #ffffff;
-    --ui-surface-subtle: #eef4f2;
-    --ui-surface-inset: #eef4f2;
-    --ui-border: rgb(58 89 78 / .1);
-    --ui-text-muted: #405b53;
-    --ui-text-subtle: #647b73;
-  }
-  :root.dark {
-    --ui-canvas: #111e22;
-    --ui-surface: #18292d;
-    --ui-surface-raised: #1b2d31;
-    --ui-surface-subtle: #22373a;
-    --ui-surface-inset: #142328;
-    --ui-border: rgb(182 214 201 / .12);
-    --ui-text: #e4f0ea;
-    --ui-text-muted: #bed3c9;
-    --ui-text-subtle: #a2bdb1;
-  }
   #main-content :is(.wb-page, .ft-page) { padding-top: 24px; }
   #main-content :is(.wb-panel, .ft-panel, .settings-card, .rp-period, .history-card, .kl-card) {
     border-radius: 24px;
@@ -227,26 +200,8 @@
   }
   #main-content :is(.ui-field, .ui-textarea, .wb-search, .ft-search-input, .history-select-trigger) { border-radius: 18px; }
   #main-content :is(.ui-button-primary, .ui-button-secondary, .ui-button-ghost, .ui-button-success, .ui-button-danger) { border-radius: 999px; min-height: 44px; }
-  #main-content .markdown-content { color: var(--ui-text); line-height: 1.95; }
-  #main-content .markdown-content :is(h1, h2, h3) { border: 0; padding-bottom: 0; letter-spacing: -.025em; }
-  #main-content .markdown-content > p { margin-bottom: 1.25em; line-height: 1.95; }
-  #main-content .markdown-content pre { border-radius: 20px; }
-  #main-content .markdown-content blockquote { border-radius: 20px; border-color: var(--ui-selected-border); }
   #main-content .wb-header { flex-wrap: wrap; min-height: 44px; margin-bottom: 20px; }
   #main-content .wb-header .wb-heading { flex: 1; }
-  #main-content .wb-header-actions:has(.reading-actions[open]) { width: 100%; }
-  .reading-actions { min-width: 44px; }
-  .reading-actions > summary {
-    display: flex; align-items: center; justify-content: center; gap: 8px;
-    min-width: 44px; min-height: 44px; width: max-content; margin-left: auto;
-    padding: 0 14px; border-radius: 999px; background: var(--ui-surface-subtle);
-    color: var(--ui-text-muted); font-size: 12px; cursor: pointer; list-style: none;
-  }
-  .reading-actions > summary::-webkit-details-marker { display: none; }
-  .reading-actions[open] { width: 100%; }
-  .reading-actions[open] > .reading-actions-content { display: flex; flex-direction: column; align-items: stretch; gap: 8px; padding-top: 12px; }
-  .reading-actions[open] > .reading-actions-content :is(button, a) { min-height: 44px; border-radius: 16px; }
-  .reading-actions[open] > .reading-actions-content .ft-month-nav { justify-content: center; flex-wrap: wrap; }
   .mobile-reading-menu { min-width: 230px; border-radius: 22px; padding: 8px; }
   .mobile-reading-menu [role="menuitem"] { min-height: 44px; border-radius: 14px; }
 
@@ -325,18 +280,11 @@
   .article-detail-header { padding: 18px 20px; }
   .article-detail-header-inner { gap: 14px; }
   .article-detail-body { padding: 22px 20px; }
-  .article-detail-body .markdown-content { font-size: 16px; line-height: 1.95; color: var(--ui-text); }
-  .article-detail-body .markdown-content > p { line-height: 1.95; margin-bottom: 1.25em; }
-  .article-detail-body .markdown-content h2 { border: 0; }
-  .article-detail-actions:has(.reading-actions[open]) { width: 100%; }
-  .article-detail-actions .reading-actions[open] { flex: 1; }
   .rp-viewer-footer { gap: 10px; padding: 12px 20px calc(12px + env(safe-area-inset-bottom)); }
-  .rp-viewer-footer:has(.reading-actions[open]) { flex-wrap: wrap; }
   .rp-viewer-footer .reading-actions { flex: 1; }
   .rp-viewer-footer .reading-actions-content { justify-content: flex-end; }
   .rp-viewer { inset: 20px 0 0 !important; height: calc(100dvh - 20px) !important; border-radius: 26px 26px 0 0; }
   .rp-viewer .review-viewer-body { padding: 22px; }
-  .rp-viewer .markdown-content { color: var(--ui-text); line-height: 1.95; }
   .shell-more-dialog, #ai-task-panel.ko-task-dialog { border-radius: 30px 30px 0 0; }
   .shell-mobile-nav .shell-mobile-link { border-radius: 20px; }
 }
@@ -352,7 +300,6 @@
 .kl-mobile-manage-entry, .kl-end-selection { display: none; }
 @media (max-width: 767px) {
   #main-content .kl-page-header { flex-wrap: wrap; }
-  #main-content .kl-page-actions:has(.reading-actions[open]) { width: 100%; }
   #main-content .kl-library[data-managing="false"] .kl-card-check,
   #main-content .kl-library[data-managing="false"] .kl-selection-line > label { display: none; }
   #main-content .kl-library[data-managing="false"] .kl-card-top { padding-left: 18px; }

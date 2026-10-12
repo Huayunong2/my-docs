@@ -1,3 +1,7 @@
+import ReadingActions from "./workspace/ReadingActions";
+import { ReadingSurface } from "./ui/reading-surface";
+import { useWideLayout } from "../lib/useWideLayout";
+import ResponsiveSplit, { preloadSplit } from "./workspace/ResponsiveSplit";
 import { useMobileLayout } from "../lib/useMobileLayout";
 import {useQueryClient} from "@tanstack/react-query";
 import {useDeferredValue} from "react";
@@ -40,8 +44,6 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
-  DropdownMenuLabel,
-  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "./ui/dropdown-menu";
 import DatePickerPopover from "./ui/date-picker";
@@ -228,6 +230,8 @@ function clearLocalDraft(date: string) {
   }
 }
 
+preloadSplit();
+
 type SaveStatus = "idle" | "saving" | "saved" | "error";
 type MobilePane = "edit" | "preview";
 
@@ -282,7 +286,7 @@ export default function TodayPage({
   const [loadAttempt, setLoadAttempt] = useState(0);
   const [showMobileMore, setShowMobileMore] = useState(false);
   const isMobile = useMobileLayout();
-  const mobileToolsRef = useRef<HTMLButtonElement>(null);
+  const wide=useWideLayout();
   const [metaExpanded, setMetaExpanded] = useState(false);
   const [mobilePane, setMobilePane] = useState<MobilePane>(() =>
     typeof window !== "undefined" && window.matchMedia?.("(max-width: 767px)").matches
@@ -798,11 +802,62 @@ export default function TodayPage({
   const charCount = content.length;
   const wordCount = content ? content.replace(/\s/g, "").length : 0;
 
+  const editorPane = <div
+          className={`${zen || mobilePane === "edit" ? "flex" : "hidden"} today-editor-pane min-w-0 flex-col md:flex`}
+        >
+          <div className="today-pane-heading ui-section-kicker mb-2 flex items-center justify-between gap-3">
+            <span className="inline-flex items-center gap-2">
+              <PenLine size={13} /> 编辑{" "}
+              <span className="today-format-hint">Markdown</span>
+            </span>
+            <span className="font-mono normal-case tracking-normal">
+              {wordCount} 字
+            </span>
+          </div>
+          <WallpaperSurface target="today.editor" className="today-writing-surface ui-editor-surface ui-code-editor h-[56dvh] min-h-0 w-full overflow-hidden md:h-auto md:flex-1">
+            <CodeMirror
+              value={content}
+              onCreateEditor={view => { if (isMobile) view.dispatch({ selection: { anchor: view.state.doc.length } }); }}
+              onChange={handleContentChange}
+              extensions={[markdown(), EditorView.lineWrapping]}
+              placeholder={`记录 ${date} 的进展、想法与收获…`}
+              aria-label="今日记录正文"
+              theme={dark ? "dark" : "light"}
+              height="100%"
+              style={{ height: "100%" }}
+              basicSetup={{
+                lineNumbers: false,
+                foldGutter: false,
+                highlightActiveLine: false,
+              }}
+            />
+          </WallpaperSurface>
+        </div>;
+  const previewPane = <div
+          className={`${mobilePane === "preview" ? "flex" : "hidden"} today-preview-pane min-w-0 flex-col md:flex`}
+          style={zen ? { display: "none" } : undefined}
+        >
+          <div className="today-pane-heading ui-section-kicker mb-2 flex items-center justify-between gap-3">
+            <span className="inline-flex items-center gap-2">
+              <Eye size={13} /> 实时预览
+            </span>
+            <span className="font-mono normal-case tracking-normal">
+              {charCount} 字符
+            </span>
+          </div>
+          <WallpaperSurface target="today.preview" className="today-preview-surface ui-editor-surface h-[56dvh] min-h-0 overflow-y-auto p-4 md:h-auto md:flex-1 md:p-5">
+            <ReadingSurface className="today-reading-document mx-auto max-w-[760px]">
+              {isMobile && loading ? <LoadingState label="正在读取记录…" rows={3}/> : isMobile && loadError && !content.trim() && !dirty ? <div className="today-reading-empty" role="alert"><h2>暂时无法读取记录</h2><p>{loadError}</p><button className="ui-button-secondary" onClick={() => setLoadAttempt(value => value + 1)}>重新读取</button></div> : isMobile && !content.trim() ? <div className="today-reading-empty"><Calendar size={30} strokeWidth={1.4}/><h2>{article || title.trim() ? "正文暂时为空" : "这一天还没有记录"}</h2><p>可以查看其他日期，或补记今天的进展与想法。</p><button className="ui-button-primary" onClick={() => setMobilePane("edit")}>{article || title.trim() ? "补充正文" : "开始记录"}</button></div> : <MarkdownPreview
+                content={deferredContent}
+                onWikiLink={onWikiLink}
+                onRepairContent={handleContentChange}
+              />}
+            </ReadingSurface>
+          </WallpaperSurface>
+        </div>;
   return (
     <motion.div
-      initial={{ opacity: 0, y: 10 }}
-      animate={{ opacity: 1, y: 0 }}
-      transition={{ duration: 0.3 }}
+      initial={false}
       className="page-surface page-surface-today h-full flex flex-col relative"
       data-zen={zen || undefined}
       data-mobile-pane={mobilePane}
@@ -831,20 +886,17 @@ export default function TodayPage({
             <h1>今日记录</h1>
             <div className="today-reading-tools">
               <button className="ui-button-secondary" disabled={loading} onClick={() => { if (mobilePane === "preview") setMobilePane("edit"); else { setMobilePane("preview"); if (initialEditing) onRead?.(); } }}><PenLine size={16}/>{mobilePane === "preview" ? "补记" : "返回阅读"}</button>
-              <DropdownMenu>
-                <DropdownMenuTrigger asChild><button ref={mobileToolsRef} className="ui-icon-button" aria-label="今日记录操作"><MoreVertical size={20}/></button></DropdownMenuTrigger>
-                <DropdownMenuContent align="end" className="mobile-reading-menu max-h-[70dvh] overflow-y-auto">
-                  {returnTo && onReturn && <DropdownMenuItem onSelect={() => void requestReturn()}><ChevronLeft size={16}/>返回{returnLabel}</DropdownMenuItem>}
-                  <DropdownMenuItem onSelect={handleManualSave} disabled={loading || saveStatus === "saving"}><Save size={16}/>立即保存</DropdownMenuItem>
-                  <DropdownMenuItem disabled={loading || !content.trim()} onSelect={() => { aiTriggerRef.current = mobileToolsRef.current; setAiMode("summary"); }}><Sparkles size={16}/>AI 总结</DropdownMenuItem>
-                  <DropdownMenuItem disabled={loading || !content.trim()} onSelect={() => { aiTriggerRef.current = mobileToolsRef.current; setAiMode("knowledge"); }}><BookMarked size={16}/>提取知识</DropdownMenuItem>
-                  <DropdownMenuItem disabled={loading} onSelect={() => setMetaExpanded(value => !value)}><Smile size={16}/>心情与标签</DropdownMenuItem>
-                  <DropdownMenuItem disabled={loading} onSelect={() => { setMobilePane("edit"); onToggleZen?.(); }}><Maximize2 size={16}/>专注编辑</DropdownMenuItem>
-                  <DropdownMenuSeparator/><DropdownMenuLabel>记录模板</DropdownMenuLabel>
-                  {TEMPLATES.map(template => <DropdownMenuItem key={template.name} disabled={loading} onSelect={() => void applyTemplate(template)}>{template.name}</DropdownMenuItem>)}
-                  {article && <><DropdownMenuSeparator/><DropdownMenuItem className="text-[var(--ui-danger-text)]" onSelect={() => void handleDelete()}><Trash2 size={16}/>移入回收站</DropdownMenuItem></>}
-                </DropdownMenuContent>
-              </DropdownMenu>
+              <ReadingActions label="今日记录操作" actions={[
+                ...(returnTo && onReturn ? [{id:"return",label:`返回${returnLabel}`,icon:<ChevronLeft size={16}/>,onSelect:()=>void requestReturn()}] : []),
+                {id:"save",label:"立即保存",icon:<Save size={16}/>,disabled:loading || saveStatus === "saving",onSelect:handleManualSave},
+                {id:"summary",label:"AI 总结",icon:<Sparkles size={16}/>,disabled:loading || !content.trim(),onSelect:origin=>{aiTriggerRef.current=origin;setAiMode("summary");}},
+                {id:"knowledge",label:"提取知识",icon:<BookMarked size={16}/>,disabled:loading || !content.trim(),onSelect:origin=>{aiTriggerRef.current=origin;setAiMode("knowledge");}},
+                {id:"meta",label:"心情与标签",icon:<Smile size={16}/>,disabled:loading,onSelect:()=>setMetaExpanded(value=>!value)},
+                {id:"focus",label:"专注编辑",icon:<Maximize2 size={16}/>,disabled:loading,onSelect:()=>{setMobilePane("edit");onToggleZen?.();}},
+                ...TEMPLATES.map(template=>({id:`template:${template.name}`,label:`使用模板：${template.name}`,disabled:loading,onSelect:()=>void applyTemplate(template)})),
+                ...(article ? [{id:"trash",label:"移入回收站",variant:"danger" as const,icon:<Trash2 size={16}/>,onSelect:()=>void handleDelete()}] : []),
+              ]}/>
+
             </div>
           </div>
           <div className="today-reading-date">
@@ -979,7 +1031,7 @@ export default function TodayPage({
               </button>
             )}
             <motion.button
-              whileTap={{ scale: 0.95 }}
+              whileTap={{ scale: 0.98 }}
               onClick={handleManualSave}
               disabled={saveStatus === "saving"}
               className="ui-button-primary w-full md:w-auto"
@@ -1121,7 +1173,7 @@ export default function TodayPage({
 
             {article && (
               <motion.button
-                whileTap={{ scale: 0.95 }}
+                whileTap={{ scale: 0.98 }}
                 onClick={handleDelete}
                 className="ui-button-ghost hidden text-[var(--ui-danger-text)] md:inline-flex"
                 title="移入回收站"
@@ -1200,7 +1252,7 @@ export default function TodayPage({
                 <motion.button
                   key={m.emoji}
                   type="button"
-                  whileTap={{ scale: 0.94 }}
+                  whileTap={{ scale: 0.98 }}
                   onClick={() => handleMoodChange(m.emoji)}
                   aria-pressed={mood === m.emoji}
                   className={
@@ -1288,64 +1340,9 @@ export default function TodayPage({
         />}
       </div>
 
-      {/* Split editor */}
-      <div
-        className={`today-workspace grid flex-1 grid-cols-1 gap-4 px-3 pb-28 md:px-8 md:pb-6 min-h-0 ${zen ? "" : "md:grid-cols-[minmax(0,1.08fr)_minmax(360px,0.92fr)]"}`}
-      >
-        {(!isMobile || !loading && (zen || mobilePane === "edit")) && <div
-          className={`${zen || mobilePane === "edit" ? "flex" : "hidden"} min-w-0 flex-col md:flex`}
-        >
-          <div className="today-pane-heading ui-section-kicker mb-2 flex items-center justify-between gap-3">
-            <span className="inline-flex items-center gap-2">
-              <PenLine size={13} /> 编辑{" "}
-              <span className="today-format-hint">Markdown</span>
-            </span>
-            <span className="font-mono normal-case tracking-normal">
-              {wordCount} 字
-            </span>
-          </div>
-          <WallpaperSurface target="today.editor" className="today-writing-surface ui-editor-surface ui-code-editor h-[56dvh] min-h-0 w-full overflow-hidden md:h-auto md:flex-1">
-            <CodeMirror
-              value={content}
-              onCreateEditor={view => { if (isMobile) view.dispatch({ selection: { anchor: view.state.doc.length } }); }}
-              onChange={handleContentChange}
-              extensions={[markdown(), EditorView.lineWrapping]}
-              placeholder={`记录 ${date} 的进展、想法与收获…`}
-              aria-label="今日记录正文"
-              theme={dark ? "dark" : "light"}
-              height="100%"
-              style={{ height: "100%" }}
-              basicSetup={{
-                lineNumbers: false,
-                foldGutter: false,
-                highlightActiveLine: false,
-              }}
-            />
-          </WallpaperSurface>
-        </div>}
-
-        <div
-          className={`${mobilePane === "preview" ? "flex" : "hidden"} min-w-0 flex-col md:flex`}
-          style={zen ? { display: "none" } : undefined}
-        >
-          <div className="today-pane-heading ui-section-kicker mb-2 flex items-center justify-between gap-3">
-            <span className="inline-flex items-center gap-2">
-              <Eye size={13} /> 实时预览
-            </span>
-            <span className="font-mono normal-case tracking-normal">
-              {charCount} 字符
-            </span>
-          </div>
-          <WallpaperSurface target="today.preview" className="today-preview-surface ui-editor-surface h-[56dvh] min-h-0 overflow-y-auto p-4 md:h-auto md:flex-1 md:p-5">
-            <div className="mx-auto max-w-[760px]">
-              {isMobile && loading ? <LoadingState label="正在读取记录…" rows={3}/> : isMobile && loadError && !content.trim() && !dirty ? <div className="today-reading-empty" role="alert"><h2>暂时无法读取记录</h2><p>{loadError}</p><button className="ui-button-secondary" onClick={() => setLoadAttempt(value => value + 1)}>重新读取</button></div> : isMobile && !content.trim() ? <div className="today-reading-empty"><Calendar size={30} strokeWidth={1.4}/><h2>{article || title.trim() ? "正文暂时为空" : "这一天还没有记录"}</h2><p>可以查看其他日期，或补记今天的进展与想法。</p><button className="ui-button-primary" onClick={() => setMobilePane("edit")}>{article || title.trim() ? "补充正文" : "开始记录"}</button></div> : <MarkdownPreview
-                content={deferredContent}
-                onWikiLink={onWikiLink}
-                onRepairContent={handleContentChange}
-              />}
-            </div>
-          </WallpaperSurface>
-        </div>
+      {!isMobile && !wide && !zen && <div className="today-narrow-tabs" role="group" aria-label="今日记录视图"><button className="ui-button-secondary" aria-pressed={mobilePane === "edit"} onClick={()=>setMobilePane("edit")}>编辑记录</button><button className="ui-button-secondary" aria-pressed={mobilePane === "preview"} onClick={()=>setMobilePane("preview")}>阅读预览</button></div>}
+      <div className="today-workspace flex-1 min-h-0 px-3 pb-28 md:px-8 md:pb-6" data-pane={mobilePane} data-wide={wide} data-zen={zen}>
+        {wide && !zen ? <ResponsiveSplit workspace="today" first={editorPane} second={previewPane}/> : <>{(!isMobile || !loading && (zen || mobilePane === "edit")) && editorPane}{previewPane}</>}
       </div>
       {dialog}
     </motion.div>

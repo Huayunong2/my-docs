@@ -1,3 +1,4 @@
+import ReadingImage from "./workspace/ReadingImage";
 import { memo, useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
 import ReactMarkdown from "react-markdown";
 import rehypeHighlight from "rehype-highlight";
@@ -437,7 +438,7 @@ function MarkdownFenceNotice({ content, onRepairContent }: { content: string; on
   };
 
   return (
-    <div className="ui-alert-warn my-3 flex flex-col gap-2 text-xs leading-5 sm:flex-row sm:items-start sm:justify-between" role="alert">
+    <div className="not-prose ui-alert-warn my-3 flex flex-col gap-2 text-xs leading-5 sm:flex-row sm:items-start sm:justify-between" role="alert">
       <div className="min-w-0">
         <p className="font-semibold text-[var(--ui-warning-text)]">Markdown 围栏需要修复</p>
         <p>{lineLabels.join(" ")}</p>
@@ -472,7 +473,7 @@ function MarkdownContent({ content, onWikiLink, onRepairContent }: MarkdownConte
   }
 
   return (
-    <div className="markdown-content min-w-0 max-w-full break-words text-[15px] leading-7 text-[var(--ui-text-muted)]">
+    <div className="markdown-content prose min-w-0 max-w-full break-words">
       <MarkdownFenceNotice content={content} onRepairContent={onRepairContent} />
       <ReactMarkdown
         remarkPlugins={[
@@ -491,16 +492,6 @@ function MarkdownContent({ content, onWikiLink, onRepairContent }: MarkdownConte
           [rehypeHighlight, { detect: false, plainText: ["mermaid", "text", "txt", "plaintext"] }],
         ]}
         components={{
-          h1: ({ children }) => <h1 className="mb-5 text-3xl font-bold leading-tight text-[var(--ui-text)]">{children}</h1>,
-          h2: ({ children }) => <h2 className="ui-soft-divider mt-10 mb-4 border-b pb-2 text-2xl font-bold leading-tight text-[var(--ui-text)]">{children}</h2>,
-          h3: ({ children }) => <h3 className="mt-8 mb-3 text-xl font-semibold leading-snug text-[var(--ui-text)]">{children}</h3>,
-          p: ({ children }) => <p className="mb-4 leading-relaxed">{children}</p>,
-          ul: ({ children }) => <ul className="mb-4 list-disc space-y-1.5 pl-6">{children}</ul>,
-          ol: ({ children }) => <ol className="mb-4 list-decimal space-y-1.5 pl-6">{children}</ol>,
-          li: ({ children }) => <li className="leading-relaxed">{children}</li>,
-          blockquote: ({ children }) => (
-            <blockquote className="my-4 rounded-xl border border-[var(--ui-quote-border)] bg-[var(--ui-quote-surface)] px-4 py-3 text-[var(--ui-quote-text)]">{children}</blockquote>
-          ),
           code: ({ children, className }) => {
             const rawLanguage = (className || "").split(/\s+/).find((item) => item.startsWith("language-"))?.slice("language-".length) || "";
             const language = normalizeLanguage(rawLanguage);
@@ -510,7 +501,7 @@ function MarkdownContent({ content, onWikiLink, onRepairContent }: MarkdownConte
               </code>
             );
           },
-          pre: ({ children }) => <CodeBlock>{children}</CodeBlock>,
+          pre: ({ children }) => <div className="not-prose"><CodeBlock>{children}</CodeBlock></div>,
           a: ({ href, children }) => {
             if (href?.startsWith("wiki:")) {
               const title = decodeURIComponent(href.slice(5));
@@ -518,8 +509,8 @@ function MarkdownContent({ content, onWikiLink, onRepairContent }: MarkdownConte
             }
             return <a href={href} className="text-[var(--ui-accent-text)] underline" target="_blank" rel="noopener noreferrer">{children}</a>;
           },
-          img: ({ src, alt }) => <img src={src || ""} alt={alt || ""} className="my-2 max-w-full rounded-lg" loading="lazy" />,
-          table: ({ children }) => <div className="my-3 overflow-x-auto"><table className="min-w-full border-collapse text-sm">{children}</table></div>,
+          img: ({ src, alt }) => <ReadingImage src={typeof src === "string" ? src : ""} alt={alt || ""}/>,
+          table: ({ children }) => <div className="reading-table"><table>{children}</table></div>,
           th: ({ children }) => <th className="border border-[var(--ui-border)] px-2 py-1 text-left">{children}</th>,
           td: ({ children }) => <td className="border border-[var(--ui-border)] px-2 py-1">{children}</td>,
         }}

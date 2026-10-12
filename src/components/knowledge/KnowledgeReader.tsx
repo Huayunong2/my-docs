@@ -1,4 +1,5 @@
 import { useMobileLayout } from "../../lib/useMobileLayout";
+import { Button } from "../ui/button";
 import {useState} from "react";
 import CandidateOrganizer from "./CandidateOrganizer";
 import ReusePanel from "./ReusePanel";
@@ -88,14 +89,14 @@ export default function KnowledgeReader(p: Props) {
       </div>
       {mobile && <details className="kl-entry-info"><summary>条目信息</summary>{entryInfo}</details>}
       <div className="kl-reading-actions">
-        <button className="ui-button-secondary" onClick={copy}>
+        <Button onClick={copy}>
           <Copy size={15} />
           复制 Markdown
-        </button>
-        <button className="ui-button-ghost" onClick={p.onEdit}>
+        </Button>
+        <Button variant="ghost" onClick={p.onEdit}>
           <PencilLine size={15} />
           编辑内容
-        </button>
+        </Button>
       </div>
       {(p.card.status==="draft"||p.card.status==="outdated"||!p.card.source_excerpt||!p.card.tags.length||!p.card.projects?.length||p.card.content.trim().length<24)&&<details className="ko-organize-existing" open={organizing} onToggle={e=>setOrganizing(e.currentTarget.open)}><summary>整理与完善知识</summary>{organizing&&<CandidateOrganizer key={p.card.updated_at} existing={p.card} candidate={candidate} onChange={patch=>setCandidate(c=>({...c,...patch}))} onUpdated={p.onUpdated} onProcessed={()=>setOrganizing(false)}/>}</details>}
       <ReusePanel key={`reuse:${p.card.id}`} cardId={p.card.id}/>

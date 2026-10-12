@@ -1,3 +1,4 @@
+import type { RefObject } from "react";
 import { Command } from "cmdk";
 import * as Dialog from "@radix-ui/react-dialog";
 import {
@@ -9,11 +10,13 @@ import {
   NotebookPen,
   Search,
   Settings,
+  UserRound,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import type { Page } from "../App";
 
 const commands: { id: Page; label: string; icon: LucideIcon; hint?: string }[] = [
+  { id: "profile", label: "个人档案", icon: UserRound },
   { id: "today", label: "今日", icon: NotebookPen, hint: "1" },
   { id: "history", label: "记录", icon: CalendarDays, hint: "2" },
   { id: "search", label: "搜索", icon: Search, hint: "4" },
@@ -28,8 +31,10 @@ export default function CommandPalette({
   open,
   onClose,
   onNavigate,
+  returnFocus,
 }: {
   open: boolean;
+  returnFocus?: RefObject<HTMLElement|null>;
   onClose: () => void;
   onNavigate: (p: Page) => void;
 }) {
@@ -42,7 +47,7 @@ export default function CommandPalette({
     <Dialog.Root open={open} onOpenChange={(next) => { if (!next) onClose(); }}>
       <Dialog.Portal>
         <Dialog.Overlay className="ui-overlay fixed inset-0 z-40 data-[state=open]:animate-fade-in" />
-        <Dialog.Content className="ui-modal-surface fixed left-1/2 top-[16%] z-50 w-[92vw] max-w-md -translate-x-1/2 overflow-hidden p-0 outline-hidden data-[state=open]:animate-scale-in">
+        <Dialog.Content onCloseAutoFocus={event=>{event.preventDefault();const origin=returnFocus?.current;const target=origin?.isConnected && origin!==document.body ? origin : document.querySelector<HTMLButtonElement>(".shell-command");target?.focus({preventScroll:true});}} className="ui-modal-surface fixed left-1/2 top-[16%] z-50 w-[92vw] max-w-md -translate-x-1/2 overflow-hidden p-0 outline-hidden data-[state=open]:animate-scale-in">
           <Dialog.Title className="sr-only">快速导航</Dialog.Title>
           <Dialog.Description className="sr-only">搜索页面并使用键盘快捷键快速跳转。</Dialog.Description>
           <Command loop>
