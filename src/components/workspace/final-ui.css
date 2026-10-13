@@ -1796,7 +1796,7 @@
 }
 .ft-stats .ft-metric strong { margin-top: 8px; color: var(--ui-text); font-size: clamp(22px, 2.7vw, 29px); font-weight: 650; line-height: 1.12; letter-spacing: -0.035em; }
 .ft-stats .ft-metric small { color: var(--ui-text-subtle); font-size: 11px; }
-.ft-stats .ft-metric p { margin-top: auto; padding-top: 10px; color: var(--ui-text-subtle); font-size: 10px; line-height: 1.5; }
+.ft-stats .ft-metric p { margin-top: 16px; color: var(--ui-text-subtle); font-size: 12px; line-height: 1.85; overflow-wrap:anywhere; }
 .ft-stats .ft-metric + .ft-metric { border-left: 1px solid var(--ui-border); }
 .ft-stats .ft-metric:hover { transform: translateY(-2px); border-color: color-mix(in srgb, var(--ui-accent-solid) 30%, var(--ui-border)); box-shadow: var(--ui-shadow-hover); }
 .ft-stats .ft-panel { border-radius: 17px; box-shadow: var(--ui-shadow-panel); }

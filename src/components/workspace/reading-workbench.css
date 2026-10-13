@@ -271,9 +271,24 @@
 @media (max-width:1023px) { .runtime-metrics { grid-template-columns:repeat(2,minmax(0,1fr)); } }
 @media (max-width:767px) { .runtime-overview { padding:22px; gap:24px; } .runtime-metrics { grid-template-columns:minmax(0,1fr); gap:22px; } }
 @media (min-width:1280px) {
-  .history-detail-dialog-frame[data-focused=true] .history-detail-dialog-surface { inset:24px; margin-inline:auto; max-width:1280px; }
-  .history-detail-dialog-frame[data-focused=true] .article-detail-body { padding:40px 48px; }
-  .history-detail-dialog-frame[data-focused=true] .ui-reader { max-width:82ch; margin-inline:auto; }
   .ft-history[data-detail=true] .history-list-pane { flex-basis:clamp(280px,26%,420px); }
 }
 .workbench-button.ui-button-primary { box-shadow:none; background-image:none; }
+
+/* Record focus uses the same in-workspace expansion as knowledge reading. */
+.ft-history[data-focused=true] .history-list-pane { display:none; }
+.ft-history[data-focused=true] .history-detail-pane { flex:1; width:100%; }
+.ft-history[data-focused=true] .article-detail-body { padding:32px; }
+.ft-history[data-focused=true] .ui-reader { max-width:72ch; margin-inline:auto; }
+/* Whole panels own their padding, including empty and failed states. */
+.ko-weekly.ft-panel { padding:24px 28px; }
+.ft-page .ko-weekly.ft-panel > .ft-panel-heading { padding:0; margin-bottom:20px; gap:16px; flex-wrap:wrap; }
+.ko-weekly.ft-panel > p { margin:0; font-size:13px; line-height:1.85; max-width:70ch; }
+.ko-weekly.ft-panel .ko-event-list { margin:0!important; }
+.ko-weekly .ko-actions { margin-top:20px; padding-top:16px; border-top:1px solid var(--ui-border); }
+.ft-metric p { font-size:12px; line-height:1.85; margin-top:12px; overflow-wrap:anywhere; }
+.ft-metric > span { line-height:1.8; }
+.ft-stats .ft-panel-heading { gap:16px; flex-wrap:wrap; }
+@media (max-width:767px) { .ko-weekly.ft-panel { padding:22px; } .ft-history[data-focused=true] .article-detail-body { padding:22px; } }
+
+.ko-weekly .ft-panel-heading .ft-caption { white-space:normal; overflow:visible; line-height:1.85; }

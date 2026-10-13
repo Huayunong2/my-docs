@@ -196,10 +196,11 @@ export default function ConnectionPanel({
         <form noValidate onSubmit={(event) => { event.preventDefault(); void saveAndTest(); }} className="settings-connection-form grid gap-5">
           <div className="settings-connection-fields grid gap-5 md:grid-cols-[minmax(0,1.15fr)_minmax(17rem,0.85fr)]">
             <label htmlFor="server-url" className="block min-w-0">
-              <span className="block text-sm font-semibold text-[var(--ui-text)]">服务器地址</span>
+              <span id="server-url-label" className="block text-sm font-semibold text-[var(--ui-text)]">服务器地址</span>
               <span id="server-url-hint" className="mt-1 block text-xs leading-5 text-[var(--ui-text-muted)]">浏览器同源部署可保留默认地址；远程或桌面端填写包含 /api 的地址。</span>
               <Input
                 id="server-url"
+                aria-labelledby="server-url-label"
                 value={serverUrl}
                 onChange={(event) => updateServerUrl(event.target.value)}
                 placeholder="http://服务器IP:8080/api"
@@ -222,10 +223,11 @@ export default function ConnectionPanel({
               )}
             </label>
             <label htmlFor="server-token" className="block min-w-0">
-              <span className="block text-sm font-semibold text-[var(--ui-text)]">访问令牌</span>
+              <span id="server-token-label" className="block text-sm font-semibold text-[var(--ui-text)]">访问令牌</span>
               <span id="server-token-hint" className="mt-1 block text-xs leading-5 text-[var(--ui-text-muted)]">令牌只保存在当前设备；不要把它粘贴到不可信的页面或聊天中。</span>
               <Input
                 id="server-token"
+                aria-labelledby="server-token-label"
                 type={showToken ? "text" : "password"}
                 value={token}
                 onChange={(event) => updateToken(event.target.value)}

@@ -99,6 +99,7 @@ export default function HistoryPage({
   const [mobileDetailOpen, setMobileDetailOpen] = useState(false);
   const [focused, setFocused] = useState(false);
   const focusTrigger = useRef<HTMLElement | null>(null);
+  const focusScrollTop = useRef(0);
   const viewRef = useRef(view);
   const pageRef = useRef(page);
   const selectedMonthRef = useRef(selectedMonth);
@@ -462,18 +463,31 @@ export default function HistoryPage({
   useEffect(() => {
     const media = window.matchMedia("(max-width: 1279px)");
     const update = () =>
-      setMobileDetailOpen(Boolean(selectedId) && (media.matches || focused));
+      setMobileDetailOpen(Boolean(selectedId) && media.matches);
     media.addEventListener("change", update);
     return () => media.removeEventListener("change", update);
-  }, [selectedId, focused]);
+  }, [selectedId]);
 
-  const leaveFocus = () => {
+  const leaveFocus = useCallback(() => {
     setFocused(false);
-    setMobileDetailOpen(window.matchMedia("(max-width: 1279px)").matches);
-    requestAnimationFrame(() => focusTrigger.current?.focus({ preventScroll: true }));
-  };
+    requestAnimationFrame(() => {
+      const panel = document.querySelector<HTMLElement>(".history-detail-pane");
+      if (panel) panel.scrollTop = focusScrollTop.current;
+      focusTrigger.current?.focus({ preventScroll: true });
+    });
+  }, []);
+  useEffect(() => {
+    if (!focused) return;
+    const escape = (event: KeyboardEvent) => {
+      if (event.key !== "Escape" || event.defaultPrevented || document.querySelector('[role="dialog"][data-state="open"], [role="menu"], [role="listbox"]')) return;
+      event.preventDefault();
+      leaveFocus();
+    };
+    document.addEventListener("keydown", escape);
+    return () => document.removeEventListener("keydown", escape);
+  }, [focused, leaveFocus]);
   return (
-    <div className="ft-page ft-history" data-detail={!!selectedId}>
+    <div className="ft-page ft-history" data-detail={!!selectedId} data-focused={focused}>
       <WorkspaceHeader
         icon={CalendarDays}
         title={view === "trash" ? "记录回收站" : "记录"}
@@ -710,7 +724,6 @@ export default function HistoryPage({
             target="records.detail"
             className="history-detail-pane hidden min-h-0 min-w-0 flex-1 xl:flex"
             aria-label="记录详情"
-            style={focused ? {display:"none"} : undefined}
           >
             <AnimatePresence mode="wait" initial={false}>
               {selectedId && detailStatus === "loading" && (
@@ -734,7 +747,13 @@ export default function HistoryPage({
                 >
                   <ArticleDetail
                     article={detail}
-                    onToggleFocus={() => { focusTrigger.current = document.activeElement as HTMLElement; setFocused(true); setMobileDetailOpen(true); }}
+                    focused={focused}
+                    onToggleFocus={() => {
+                      if (focused) { leaveFocus(); return; }
+                      focusTrigger.current = document.activeElement as HTMLElement;
+                      focusScrollTop.current = document.querySelector<HTMLElement>(".history-detail-pane")?.scrollTop || 0;
+                      setFocused(true);
+                    }}
                     mode="panel"
                     onClose={closeDetail}
                     onEdit={(date) => handleEdit(date)}
@@ -750,7 +769,7 @@ export default function HistoryPage({
       <Dialog.Root
         open={mobileDetailOpen && !!selectedId}
         onOpenChange={(open) => {
-          if (!open) { if (focused) leaveFocus(); else closeDetail(); }
+          if (!open) closeDetail();
         }}
       >
         <AnimatePresence>
@@ -760,7 +779,6 @@ export default function HistoryPage({
               <Dialog.Content
                 asChild
                 onCloseAutoFocus={(event) => {
-                  if (focusTrigger.current) { event.preventDefault(); focusTrigger.current.focus({preventScroll:true}); focusTrigger.current=null; return; }
                   if (!detailTriggerRef.current) return;
                   event.preventDefault();
                   detailTriggerRef.current.focus({preventScroll:true});
@@ -768,13 +786,12 @@ export default function HistoryPage({
               >
                 <motion.div
                   className="history-detail-dialog-frame fixed inset-0 z-50 outline-hidden"
-                  data-focused={focused || undefined}
                   initial={{ opacity: 0 }}
                   animate={{ opacity: 1 }}
                   exit={{ opacity: 0 }}
                   transition={{ duration: 0.14 }}
                   onClick={(event) => {
-                    if (event.target === event.currentTarget) { if (focused) leaveFocus(); else closeDetail(); }
+                    if (event.target === event.currentTarget) closeDetail();
                   }}
                 >
                   <Dialog.Title className="sr-only">
@@ -797,16 +814,14 @@ export default function HistoryPage({
                       <DetailError
                         message={detailError}
                         onRetry={retryDetail}
-                        onClose={focused ? leaveFocus : closeDetail}
+                        onClose={closeDetail}
                       />
                     )}
                     {detailStatus === "ready" && detail && (
                       <ArticleDetail
                         article={detail}
                         mode="panel"
-                        onClose={focused ? leaveFocus : closeDetail}
-                        focused={focused}
-                        onToggleFocus={focused ? leaveFocus : undefined}
+                        onClose={closeDetail}
                         onEdit={(date) => handleEdit(date)}
                         onDelete={(article) => void handleDelete(article)}
                       />

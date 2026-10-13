@@ -198,6 +198,17 @@ try{
     }
   }
   pass("profile light and dark surfaces fit six widths without clipping content panels");
+  for (const width of [320,390,768,1024,1440]) {
+    await page.setViewportSize({width,height:1000});await page.goto(origin+"/profile?tab=context");
+    await page.getByRole("region",{name:"背景编排",exact:true}).waitFor();await fit();
+    const layout=await page.evaluate(()=>{const left=document.querySelector(".pf-context-selection").getBoundingClientRect(),right=document.querySelector(".pf-context-result").getBoundingClientRect(),analysis=document.querySelector(".pf-context-analysis").getBoundingClientRect(),selectionStyle=getComputedStyle(document.querySelector(".pf-context-selection"));return {left:{top:left.top,bottom:left.bottom},right:{top:right.top,bottom:right.bottom},analysisTop:analysis.top,padding:parseFloat(selectionStyle.paddingLeft)};});
+    if(width>=1024){assert(Math.abs(layout.left.top-layout.right.top)<2);assert(Math.abs(layout.left.bottom-layout.right.bottom)<2);}
+    else assert(layout.right.top>=layout.left.bottom-1,"narrow layout shows selection before preview");
+    assert(layout.analysisTop>=layout.right.bottom+20,"analysis has its own space below the aligned preview");assert(layout.padding>=20);
+    if(width===1440||width===390)await shot("background-workspace-"+width);
+  }
+  pass("background selection and preview align, with analysis below and mobile source-first stacking");
+
   await page.setViewportSize({width:1440,height:1000});
   await page.goto(origin+"/profile?tab=analyses");await page.locator(".pf-analysis-items button").first().waitFor();
   assert.equal(await page.locator(".pf-history-pagination").count(),0,"single-page reports do not show disabled pagination");

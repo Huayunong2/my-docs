@@ -104,7 +104,7 @@ export default function ArticleDetail({
           </div>
           <div className="article-detail-actions flex shrink-0 flex-wrap items-center gap-1 self-end" role="group" aria-label="记录操作">
             <ReadingActions label="记录阅读操作" actions={[
-              ...(onToggleFocus ? [{ id:"focus", label:focused ? "退出专注阅读" : "全屏阅读", icon:focused ? <Minimize2 size={14}/> : <Maximize2 size={14}/>, onSelect:onToggleFocus }] : []),
+              ...(onToggleFocus ? [{ id:"focus", label:focused ? "退出专注阅读" : "专注阅读", icon:focused ? <Minimize2 size={14}/> : <Maximize2 size={14}/>, onSelect:onToggleFocus }] : []),
               { id:"copy", label:copied ? "已复制记录内容" : "复制记录内容", icon:copied ? <Check size={14}/> : <Copy size={14}/>, onSelect: () => void copyContent() },
               { id:"edit", label:"编辑记录", icon:<Edit3 size={14}/>, onSelect: () => onEdit(article.date) },
               ...(onDelete ? [{id:"delete", label:"移入记录回收站", variant:"danger" as const, icon:<Trash2 size={14}/>, onSelect: () => onDelete(article)}] : []),

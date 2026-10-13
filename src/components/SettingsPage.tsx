@@ -74,6 +74,8 @@ function initialSettingsTab(): Tab {
 }
 
 interface SettingsPageProps {
+  requestedTab?: string;
+  onTabChange: (tab: Tab) => void;
   accentTheme: string;
   onChangeAccentTheme: (theme: string) => void;
   themeMode: ThemeMode;
@@ -109,6 +111,8 @@ interface SettingsPageProps {
 }
 
 export default function SettingsPage({
+  requestedTab,
+  onTabChange,
   accentTheme,
   onChangeAccentTheme,
   themeMode,
@@ -147,6 +151,11 @@ export default function SettingsPage({
   const [mountedTabs, setMountedTabs] = useState<Set<Tab>>(
     () => new Set([tab]),
   );
+  useEffect(() => {
+    const next = requestedTab && tabAliases[requestedTab] || initialSettingsTab();
+    setTab(next);
+    setMountedTabs(current => current.has(next) ? current : new Set(current).add(next));
+  }, [requestedTab]);
   const [dirtyTabs, setDirtyTabs] = useState<Set<Tab>>(new Set());
   const { confirm, dialog } = useConfirmDialog();
   const markDirty = useCallback((id: Tab, dirty: boolean) => {
@@ -209,15 +218,9 @@ export default function SettingsPage({
       return new Set(current).add(next);
     });
     if (typeof window !== "undefined") {
-      const url = new URL(window.location.href);
-      url.searchParams.set("tab", next);
-      window.history.replaceState(
-        window.history.state,
-        "",
-        `${url.pathname}${url.search}${url.hash}`,
-      );
       writeLocalStorage(settingsTabStorageKey, next);
     }
+    onTabChange(next);
     requestAnimationFrame(() => {
       document.getElementById(`settings-tab-${next}`)?.focus();
     });
@@ -240,23 +243,6 @@ export default function SettingsPage({
     switchTab(next);
   };
 
-  useEffect(() => {
-    const handlePopState = () => {
-      const requested = new URLSearchParams(window.location.search).get("tab");
-      const next = requested && tabAliases[requested];
-      if (!next || next === tab) return;
-      setTab(next);
-      setMountedTabs((current) =>
-        current.has(next) ? current : new Set(current).add(next),
-      );
-      requestAnimationFrame(() => {
-        document.getElementById("settings-tab-" + next)?.focus();
-      });
-    };
-    window.addEventListener("popstate", handlePopState);
-    return () => window.removeEventListener("popstate", handlePopState);
-  }, [tab]);
-
   const shouldBlockSettings = useCallback(async () => {
     if (!dirtyTabs.size) return false;
     const shouldLeave = await confirm({
@@ -270,7 +256,7 @@ export default function SettingsPage({
   }, [confirm, dirtyTabs.size]);
 
   useBlocker({
-    shouldBlockFn: shouldBlockSettings,
+    shouldBlockFn: ({ current, next }) => current.pathname !== next.pathname && shouldBlockSettings(),
     enableBeforeUnload: dirtyTabs.size > 0,
     disabled: dirtyTabs.size === 0,
   });

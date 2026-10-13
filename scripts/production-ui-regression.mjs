@@ -1000,19 +1000,51 @@ try {
       );
     },
   );
-  await check("desktop records offer centered full-screen reading and preserve the panel on return", async () => {
+  await check("record focus expands in the workspace like knowledge reading and restores the split", async () => {
     await page.setViewportSize({width:1440,height:960});
     await go("/history"); await healthy(".history-card");
     await page.locator(".history-card-main").first().click();
-    const panel=page.locator(".history-detail-pane");await panel.getByRole("button",{name:"全屏阅读",exact:true}).waitFor();
+    const panel=page.locator(".history-detail-pane");await panel.getByRole("button",{name:"专注阅读",exact:true}).waitFor();
     await panel.evaluate(element=>{element.scrollTop=120;});const previous=await panel.evaluate(element=>element.scrollTop);
-    await panel.getByRole("button",{name:"全屏阅读",exact:true}).click();
-    const reader=page.locator('.history-detail-dialog-frame[data-focused="true"]');await reader.waitFor();
-    const bounds=await reader.locator(".history-detail-dialog-surface").boundingBox();assert(Math.abs(bounds.x+bounds.width/2-720)<2);
-    assert(await reader.getByRole("button",{name:"退出专注阅读",exact:true}).isVisible());
-    await shot("history-fullscreen");await page.keyboard.press("Escape");await reader.waitFor({state:"hidden"});
-    await panel.getByRole("button",{name:"全屏阅读",exact:true}).waitFor();assert.equal(await panel.evaluate(element=>element.scrollTop),previous);
+    const before=await panel.boundingBox();
+    await panel.getByRole("button",{name:"专注阅读",exact:true}).click();
+    await page.locator('.ft-history[data-focused="true"]').waitFor();
+    assert.equal(await page.getByRole("dialog").count(),0,"workspace focus does not open a modal");
+    assert(await page.locator(".history-list-pane").isHidden());
+    const expanded=await panel.boundingBox();assert(expanded.width>before.width+100,"reader uses the space released by the list");
+    assert(await page.locator(".wb-header").isVisible(),"workspace navigation remains visible like the knowledge page");
+    await shot("history-focus-workspace");await page.keyboard.press("Escape");
+    await page.locator('.ft-history[data-focused="false"]').waitFor();
+    await panel.getByRole("button",{name:"专注阅读",exact:true}).waitFor();
+    await page.waitForFunction(expected=>document.querySelector(".history-detail-pane").scrollTop===expected,previous);
+    assert(await panel.getByRole("button",{name:"专注阅读",exact:true}).evaluate(element=>element===document.activeElement));
     await panel.getByRole("button",{name:"关闭详情",exact:true}).click();
+  });
+  await check("runtime overview links activate settings, preserve drafts, and support history and reload", async () => {
+    await go("/settings?tab=connect");await page.getByRole("heading",{name:"运行概览",exact:true}).waitFor();
+    const address=page.getByRole("textbox",{name:"服务器地址",exact:true});const original=await address.inputValue();
+    await address.fill("http://127.0.0.1:8080/api");
+    await page.getByRole("link",{name:"检查 AI 配置",exact:true}).click();
+    await page.locator("#settings-panel-ai").waitFor({state:"visible"});assert(new URL(page.url()).searchParams.get("tab")==="ai");
+    await page.goBack();await page.locator("#settings-panel-connect").waitFor({state:"visible"});
+    assert.equal(await address.inputValue(),"http://127.0.0.1:8080/api","changing category retains the unsaved connection draft");
+    await address.fill(original);
+    await page.getByRole("link",{name:"查看备份与数据",exact:true}).click();await page.locator("#settings-panel-data").waitFor({state:"visible"});
+    await page.goBack();await page.locator("#settings-panel-connect").waitFor({state:"visible"});
+    await page.getByRole("link",{name:"检查 AI 配置",exact:true}).click();await page.locator("#settings-panel-ai").waitFor({state:"visible"});
+    await page.reload();await page.locator("#settings-panel-ai").waitFor({state:"visible"});
+  });
+  await check("weekly reuse copy stays inside a padded panel at desktop and mobile widths", async () => {
+    for(const width of [320,390,768,1024,1440]) {
+      await page.setViewportSize({width,height:1000});await go("/stats");
+      if(width<768){await page.getByRole("combobox",{name:"统计分类",exact:true}).click();await page.getByRole("option",{name:"知识整理",exact:true}).click();}
+      else await page.getByRole("tab",{name:"知识整理",exact:true}).click();
+      const panel=page.locator(".ko-weekly");await panel.waitFor();await page.getByText("尚无复用记录。使用知识解决问题后，可以在阅读区一键记录。",{exact:true}).waitFor();
+      const geometry=await panel.evaluate(element=>{const box=element.getBoundingClientRect(),text=element.querySelector("p").getBoundingClientRect(),heading=element.querySelector("h2").getBoundingClientRect();return {left:text.left-box.left,right:box.right-text.right,bottom:box.bottom-text.bottom,alignment:Math.abs(text.left-heading.left)};});
+      assert(geometry.left>=20&&geometry.right>=20&&geometry.bottom>=20&&geometry.alignment<2,JSON.stringify({width,geometry}));
+      if(width===1440||width===390)await shot("weekly-reuse-padding-"+width);
+    }
+    await page.setViewportSize({width:1440,height:960});
   });
   await check(
     "return-to-top targets the actual record scroll region",

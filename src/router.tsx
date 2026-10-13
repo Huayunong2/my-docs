@@ -405,8 +405,11 @@ function KnowledgeRouteContent({ cardId, forcedView }: { cardId?: string; forced
 
 function SettingsRoute() {
   const shell = useAppShell();
+  const search = useSearch({ strict: false });
   return (
     <SettingsPage
+      requestedTab={search.tab}
+      onTabChange={tab => shell.updateSearch({tab}, true)}
       accentTheme={shell.accentTheme}
       onChangeAccentTheme={shell.onChangeAccentTheme}
       themeMode={shell.themeMode}
