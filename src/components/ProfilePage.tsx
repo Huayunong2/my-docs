@@ -1,3 +1,4 @@
+import { newClientId } from "../lib/clientId";
 import { Input, Textarea } from "./ui/reading-surface";
 import { SelectField, SelectItem } from "./ui/select";
 import { Radio, Checkbox } from "./ui/checkbox";
@@ -75,7 +76,7 @@ export default function ProfilePage({tab,entryId,kind="all",query="",onTabChange
   const contextQuery=useQuery({queryKey:["personalContext",server,contextRequest],queryFn:({signal})=>api.buildPersonalContext(contextRequest,{signal}),enabled:!!data&&hasContext&&(tab==="context"||panel==="export"&&exportFormat==="markdown"&&exportScope==="selected"),retry:false,staleTime:0});
   const analysisListQuery=useQuery({queryKey:["personalAnalysisList",server,analysisPage],queryFn:({signal})=>api.listPersonalAnalyses(analysisPage,{signal}),enabled:tab==="analyses",staleTime:15000});
   const reportQuery=useQuery({queryKey:["personalAnalysis",server,reportId],queryFn:({signal})=>api.getPersonalAnalysis(reportId!,{signal}),enabled:!!reportId,refetchInterval:q=>q.state.data?.status==="running"?1500:false});
-  const analysis=useMutation({mutationFn:()=>api.analyzePersonalProfile(crypto.randomUUID(),question.trim(),contextRequest,contextQuery.data!.fingerprint),onSuccess:result=>{
+  const analysis=useMutation({mutationFn:()=>api.analyzePersonalProfile(newClientId(),question.trim(),contextRequest,contextQuery.data!.fingerprint),onSuccess:result=>{
     client.setQueryData(["personalAnalysis",server,result.id],result);setReportId(result.id);void dataQuery.refetch();void client.invalidateQueries({queryKey:["personalAnalysisList",server]});setAnalysisPage(1);onTabChange("analyses");
   },onError:e=>void handleError(e),retry:false});
   useEffect(()=>{if(panel==="export"&&exportFormat==="print"){document.body.dataset.profilePrint="true";return()=>{delete document.body.dataset.profilePrint;};}},[panel,exportFormat]);
@@ -84,7 +85,7 @@ export default function ProfilePage({tab,entryId,kind="all",query="",onTabChange
     if(e instanceof api.ApiError&&e.status===409){const fresh=await dataQuery.refetch();if(fresh.data){if(edit)setConflict({remote:fresh.data});else await client.invalidateQueries({queryKey:["personalContext",server]});}}
   };
   const begin=(state:EditorState,button:HTMLElement|null)=>{origin.current=button;editServer.current=server;setEdit(state);setError("");setConflict(null);setConflictChoices({});if(state.type==="entry")setTagText(state.draft.tags.join("，"));if(state.type==="profile")setSkillsText(state.draft.skills.join("，"));};
-  const newEntry=(type:ProfileKind,button:HTMLElement,parentId="")=>{if(!data)return;const draft={...newPersonalEntry(type),id:crypto.randomUUID(),parentId};begin({type:"entry",draft,base:structuredClone(draft),revision:data.revision},button);};
+  const newEntry=(type:ProfileKind,button:HTMLElement,parentId="")=>{if(!data)return;const draft={...newPersonalEntry(type),id:newClientId(),parentId};begin({type:"entry",draft,base:structuredClone(draft),revision:data.revision},button);};
   const editEntry=(entry:PersonalEntry,button:HTMLElement|null)=>{if(data)begin({type:"entry",draft:structuredClone(entry),base:structuredClone(entry),revision:data.revision},button);};
   const patchEntry=(patch:Partial<PersonalEntry>)=>setEdit(value=>value?.type==="entry"?{...value,draft:{...value.draft,...patch}}:value);
   const patchProfile=(patch:Partial<PersonalProfile>)=>setEdit(value=>value?.type==="profile"?{...value,draft:{...value.draft,...patch}}:value);
@@ -220,7 +221,7 @@ export default function ProfilePage({tab,entryId,kind="all",query="",onTabChange
         <div className={"pf-explorer"+(entryId?" pf-explorer-detail":"")}>{wide&&list.length>0?<ResponsiveSplit workspace="profile" first={entryList} second={entryReader}/>:entryId?entryReader:entryList}</div>
       </TabsContent>
       <TabsContent value="goals">
-        <section className="pf-library-header"><div><h2>个人目标</h2><p>关联主题或项目，为下一步行动保留方向。</p></div><Button variant="primary" onClick={event=>{const draft={...newPersonalGoal(),id:crypto.randomUUID()};begin({type:"goal",draft,base:structuredClone(draft),revision:data.revision},event.currentTarget);}}><Plus size={16}/>添加目标</Button></section>
+        <section className="pf-library-header"><div><h2>个人目标</h2><p>关联主题或项目，为下一步行动保留方向。</p></div><Button variant="primary" onClick={event=>{const draft={...newPersonalGoal(),id:newClientId()};begin({type:"goal",draft,base:structuredClone(draft),revision:data.revision},event.currentTarget);}}><Plus size={16}/>添加目标</Button></section>
         <div className="pf-goal-grid">{goals.map(goal=><section className="pf-card" key={goal.id}><div className="pf-section-heading"><span className="pf-badge">{goalLabels[goal.status]}</span><IconButton label={"编辑目标"+goal.title} variant="ghost" onClick={event=>begin({type:"goal",draft:structuredClone(goal),base:structuredClone(goal),revision:data.revision},event.currentTarget)}><Pencil size={15}/></IconButton></div><h3>{goal.title}</h3><p>{goal.description}</p>{goal.targetDate&&<p className="pf-muted">期望日期：{goal.targetDate}{goal.status==="active"&&(profileDateBounds(goal.targetDate)?.[1]??Infinity)<(profileDateBounds(today)?.[0]??0)?" · 已超过期望日期":""}</p>}{goal.spaceId&&<p className="pf-muted">关联空间：{goal.spaceTitle||"空间已不可用"}{!goal.spaceAvailable?"（已归档或不可用）":""}</p>}<div className="pf-soft-box"><strong>下一步</strong><p>{goal.nextStep||"补充一个可以开始的具体动作。"}</p></div><div className="pf-goal-actions"><span className="pf-muted">{goal.aiAllowed?"允许选入背景":"不选入背景"}</span>{goal.status==="active"&&<Button size="small" disabled={writes.isPending} onClick={()=>void writes.mutateAsync(()=>api.savePersonalGoal(data.revision,{...goal,status:"completed"})).catch(handleError)}><Check size={14}/>标记完成</Button>}</div></section>)}</div>
         {!goals.length&&<EmptyState icon={Target} title="添加一个有明确结果的目标" description="例如完成作品、准备考试或进入新的学习阶段。目标与经历事实分开保存。"/>}
       </TabsContent>

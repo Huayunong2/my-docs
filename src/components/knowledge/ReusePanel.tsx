@@ -1,3 +1,4 @@
+import { newClientId } from "../../lib/clientId";
 import { Textarea } from "../ui/reading-surface";
 import { SelectField, SelectItem } from "../ui/select";
 import { motion, useReducedMotion } from "framer-motion";
@@ -53,7 +54,7 @@ export default function ReusePanel({ cardId }: { cardId: string }) {
   };
 
   const record = () => act(async () => {
-    request.current ??= crypto.randomUUID();
+    request.current ??= newClientId();
     const event = await api.recordKnowledgeReuse(cardId, request.current);
     request.current = null;
     setEditing(event);

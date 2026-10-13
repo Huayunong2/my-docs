@@ -1000,6 +1000,20 @@ try {
       );
     },
   );
+  await check("desktop records offer centered full-screen reading and preserve the panel on return", async () => {
+    await page.setViewportSize({width:1440,height:960});
+    await go("/history"); await healthy(".history-card");
+    await page.locator(".history-card-main").first().click();
+    const panel=page.locator(".history-detail-pane");await panel.getByRole("button",{name:"全屏阅读",exact:true}).waitFor();
+    await panel.evaluate(element=>{element.scrollTop=120;});const previous=await panel.evaluate(element=>element.scrollTop);
+    await panel.getByRole("button",{name:"全屏阅读",exact:true}).click();
+    const reader=page.locator('.history-detail-dialog-frame[data-focused="true"]');await reader.waitFor();
+    const bounds=await reader.locator(".history-detail-dialog-surface").boundingBox();assert(Math.abs(bounds.x+bounds.width/2-720)<2);
+    assert(await reader.getByRole("button",{name:"退出专注阅读",exact:true}).isVisible());
+    await shot("history-fullscreen");await page.keyboard.press("Escape");await reader.waitFor({state:"hidden"});
+    await panel.getByRole("button",{name:"全屏阅读",exact:true}).waitFor();assert.equal(await panel.evaluate(element=>element.scrollTop),previous);
+    await panel.getByRole("button",{name:"关闭详情",exact:true}).click();
+  });
   await check(
     "return-to-top targets the actual record scroll region",
     async () => {
@@ -1263,6 +1277,7 @@ try {
   await page.setViewportSize({width:1440,height:960});
   await check("Today panels preserve editing through focus and narrow layouts", async () => {
     await go(`/today?date=${anchorDate}`);await page.locator("#today-split").waitFor();
+    await page.waitForFunction(expected=>Array.from(document.querySelectorAll(".cm-content .cm-line")).map(line=>line.textContent).join("\n")===expected,records.find(record=>record.date===anchorDate).content);
     const content=await page.locator(".cm-content").innerText();
     await page.getByRole("separator",{name:"调整编辑与预览区宽度",exact:true}).focus();await page.keyboard.press("ArrowLeft");
     await shot("today-wide-split");

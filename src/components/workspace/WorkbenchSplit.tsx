@@ -9,7 +9,7 @@ export default function WorkbenchSplit({ workspace, first, second }: { workspace
   },[key]);
   const knowledge=workspace!=="today";
   return <Group key={key} className="workbench-split" id={`${workspace}-split`} orientation="horizontal" defaultLayout={layout} onLayoutChanged={(next,meta)=>{if(meta.isUserInteraction) writeLocalStorage(key,JSON.stringify(meta.requestedLayout || next));}}>
-    <Panel id="first" defaultSize={knowledge ? "32%" : "53%"} minSize={knowledge ? 260 : 320} maxSize={knowledge ? 420 : undefined} className="workbench-split-pane">{first}</Panel>
+    <Panel id="first" defaultSize={knowledge ? "28%" : "53%"} minSize={knowledge ? 260 : 320} maxSize={knowledge ? 360 : undefined} className="workbench-split-pane">{first}</Panel>
     <Separator className="workbench-separator" aria-label={workspace==="profile" ? "调整经历列表与详情宽度" : knowledge ? "调整知识列表与阅读区宽度" : "调整编辑与预览区宽度"}><span aria-hidden="true"/></Separator>
     <Panel id="second" minSize={knowledge ? 480 : 320} className="workbench-split-pane">{second}</Panel>
   </Group>;

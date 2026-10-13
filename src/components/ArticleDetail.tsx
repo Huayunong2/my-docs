@@ -1,7 +1,7 @@
 import ReadingActions from "./workspace/ReadingActions";
 import { useRef, useState, type RefObject } from "react";
 import * as Dialog from "@radix-ui/react-dialog";
-import { CalendarDays, Check, Copy, Edit3, Folder, Trash2, X } from "lucide-react";
+import { CalendarDays, Check, Copy, Edit3, Folder, Maximize2, Minimize2, Trash2, X } from "lucide-react";
 import { toast } from "sonner";
 import type { Article } from "../lib/api";
 import { copyText } from "../lib/clipboard";
@@ -16,10 +16,14 @@ export default function ArticleDetail({
   onDelete,
   highlight = "",
   returnFocusRef,
+  onToggleFocus,
+  focused = false,
 }: {
   article: Article;
   mode?: "modal" | "panel";
   onClose: () => void;
+  onToggleFocus?: () => void;
+  focused?: boolean;
   onEdit: (date: string) => void;
   onDelete?: (article: Article) => void;
   highlight?: string;
@@ -100,6 +104,7 @@ export default function ArticleDetail({
           </div>
           <div className="article-detail-actions flex shrink-0 flex-wrap items-center gap-1 self-end" role="group" aria-label="记录操作">
             <ReadingActions label="记录阅读操作" actions={[
+              ...(onToggleFocus ? [{ id:"focus", label:focused ? "退出专注阅读" : "全屏阅读", icon:focused ? <Minimize2 size={14}/> : <Maximize2 size={14}/>, onSelect:onToggleFocus }] : []),
               { id:"copy", label:copied ? "已复制记录内容" : "复制记录内容", icon:copied ? <Check size={14}/> : <Copy size={14}/>, onSelect: () => void copyContent() },
               { id:"edit", label:"编辑记录", icon:<Edit3 size={14}/>, onSelect: () => onEdit(article.date) },
               ...(onDelete ? [{id:"delete", label:"移入记录回收站", variant:"danger" as const, icon:<Trash2 size={14}/>, onSelect: () => onDelete(article)}] : []),

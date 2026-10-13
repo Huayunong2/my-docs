@@ -1,3 +1,4 @@
+import { newClientId } from "./clientId";
 // Presentation and form validation only. SQLite through the API owns personal facts.
 export type ProfileKind = "education" | "work" | "learning" | "project" | "achievement" | "milestone" | "certificate";
 export type ProfileView = "overview" | "timeline" | "goals" | "context" | "analyses";
@@ -141,7 +142,7 @@ export function parseResumeImport(raw: unknown): {profile:PersonalProfile;entrie
       const title=str(row.title)||str(row.name)||str(row.institution)||str(row.position);
       if(!title) continue;
       const single=kind==="achievement"||kind==="certificate";
-      entries.push({...newPersonalEntry(kind),id:crypto.randomUUID(),title,achievementType:key==="awards"?"award":key==="publications"?"publication":"output",organization:str(row.institution)||(kind==="work" ? str(row.name) : str(row.awarder)||str(row.issuer)||str(row.publisher)),degree:str(row.studyType),major:str(row.area),position:str(row.position),start,end,status:single ? "completed" : end ? kind==="work" ? "ended" : "completed" : "active",description:str(row.summary)||str(row.description),result:Array.isArray(row.highlights) ? row.highlights.filter((v):v is string=>typeof v==="string").join("\n") : "",sourceNote:"从本人选择的 JSON 简历导入，已通过导入预览确认。",sourceUrl:str(row.url)});
+      entries.push({...newPersonalEntry(kind),id:newClientId(),title,achievementType:key==="awards"?"award":key==="publications"?"publication":"output",organization:str(row.institution)||(kind==="work" ? str(row.name) : str(row.awarder)||str(row.issuer)||str(row.publisher)),degree:str(row.studyType),major:str(row.area),position:str(row.position),start,end,status:single ? "completed" : end ? kind==="work" ? "ended" : "completed" : "active",description:str(row.summary)||str(row.description),result:Array.isArray(row.highlights) ? row.highlights.filter((v):v is string=>typeof v==="string").join("\n") : "",sourceNote:"从本人选择的 JSON 简历导入，已通过导入预览确认。",sourceUrl:str(row.url)});
     }
   }
   if(entries.length>200) throw new Error("一次最多导入 200 条经历。");

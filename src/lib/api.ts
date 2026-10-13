@@ -1628,7 +1628,7 @@ export async function waitAiTask(task: AiTaskView): Promise<AiTaskView> {
 }
 
 export async function knowledgeCandidateRequestId(key?:string):Promise<string>{
-  if(!key)return crypto.randomUUID();
+  if(!key)return (await import("./clientId")).newClientId();
   const hash=new Uint8Array(await crypto.subtle.digest("SHA-256",new TextEncoder().encode(getServerUrl()+":"+key)));
   hash[6]=(hash[6]&15)|64;hash[8]=(hash[8]&63)|128;
   const hex=[...hash.slice(0,16)].map(v=>v.toString(16).padStart(2,"0")).join("");

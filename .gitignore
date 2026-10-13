@@ -64,11 +64,15 @@ Thumbs.db
 *.swp
 *.swo
 
-# Internal research stays local; referenced, maintained project guides are public.
+# Local research and planning materials stay off GitHub.
 docs/*
-!docs/knowledge-ui-redesign.md
 
 # Local-only agent workspace files
 .agents/
 .codex/
 .impeccable/
+
+# Personal planning and agent guidance remain on this machine.
+*.[mM][dD]
+*.markdown
+.git-local-backups/

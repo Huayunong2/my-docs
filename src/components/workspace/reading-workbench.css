@@ -49,10 +49,10 @@
 .reading-actions-controls .ft-month-nav { justify-content:center; flex-wrap:wrap; }
 .reading-actions-controls :is(button,a) { border-radius:16px; }
 .ui-modal-surface { border-radius:16px; }
-.ui-modal-surface[data-state="open"] { animation:workbench-sheet-in 240ms cubic-bezier(.2,.7,.2,1); }
-.ui-modal-surface[data-state="closed"] { animation:workbench-sheet-out 180ms ease-in; }
-@keyframes workbench-sheet-in { from { opacity:0; transform:translateY(12px); } to { opacity:1; transform:translateY(0); } }
-@keyframes workbench-sheet-out { to { opacity:0; transform:translateY(12px); } }
+.ui-modal-surface[data-state="open"] { animation:workbench-sheet-in 120ms ease-out; }
+.ui-modal-surface[data-state="closed"] { animation:workbench-sheet-out 100ms ease-in; }
+@keyframes workbench-sheet-in { from { opacity:0; } to { opacity:1; } }
+@keyframes workbench-sheet-out { to { opacity:0; } }
 .workbench-spinner { animation:workbench-spin 1s linear infinite; }
 @keyframes workbench-spin { to { transform:rotate(360deg); } }
 @media (min-width:768px) { .markdown-content.prose { font-size:17px; } }
@@ -176,7 +176,7 @@
 .ui-choice-mark { display:grid; place-items:center; width:100%; height:100%; border:1.5px solid var(--ui-border-strong); border-radius:5px; background:var(--ui-surface); color:white; }
 .ui-choice-mark svg { display:none; }
 .ui-choice-input:is(:checked,:indeterminate)+.ui-choice-mark { background:var(--ui-accent-solid); border-color:var(--ui-accent-solid); }
-.ui-choice-input:checked+.ui-choice-mark .ui-choice-check,.ui-choice-input:indeterminate+.ui-choice-mark .ui-choice-mixed { display:block; }
+.ui-choice:not([data-variant=radio]) .ui-choice-input:checked+.ui-choice-mark .ui-choice-check,.ui-choice-input:indeterminate+.ui-choice-mark .ui-choice-mixed { display:block; }
 .ui-choice-input:indeterminate+.ui-choice-mark .ui-choice-check { display:none; }
 .ui-choice-input:focus-visible+.ui-choice-mark { outline:2px solid var(--ui-focus); outline-offset:3px; }
 .ui-choice-input:disabled { cursor:not-allowed; }
@@ -254,3 +254,26 @@
   .ft-stats .ft-records-summary .ft-monthly-story { display:flex;flex-direction:column; }
   .ft-stats .ft-records-summary .ft-monthly-story-visual { flex-wrap:wrap;width:100%; }
 }
+
+/* Runtime information uses one surface, with spacing between facts. */
+.runtime-overview { padding:28px; display:grid; gap:24px; }
+.runtime-heading { display:flex; justify-content:space-between; align-items:flex-start; gap:20px; }
+.runtime-heading h3 { display:flex; align-items:center; gap:10px; font-size:17px; font-weight:650; }
+.runtime-heading p { color:var(--ui-text-muted); font-size:13px; margin-top:8px; }
+.runtime-metrics { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:28px 32px; }
+.runtime-metrics > div { min-width:0; }
+.runtime-metrics dt { color:var(--ui-text-muted); font-size:12px; }
+.runtime-metrics dd { margin:8px 0 0; font-size:14px; font-weight:550; line-height:1.6; overflow-wrap:anywhere; }
+.runtime-actions { display:flex; flex-wrap:wrap; gap:12px; border-top:1px solid var(--ui-border); padding-top:20px; }
+.runtime-disk { height:4px; max-width:160px; margin-top:12px; border-radius:4px; background:var(--ui-surface-subtle); overflow:hidden; }
+.runtime-disk span { display:block; height:100%; background:var(--ui-accent-solid); }
+.runtime-disk span[data-warning=true] { background:var(--ui-danger-text); }
+@media (max-width:1023px) { .runtime-metrics { grid-template-columns:repeat(2,minmax(0,1fr)); } }
+@media (max-width:767px) { .runtime-overview { padding:22px; gap:24px; } .runtime-metrics { grid-template-columns:minmax(0,1fr); gap:22px; } }
+@media (min-width:1280px) {
+  .history-detail-dialog-frame[data-focused=true] .history-detail-dialog-surface { inset:24px; margin-inline:auto; max-width:1280px; }
+  .history-detail-dialog-frame[data-focused=true] .article-detail-body { padding:40px 48px; }
+  .history-detail-dialog-frame[data-focused=true] .ui-reader { max-width:82ch; margin-inline:auto; }
+  .ft-history[data-detail=true] .history-list-pane { flex-basis:clamp(280px,26%,420px); }
+}
+.workbench-button.ui-button-primary { box-shadow:none; background-image:none; }

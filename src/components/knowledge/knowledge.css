@@ -69,7 +69,7 @@
 }
 .kl-workspace {
   display: grid;
-  grid-template-columns: 188px minmax(0, 1fr);
+  grid-template-columns: 204px minmax(0, 1fr);
   gap: 24px;
   flex: 1;
   min-height: 0;
@@ -1675,4 +1675,12 @@
     top: 4px;
     left: 4px;
   }
+}
+
+/* Keep navigation bounded even when a saved layout or sidebar reduces space. */
+@media (min-width: 768px) {
+  .kl-workspace[data-detail="false"]:not([data-focused="true"]) { grid-template-columns:204px minmax(0,1fr); gap:20px; }
+  .kl-workspace[data-split="true"] { display:flex; }
+  .kl-workspace[data-split="true"] > .kl-nav { display:none; }
+  .kl-workspace > .kl-nav { width:204px; max-width:204px; }
 }

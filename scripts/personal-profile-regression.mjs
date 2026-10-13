@@ -91,7 +91,7 @@ try{
   browser=await chromium.launch({executablePath:process.env.KNOWLEDGE_CHROME_PATH||"/usr/bin/google-chrome",headless:true,args:["--disable-dev-shm-usage"]});
   const ctx=await browser.newContext({viewport:{width:1440,height:1000},serviceWorkers:"block"});
   await ctx.grantPermissions(["clipboard-read","clipboard-write"],{origin});
-  await ctx.addInitScript(value=>{localStorage.setItem("server_token",value);localStorage.setItem("server_url","/api");if(!localStorage.getItem("themeMode"))if(!localStorage.getItem("themeMode"))localStorage.setItem("themeMode","light");},token);
+  await ctx.addInitScript(value=>{Object.defineProperty(crypto,"randomUUID",{value:undefined,configurable:true});localStorage.setItem("server_token",value);localStorage.setItem("server_url","/api");if(!localStorage.getItem("themeMode"))if(!localStorage.getItem("themeMode"))localStorage.setItem("themeMode","light");},token);
   const page=await ctx.newPage();page.setDefaultTimeout(15000);page.on("pageerror",e=>errors.push(e.message));
   const shot=name=>page.screenshot({path:path.join(out,name+".png"),animations:"disabled",style:"[data-sonner-toaster]{visibility:hidden}"});
   const fit=async()=>{
@@ -102,6 +102,8 @@ try{
   assert(!(await page.locator(".pf-page").innerText()).includes("DEMO"));
   assert.equal(await page.locator("select:not([aria-hidden=true])").count(),0,"profile has no visible native select");
   await page.getByRole("button",{name:"编辑概况",exact:true}).click();
+  const modalCenters=await page.evaluate(async()=>{const dialog=document.querySelector(".pf-modal");const points=[];for(let i=0;i<12;i++){await new Promise(requestAnimationFrame);const rect=dialog.getBoundingClientRect();points.push([rect.x+rect.width/2-innerWidth/2,rect.y+rect.height/2-innerHeight/2]);}return points;});
+  assert(modalCenters.every(([x,y])=>Math.abs(x)<2&&Math.abs(y)<2),"profile editor stays centered during its entire entry animation");
   await page.locator(".pf-contact-fields summary").click();
   const emailField=page.getByLabel("邮箱",{exact:true}),savedEmail=(await fresh()).profile.email;
   await emailField.fill("invalid-email");await page.getByRole("button",{name:"保存",exact:true}).click();
@@ -143,6 +145,7 @@ try{
   pass("existing journal sources link by ID and first-class goals save to SQLite");
   await page.getByRole("button",{name:"导出资料",exact:true}).click();
   await page.getByRole("combobox",{name:"导出格式",exact:true}).click();await page.getByRole("option",{name:"JSON Resume 简历数据",exact:true}).click();
+  assert(await page.locator('.pf-export-scope .ui-choice[data-variant="radio"]').first().evaluate(element=>Array.from(element.querySelectorAll("svg")).every(svg=>getComputedStyle(svg).display==="none")),"radio shows a single dot, without the checkbox checkmark");
   const preview=page.getByRole("textbox",{name:"导出内容预览",exact:true});
   let resume=JSON.parse(await preview.inputValue());assert(!resume.basics.email);assert(resume.work.some(w=>w.position===hidden.position));
   const contactChoice=page.getByRole("checkbox",{name:"包含联系方式与城市",exact:true});await contactChoice.focus();await page.keyboard.press("Space");assert(await contactChoice.isChecked());
