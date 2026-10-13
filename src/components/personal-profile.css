@@ -326,3 +326,18 @@
   .pf-context-analysis-actions { align-items:stretch; flex-direction:column; gap:16px; }
   .pf-context-source-list { max-height:360px; }
 }
+
+.pf-supplementary { border:1px solid var(--ui-border); border-radius:10px; padding:14px 16px; }
+.pf-supplementary summary { min-height:32px; display:flex; align-items:center; cursor:pointer; font-size:13px; font-weight:550; color:var(--ui-text-muted); }
+.pf-supplementary summary::before { content:"+"; margin-right:10px; font-size:18px; }
+.pf-supplementary[open] summary::before { content:"−"; }
+.pf-supplementary-fields { display:grid; gap:18px; margin-top:18px; }
+.pf-permission-help,.pf-form-intro { margin:0; font-size:13px; line-height:1.85; }
+.pf-question-presets { display:flex; flex-wrap:wrap; gap:12px; }
+.pf-context-analysis-actions > p { max-width:60ch; }
+.pf-background-item>button.workbench-button-small { white-space:nowrap; }
+
+.pf-form-error { position:sticky; top:0; z-index:2; background:var(--ui-surface); padding-block:12px; }
+
+.pf-analysis-buttons { display:flex; align-items:center; gap:12px; flex-wrap:wrap; flex-shrink:0; }
+@media(max-width:767px) { .pf-analysis-buttons { justify-content:flex-end; } }

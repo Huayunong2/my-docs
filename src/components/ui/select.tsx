@@ -15,7 +15,7 @@ export function SelectField({ value, onValueChange, children, className, placeho
 }) {
   const items = React.Children.map(children, child => React.isValidElement<{value: string}>(child)
     ? React.cloneElement(child, { value: "choice:" + child.props.value }) : child);
-  return <Select value={"choice:" + value} onValueChange={next => onValueChange(next.slice(7))} disabled={props.disabled}>
+  return <Select value={value === "" && placeholder ? "" : "choice:" + value} onValueChange={next => onValueChange(next.slice(7))} disabled={props.disabled}>
     <SelectTrigger {...props} className={className}><SelectValue placeholder={placeholder}/></SelectTrigger>
     <SelectContent align="start">{items}</SelectContent>
   </Select>;

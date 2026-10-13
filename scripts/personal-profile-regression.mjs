@@ -122,6 +122,25 @@ try{
   snapshot=await fresh();assert.equal(snapshot.profile.bio,"本地编辑的简介");assert.equal(snapshot.profile.city,"另一设备保存的城市");
   await page.reload();await page.getByRole("heading",{name:"隔离验收用户",exact:true}).waitFor();
   pass("real browser saves survive refresh; conflict choices preserve unrelated server changes");
+  const entryCountBefore=(await fresh()).entries.length;
+  await page.getByRole("button",{name:"添加经历",exact:true}).click();await page.getByRole("dialog",{name:"添加经历与成果",exact:true}).waitFor();
+  assert((await page.getByRole("combobox",{name:"经历状态",exact:true}).innerText()).includes("选择实际状态"));
+  assert(!(await page.locator(".pf-supplementary").getAttribute("open")),"optional tags and evidence are collapsed on first entry");
+  await page.getByLabel("标题",{exact:true}).fill("浏览器明确确认的教育经历");
+  await page.getByRole("button",{name:"保存",exact:true}).click();await page.getByText("请选择这段经历的实际状态，再保存资料。",{exact:true}).waitFor();
+  assert.equal((await fresh()).entries.length,entryCountBefore,"unconfirmed status cannot silently save a plan");
+  assert(await page.getByRole("combobox",{name:"经历状态",exact:true}).evaluate(element=>element===document.activeElement));
+  await page.getByRole("combobox",{name:"条目类型",exact:true}).click();await page.getByRole("option",{name:"教育",exact:true}).click();
+  await page.getByRole("combobox",{name:"经历状态",exact:true}).click();await page.getByRole("option",{name:"已取得学历 / 学位",exact:true}).click();
+  await page.getByRole("button",{name:"保存",exact:true}).click();await page.getByRole("dialog").waitFor({state:"hidden"});
+  assert.equal((await fresh()).entries.find(entry=>entry.title==="浏览器明确确认的教育经历").status,"completed");
+  await page.getByText(/学历 \/ 学位待补充/).waitFor();
+  await page.getByRole("button",{name:"补充学历信息",exact:true}).click();
+  await page.getByLabel("学历 / 学位",{exact:true}).fill("本科 / 学士");await page.getByRole("button",{name:"保存",exact:true}).click();await page.getByRole("dialog").waitFor({state:"hidden"});
+  assert.equal((await fresh()).entries.find(entry=>entry.title==="浏览器明确确认的教育经历").degree,"本科 / 学士");
+
+  pass("first entry asks for actual status, focuses missing choices and saves without filling optional fields");
+
   await page.getByRole("tab",{name:"经历与成果",exact:true}).click();
   await page.locator(".pf-entry-row").filter({hasText:project.title}).click();
   await page.getByRole("button",{name:"编辑",exact:true}).click();
@@ -144,6 +163,8 @@ try{
   await shot("desktop-goals");
   pass("existing journal sources link by ID and first-class goals save to SQLite");
   await page.getByRole("button",{name:"导出资料",exact:true}).click();
+  assert(await page.getByRole("radio",{name:/全部档案资料/}).isChecked(),"general export defaults to all facts without requiring AI permission");
+  assert((await page.getByRole("textbox",{name:"导出内容预览",exact:true}).inputValue()).includes(hidden.title));
   await page.getByRole("combobox",{name:"导出格式",exact:true}).click();await page.getByRole("option",{name:"JSON Resume 简历数据",exact:true}).click();
   assert(await page.locator('.pf-export-scope .ui-choice[data-variant="radio"]').first().evaluate(element=>Array.from(element.querySelectorAll("svg")).every(svg=>getComputedStyle(svg).display==="none")),"radio shows a single dot, without the checkbox checkmark");
   const preview=page.getByRole("textbox",{name:"导出内容预览",exact:true});
@@ -200,7 +221,7 @@ try{
   pass("profile light and dark surfaces fit six widths without clipping content panels");
   for (const width of [320,390,768,1024,1440]) {
     await page.setViewportSize({width,height:1000});await page.goto(origin+"/profile?tab=context");
-    await page.getByRole("region",{name:"背景编排",exact:true}).waitFor();await fit();
+    await page.getByRole("region",{name:"准备背景说明",exact:true}).waitFor();await fit();
     const layout=await page.evaluate(()=>{const left=document.querySelector(".pf-context-selection").getBoundingClientRect(),right=document.querySelector(".pf-context-result").getBoundingClientRect(),analysis=document.querySelector(".pf-context-analysis").getBoundingClientRect(),selectionStyle=getComputedStyle(document.querySelector(".pf-context-selection"));return {left:{top:left.top,bottom:left.bottom},right:{top:right.top,bottom:right.bottom},analysisTop:analysis.top,padding:parseFloat(selectionStyle.paddingLeft)};});
     if(width>=1024){assert(Math.abs(layout.left.top-layout.right.top)<2);assert(Math.abs(layout.left.bottom-layout.right.bottom)<2);}
     else assert(layout.right.top>=layout.left.bottom-1,"narrow layout shows selection before preview");
@@ -208,10 +229,59 @@ try{
     if(width===1440||width===390)await shot("background-workspace-"+width);
   }
   pass("background selection and preview align, with analysis below and mobile source-first stacking");
+  await page.setViewportSize({width:1440,height:1000});await page.goto(origin+"/profile?tab=context");
+  const originalHidden=(await fresh()).entries.find(entry=>entry.id===hidden.id);
+  const callsBeforePermission=providerCalls;
+  await page.getByRole("button",{name:"允许选入背景 "+hidden.title,exact:true}).click();
+  const enabledEntry=page.locator('[id="profile-background-entry-'+hidden.id+'"]');await enabledEntry.waitFor();await page.waitForFunction(id=>document.getElementById(id)?.checked&&!document.getElementById(id)?.disabled,"profile-background-entry-"+hidden.id);
+  const allowedHidden=(await fresh()).entries.find(entry=>entry.id===hidden.id);assert(allowedHidden.aiAllowed);
+  for(const key of ["title","description","status","result","sources"])assert.deepEqual(allowedHidden[key],originalHidden[key]);
+  await page.waitForFunction(id=>document.activeElement===document.getElementById(id),"profile-background-entry-"+hidden.id);
+  const localGoal=(await fresh()).goals.find(goal=>goal.title==="浏览器保存的目标");
+  await page.getByRole("button",{name:"允许目标选入背景 "+localGoal.title,exact:true}).click();
+  await page.waitForFunction(id=>document.getElementById(id)?.checked&&!document.getElementById(id)?.disabled,"profile-background-goal-"+localGoal.id);
+  assert((await fresh()).goals.find(goal=>goal.id===localGoal.id).aiAllowed);
+  const selectedBefore=await page.locator(".pf-context-source-list input:checked").evaluateAll(elements=>elements.map(element=>element.id));
+  await page.getByRole("button",{name:"学习计划",exact:true}).click();
+  assert((await page.getByRole("textbox",{name:"希望 AI 分析的问题",exact:true}).inputValue()).includes("四周学习计划"));
+  assert.deepEqual(await page.locator(".pf-context-source-list input:checked").evaluateAll(elements=>elements.map(element=>element.id)),selectedBefore);
+  assert.equal(providerCalls,callsBeforePermission,"granting permission and choosing a question never call AI automatically");
+  await page.getByRole("tab",{name:"目标",exact:true}).click();
+  await page.locator(".pf-goal-grid .pf-card").filter({hasText:localGoal.title}).getByRole("button",{name:"标记完成",exact:true}).click();
+  await page.getByRole("heading",{name:localGoal.title,exact:true}).waitFor();
+  await page.waitForFunction(title=>Array.from(document.querySelectorAll(".pf-goal-grid .pf-card")).find(card=>card.textContent.includes(title))?.textContent.includes("已完成"),localGoal.title);
+  assert((await page.locator(".pf-goal-grid .pf-card").first().innerText()).includes(goal.title),"ongoing goals stay before finished goals");
+  await page.waitForFunction(id=>document.activeElement===document.getElementById(id),"profile-goal-edit-"+localGoal.id);
+  // Restore the private fixture so subsequent tests keep their original boundary.
+  await saveEntry({...allowedHidden,aiAllowed:false});
+  pass("background permission updates preserve facts, select the chosen item, restore focus and never auto-send to AI");
+
 
   await page.setViewportSize({width:1440,height:1000});
   await page.goto(origin+"/profile?tab=analyses");await page.locator(".pf-analysis-items button").first().waitFor();
   assert.equal(await page.locator(".pf-history-pagination").count(),0,"single-page reports do not show disabled pagination");
+
+  await page.goto(origin+"/profile?tab=context");await page.getByRole("region",{name:"准备背景说明",exact:true}).waitFor();
+  await page.getByRole("textbox",{name:"希望 AI 分析的问题",exact:true}).fill("合成延迟响应，只检查离开后的导航");
+  let releaseAnalysis;const delayedAnalysis=new Promise(resolve=>{releaseAnalysis=resolve;});let analysisRequested=false;
+  await page.route("**/api/profile/analyze",async route=>{analysisRequested=true;await delayedAnalysis;await route.fulfill({json:{...analysis,id:"delayed-visual-report"}});});
+  await page.getByRole("button",{name:"生成个人分析",exact:true}).click();
+  for(let attempt=0;attempt<50&&!analysisRequested;attempt++)await page.waitForTimeout(20);assert(analysisRequested);
+  await page.getByRole("link",{name:"AI 配置",exact:true}).click();await page.locator("#settings-panel-ai").waitFor({state:"visible"});
+  releaseAnalysis();await page.waitForTimeout(300);
+  assert.equal(new URL(page.url()).pathname,"/settings");assert.equal(new URL(page.url()).searchParams.get("tab"),"ai","finishing a departed profile analysis must not overwrite the current page's category");
+  assert(await page.locator("#settings-panel-ai").isVisible());
+  pass("late analysis responses preserve the page the user moved to");
+  await page.unroute("**/api/profile/analyze");await page.goto(origin+"/profile?tab=context");await page.getByRole("region",{name:"准备背景说明",exact:true}).waitFor();
+  let releaseEditedAnalysis;const editedAnalysis=new Promise(resolve=>{releaseEditedAnalysis=resolve;});let editedRequest=false;
+  await page.route("**/api/profile/analyze",async route=>{editedRequest=true;await editedAnalysis;await route.fulfill({json:{...analysis,id:"edited-question-visual-report"}});});
+  const questionField=page.getByRole("textbox",{name:"希望 AI 分析的问题",exact:true});await questionField.fill("合成第一轮问题");
+  await page.getByRole("button",{name:"生成个人分析",exact:true}).click();
+  for(let attempt=0;attempt<50&&!editedRequest;attempt++)await page.waitForTimeout(20);assert(editedRequest);
+  await questionField.fill("保留我正在准备的新问题");releaseEditedAnalysis();await page.waitForTimeout(300);
+  assert.equal(new URL(page.url()).searchParams.get("tab"),"context");assert.equal(await questionField.inputValue(),"保留我正在准备的新问题");
+  pass("completed analysis leaves newer questions and background choices in place");
+
   const emptyContext=await browser.newContext({viewport:{width:1440,height:1000},serviceWorkers:"block"});
   await emptyContext.addInitScript(value=>{localStorage.setItem("server_token",value);localStorage.setItem("server_url","/api");if(!localStorage.getItem("themeMode"))localStorage.setItem("themeMode","light");},token);
   const emptySnapshot=structuredClone(await fresh());emptySnapshot.entries=[];emptySnapshot.goals=[];emptySnapshot.analyses=[];emptySnapshot.updatedAt="";
